@@ -315,7 +315,7 @@ OFD parser 只负责 ZIP/XML 结构和发票字段，不负责页面渲染。多
 - `PdfFieldParser`：复用清理文本、号码、日期、公司、金额和明细的确定性规则；
 - `IPdfPageRenderer`：使用 PDFiumCore 渲染扫描页；
 - `IOcrFallback`：使用 SkiaSharp 转换像素，再交给 SimdPaddleOCR；
-- `IInvoiceFieldExtractor`：低置信度或字段缺失时调用 DeepSeek Flash 多模态提取；
+- `IInvoiceFieldExtractor`：先根据本地 OCR 文本提取，失败时调用 DeepSeek Flash 多模态提取；
 - `InvoiceNormalizer`：映射为不可变的 `InvoiceDocument`/`InvoiceRecord` 领域对象。
 
 PDF 的处理顺序为：
@@ -332,6 +332,108 @@ PdfPig 文本提取
 ```
 
 当前 Python 中的火车票、行程单、国外发票和供应商特例不能被硬编码到通用 PDF parser；应实现为独立的 `IDocumentSpecialCaseParser`，在 `PdfInvoiceParser` 的确定性路径之后、通用 AI fallback 之前运行。其确定性字段修正必须优先于模型输出。
+
+### IInvoiceFieldExtractor 的 DeepSeek adapter
+
+`IInvoiceFieldExtractor` 不是一个简单的“传图并返回字符串”接口，而是承接当前 Python `InvoiceExtractor.extract_info_via_llm` 的两轨路由：
+
+```csharp
+public interface IInvoiceFieldExtractor
+{
+  Task<FieldExtractionResult> ExtractAsync(
+    FieldExtractionRequest request,
+    CancellationToken cancellationToken);
+}
+
+public sealed record FieldExtractionRequest(
+  DocumentIdentity Identity,
+  string OcrText,
+  IReadOnlyList<OcrLine> OcrLines,
+  IReadOnlyList<RenderedPage> Pages,
+  string CustomRules,
+  bool AllowVisionFallback);
+
+public sealed record FieldExtractionResult(
+  InvoiceDocument? Document,
+  ExtractionRoute Route,
+  string ReasonCode,
+  bool RequiresManualReview,
+  ExtractionTrace Trace);
+```
+
+#### 请求构造
+
+将当前 Python 的提示词规则迁移为版本化 `InvoiceExtractionPrompt`，固定要求输出单个 JSON 对象，不允许 Markdown 包裹。字段契约包含：
+
+```json
+{
+  "is_invoice": true,
+  "Date": "YYYYMMDD",
+  "Purchaser": "",
+  "Seller": "",
+  "Amount": "0.00",
+  "InvoiceCode": "",
+  "InvoiceNumber": "",
+  "Type": "",
+  "category": "",
+  "Departure_Date": "",
+  "Departure_City": "",
+  "Destination_City": ""
+}
+```
+
+提示词必须保留当前行为规则：销售方名称净化、金额优先取价税合计/小写金额、红字票保留负号、火车票城市无法确认时填“未知”、Folio 的 DD/MM/YY 日期解释，以及 `Type` 必须落在领域分类白名单中。`CustomRules` 作为独立的用户规则段追加，不能覆盖系统字段约束。
+
+#### Track A：OCR 文本路径
+
+1. `SimdPaddleOCR` 生成 OCR 文本、文本框和置信度；
+2. 将 OCR 文本、按位置排序的 `OcrLine` 和文档上下文拼入 `user` 文本消息；
+3. 使用 `IChatClient`、模型 `deepseek-flash`、温度 `0.1` 请求结构化结果；
+4. 清理响应中的 ```json 包裹和外围说明，解析 JSON；
+5. 缺少 Date/Seller/Amount/Type/Purchaser 等字段时补充领域默认值，再由本地校验决定是否人工复核；
+6. 通过 `InvoiceNormalizer` 归一化金额、日期、类型、身份和 flags。
+
+Track A 只使用 OCR 文本，不上传原始图片；这保留当前 Python “本地 OCR 后文本提取”的隐私和成本优势。
+
+#### Track B：多模态 fallback
+
+当 OCR 失败、OCR 文本过短、必填字段缺失、模型 JSON 无法解析或本地校验不通过时，才进入 Track B：
+
+1. 使用 PDFiumCore + SkiaSharp 生成最多两页 PNG；
+2. 图片按 `data:image/png;base64,...` 生成 `DataContent`/`image_url` content block；
+3. 将同一版本的系统提示词作为 `user` 消息中的第一个文本块，图片块紧随其后；
+4. 单次请求包含所有待识别页面，限制请求体和图片大小，避免超过 DeepSeek 48 MiB/32 MiB 限制；
+5. 使用同一 JSON 清洗、字段默认值、类型白名单和本地校验；
+6. 将路由标记为 `VisionFallback`，保留 Track A 失败的稳定原因码。
+
+Track B 的图片只作为当前请求的内联数据发送，不生成公网 URL，不把 Base64 写入日志、SQLite、审计事件或 ZeroPipeline Recipe。
+
+#### JSON 与错误处理
+
+adapter 使用严格的 JSON 文档解析，不依赖正则截取嵌套对象。兼容模型偶尔返回 Markdown fence 的情况，但 fence 去除后仍必须得到唯一 JSON 对象。响应失败分类为：
+
+- `AI_TIMEOUT`、`AI_CONNECTION_FAILED`：可重试；
+- `AI_RATE_LIMITED`、`AI_QUOTA_EXHAUSTED`：按退避策略重试或终止；
+- `AI_INVALID_JSON`、`AI_SCHEMA_INVALID`：Track A 可转 Track B，Track B 则进入人工复核；
+- `AI_AUTHENTICATION_FAILED`、`AI_UNSUPPORTED_IMAGE`、`AI_REQUEST_TOO_LARGE`：不可盲目重试；
+- `EXTRACTOR_ALL_ROUTES_FAILED`：所有路径失败后的最终结果。
+
+adapter 不记录响应正文。只记录路由、耗时、模型名、输入类型、响应状态和响应指纹；响应指纹使用短 SHA-256，便于诊断而不泄露票据内容。
+
+#### 确定性修正与 trace
+
+模型结果进入领域对象前，先执行当前 Python 已验证的确定性修正，例如火车票行程日期覆盖模型漂移、特殊供应商票据字段修正和文档类型归一化。每次提取生成 `ExtractionTrace`：
+
+```text
+Route: LocalFastPath | OcrText | VisionFallback
+TrackAStatus: NotStarted | Success | Failed
+TrackBStatus: NotStarted | Success | Failed
+ReasonCode
+DurationMs
+ModelName
+```
+
+trace 只存状态和脱敏元数据，不存 OCR 原文、图片、提示词或 API Key。
 
 ### 归一化与编排边界
 
@@ -389,16 +491,7 @@ IChatClient chatClient = new OpenAIClient(
 
 应用层只依赖内部接口，`IChatClient` 由基础设施层持有：
 
-```csharp
-public interface IInvoiceFieldExtractor
-{
-    Task<InvoiceExtractionResult> ExtractAsync(
-        OcrDocument ocr,
-        CancellationToken cancellationToken);
-}
-```
-
-文本请求包含 OCR 文本和坐标；多模态请求使用 DeepSeek OpenAI 兼容 Chat Completions 格式：图片必须位于 `user` 消息的 content block 数组中，图片块使用 `image_url`。本地页面图像默认编码为 `data:image/jpeg;base64,...`，而不是上传临时公网 URL。两条路径共用类型化响应校验和本地业务校验。
+具体的 `IInvoiceFieldExtractor` 请求/结果模型、Track A/Track B 路由和响应处理规则见第 6 节。文本请求包含 OCR 文本和坐标；多模态请求使用 DeepSeek OpenAI 兼容 Chat Completions 格式：图片必须位于 `user` 消息的 content block 数组中，图片块使用 `image_url`。PDF 页面默认渲染为 PNG，并编码为 `data:image/png;base64,...`；其他图像保留经过验证的实际 MIME 类型，不上传临时公网 URL。两条路径共用类型化响应校验和本地业务校验。
 
 DeepSeek 视觉配置固定为：
 
