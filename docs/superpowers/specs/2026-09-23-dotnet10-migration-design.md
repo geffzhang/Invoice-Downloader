@@ -274,7 +274,33 @@ public interface IInvoiceFieldExtractor
 
 使用 SQLite 保存运行索引、发票历史、审计事件和人工复核状态。应用数据保存到 `%LocalAppData%/InvoiceFlowAI`；用户选择的发票和报表保存到指定输出目录。
 
-邮箱授权码和 DeepSeek API Key 使用 Windows DPAPI 或 Credential Manager 保存。凭据不能写入 JSON 设置、日志、审计记录、崩溃报告或 WebView 事件。
+### DeepSeek API Key 的 DPAPI 存储
+
+DeepSeek API Key 使用 Windows DPAPI 保存，参考 `E:/GitHub/Lyntai/src/Lyntai.Secrets.Dpapi` 的 `DpapiSecretProtector` 和 Vault 注册边界。新应用不直接在业务服务中调用 `ProtectedData`，而是通过应用层接口隔离平台加密细节：
+
+```csharp
+public interface ISecretStore
+{
+  Task SaveAsync(string name, string value, CancellationToken cancellationToken);
+  Task<string?> GetAsync(string name, CancellationToken cancellationToken);
+  Task DeleteAsync(string name, CancellationToken cancellationToken);
+}
+```
+
+实现要求：
+
+- 使用 `DataProtectionScope.CurrentUser`，使密文只能由保存它的 Windows 用户在同一台机器上解密；
+- 使用固定的应用级 entropy，例如由 `InvoiceFlowAI` 应用标识派生的 UTF-8 字节，避免同一用户下的其他应用直接复用密文；
+- 密文以 Base64 形式保存到 `%LocalAppData%/InvoiceFlowAI/secrets.json` 或等价的本地键值存储；
+- 文件只保存密文、版本和密钥名称，不保存 API Key 明文；
+- 使用临时文件、替换写入和用户 ACL，避免写入中断造成半个密文文件；
+- `Protect`/`Unprotect` 的平台检查在构造阶段完成，非 Windows 环境立即抛出 `PlatformNotSupportedException`；
+- Base64 无效、密文损坏、用户不匹配、机器不匹配或篡改统一转换为 `CryptographicException`，由设置界面显示“凭据不可用，请重新配置”；
+- 日志、审计记录、崩溃报告、JSON/RPC 事件和 ZeroPipeline Recipe 都不能包含 API Key 或解密后的密文。
+
+默认不使用 `LocalMachine`，因为本应用是单用户桌面应用，不需要让同一台机器上的其他账户读取凭据。若未来提供 Windows 服务模式，必须新增显式配置和单独的安全评审，不能静默改变现有密钥作用域。
+
+邮箱授权码沿用同一 `ISecretStore` 抽象和 DPAPI 保护策略。DeepSeek 与邮箱凭据使用不同的逻辑名称，例如 `deepseek.api-key` 和 `mail.imap.auth-code`，但共享相同的用户绑定和文件权限策略。
 
 URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件和发票图片默认保存在本地，只有在用户配置的 AI 策略允许时才上传给 DeepSeek。
 
@@ -285,6 +311,7 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 - 报表：使用 ClosedXML 生成发票汇总、明细和人工复核工作簿；
 - PDF：文本提取和需要 OCR 时的页面渲染；
 - OFD：本文档规定的专用 ZIP/XML 发票解析器；
+- 凭据：Windows DPAPI `CurrentUser` 保护器，参考 `Lyntai.Secrets.Dpapi`；
 - AI：由 `Microsoft.Extensions.AI.OpenAI` 提供 `IChatClient`，接入 DeepSeek 的 OpenAI 兼容端点。
 
 ## 10. 错误模型
@@ -309,7 +336,7 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 
 ### 单元测试
 
-覆盖领域校验、金额和税额计算、规则、配对、查重、归档命名、路径安全、OFD XML 变体、OCR 归一化、DeepSeek 响应校验和报表映射。
+覆盖领域校验、金额和税额计算、规则、配对、查重、归档命名、路径安全、OFD XML 变体、OCR 归一化、DeepSeek 响应校验、DPAPI 密钥存储和报表映射。
 
 ### 集成测试
 
@@ -330,6 +357,7 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 ## 12. 风险与待验证事项
 
 - 通过目标端点验证 DeepSeek Flash 的具体模型标识和多模态内容格式；
+- 验证 DPAPI 当前用户作用域、应用 entropy、密文损坏和用户/机器迁移失败行为；
 - 测试 SimdPaddleOCR 对小字体、旋转、低分辨率和扫描发票的识别效果；
 - 验证 PDF/OFD 渲染质量是否满足 OCR 要求；
 - 使用 `original_invoice.xml` 和 `Tag.xml`/`CustomTag.xml` 两类样本验证 OFD 解析；
