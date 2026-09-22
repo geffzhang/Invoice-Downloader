@@ -90,6 +90,13 @@ IMAP 处理固定使用以下包：
 <PackageReference Include="MailKit" Version="4.18.0" />
 ```
 
+本地持久化使用 EF Core SQLite：
+
+```xml
+<PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.*" />
+<PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.*" />
+```
+
 ZeroPipeline 参考仓库：<https://github.com/kzxl/ZeroPipeline/tree/master>。
 其核心包支持 `net8.0` 和 `netstandard2.0`，可由 .NET 10 应用引用。暂不使用 `ZeroPipeline.UI`，因为本项目的界面由 WinUI 3 + WebView2 承载，不能把 WinForms 画布控件作为 UI 基础。
 
@@ -297,7 +304,20 @@ public interface IInvoiceFieldExtractor
 
 ## 8. 存储与安全
 
-使用 SQLite 保存运行索引、发票历史、审计事件和人工复核状态。应用数据保存到 `%LocalAppData%/InvoiceFlowAI`；用户选择的发票和报表保存到指定输出目录。
+使用 EF Core SQLite 保存运行索引、发票历史、审计事件和人工复核状态。应用数据保存到 `%LocalAppData%/InvoiceFlowAI`；用户选择的发票和报表保存到指定输出目录。
+
+`InvoiceFlowDbContext` 位于 `InvoiceFlowAI.Infrastructure.Persistence`，领域层只依赖仓储或查询接口，不引用 EF Core 实体和 `DbContext`。数据库模型至少包含：
+
+- `Runs`：运行 ID、状态、阶段、开始/结束时间和结果摘要；
+- `Documents`：文档 ID、来源、文件哈希、文件类型和处理状态；
+- `Invoices`：发票主数据、归一化字段、查重键和归档状态；
+- `InvoiceItems`：发票明细；
+- `AuditEvents`：稳定 schema 的真值/审计事件；
+- `ManualReviewItems`：人工复核原因、状态和处理时间。
+
+使用 EF Core migrations 管理数据库结构。应用启动时只执行已发布的迁移，不在运行时自动创建或删除数据库。数据库写入使用显式事务，发票主数据、明细、归档状态和对应审计事件必须保持一致；日志写入不参与业务事务。
+
+单次运行使用独立的 DbContext 生命周期，禁止跨线程共享 DbContext。批处理使用有界批量写入，避免逐条提交造成性能和锁竞争问题。SQLite 的 busy timeout、WAL 模式和连接重试策略配置化，并对数据库损坏、磁盘满和迁移失败返回稳定错误码。
 
 ### DeepSeek API Key 的 DPAPI 存储
 
@@ -337,6 +357,7 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 - PDF：文本提取和需要 OCR 时的页面渲染；
 - OFD：本文档规定的专用 ZIP/XML 发票解析器；
 - 凭据：Windows DPAPI `CurrentUser` 保护器，参考 `Lyntai.Secrets.Dpapi`；
+- 持久化：EF Core 10 + `Microsoft.EntityFrameworkCore.Sqlite`；
 - 日志：Serilog 结构化日志，通过 `Microsoft.Extensions.Logging` 注入；
 - AI：由 `Microsoft.Extensions.AI.OpenAI` 提供 `IChatClient`，接入 DeepSeek 的 OpenAI 兼容端点。
 
@@ -380,7 +401,7 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 
 ### 集成测试
 
-验证 WebView2 RPC 分发、完整本地文件链路、真实 OFD 样本、假的 `IChatClient` 响应、重试/取消、SQLite 持久化、审计事件和 Excel 生成。
+验证 WebView2 RPC 分发、完整本地文件链路、真实 OFD 样本、假的 `IChatClient` 响应、重试/取消、EF Core SQLite 持久化、迁移、事务、并发写入、审计事件和 Excel 生成。
 
 ### Windows 端到端测试
 
