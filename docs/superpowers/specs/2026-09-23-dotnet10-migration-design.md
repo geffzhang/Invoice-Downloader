@@ -104,6 +104,12 @@ PDF 页面渲染固定使用 PDFiumCore：
 <PackageReference Include="PdfPig" Version="0.1.17-alpha-202609192350-df33d" />
 ```
 
+WebView2 使用指定的预览版本：
+
+```xml
+<PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4255-prerelease" />
+```
+
 ZeroPipeline 参考仓库：<https://github.com/kzxl/ZeroPipeline/tree/master>。
 其核心包支持 `net8.0` 和 `netstandard2.0`，可由 .NET 10 应用引用。暂不使用 `ZeroPipeline.UI`，因为本项目的界面由 WinUI 3 + WebView2 承载，不能把 WinForms 画布控件作为 UI 基础。
 
@@ -114,6 +120,8 @@ ZeroPipeline 参考仓库：<https://github.com/kzxl/ZeroPipeline/tree/master>�
 - `InvoiceFlowAI.Application`：使用 ZeroPipeline 构建运行 DAG，负责准入校验、取消、重试策略、阶段转换、并发限制和进度发送。
 - `InvoiceFlowAI.Domain`：发票实体、解析结果、分类规则、配对规则、校验和真值契约。该层不依赖 WebView2、HTTP、数据库或供应商 SDK。
 - `InvoiceFlowAI.Infrastructure`：IMAP、文档、OCR、AI、浏览器、归档、报表、持久化、凭据和日志等具体实现。
+
+`Microsoft.Web.WebView2` 只由 `InvoiceFlowAI.App` 引用。WebView2 负责加载随应用发布的 HTML/JavaScript 资源，并通过宿主桥接接入 JSON/RPC；页面脚本不能直接访问文件系统、DPAPI、数据库或外部 API。
 
 整体分层借鉴 `E:/GitHub/qingpiao/src/QingPiao` 中 `Services/Parsers/Exporters` 的职责拆分，同时使用接口替代具体依赖，以适配桌面端编排和自动化测试。
 
