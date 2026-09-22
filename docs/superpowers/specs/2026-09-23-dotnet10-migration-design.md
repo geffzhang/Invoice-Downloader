@@ -116,6 +116,14 @@ WebView2 使用指定的预览版本：
 <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4255-prerelease" />
 ```
 
+DeepSeek 的统一 AI 适配器固定使用：
+
+```xml
+<PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.0" />
+```
+
+其传递依赖的 `Microsoft.Extensions.AI`、OpenAI 客户端和相关 `10.x` 包必须通过锁文件固定，避免预览版或浮动依赖改变多模态消息序列化结果。
+
 ZeroPipeline 参考仓库：<https://github.com/kzxl/ZeroPipeline/tree/master>。
 其 `1.2.0` 核心包支持 `net8.0` 和 `netstandard2.0`，可由 .NET 10 应用引用。暂不使用 `ZeroPipeline.UI`，因为本项目的界面由 WinUI 3 + WebView2 承载，不能把 WinForms 画布控件作为 UI 基础。
 
@@ -329,7 +337,7 @@ DeepSeek 视觉配置固定为：
 - Base64 内联请求体上限为 48 MiB，单张 Base64/URL 图片最大 32 MiB；
 - 单边最大 8192 像素；单请求最多 600 张图片，并受总大小限制约束。
 
-`Microsoft.Extensions.AI` 的 `DataContent` 到 DeepSeek `image_url` content block 的序列化结果必须通过集成测试验证。如果目标版本的 `Microsoft.Extensions.AI.OpenAI` 不能生成 DeepSeek 所需的 block 结构，则在 `IInvoiceFieldExtractor` 内部增加受控的 OpenAI-compatible HTTP content adapter；业务层仍只依赖 `IInvoiceFieldExtractor`，不直接依赖 DeepSeek JSON。
+`Microsoft.Extensions.AI.OpenAI 10.10.0` 的 `DataContent` 到 DeepSeek `image_url` content block 的序列化结果必须通过集成测试验证。如果该版本不能生成 DeepSeek 所需的 block 结构，则在 `IInvoiceFieldExtractor` 内部增加受控的 OpenAI-compatible HTTP content adapter；业务层仍只依赖 `IInvoiceFieldExtractor`，不直接依赖 DeepSeek JSON。
 
 模型名称、端点、温度、token 上限、图片细节级别、超时时间和重试策略均配置化，但默认模型必须是 `deepseek-flash`。
 
@@ -470,7 +478,7 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 ## 12. 风险与待验证事项
 
 - 通过目标端点验证 DeepSeek Flash 的具体模型标识和多模态内容格式；
-- 验证 `DataContent` 或受控 adapter 最终生成 `user.content[].type=image_url`，并正确承载 Base64 data URL；
+- 验证 `Microsoft.Extensions.AI.OpenAI 10.10.0` 的 `DataContent` 或受控 adapter 最终生成 `user.content[].type=image_url`，并正确承载 Base64 data URL；
 - 验证 `deepseek-flash` 的 `detail=original`、图片格式和 48 MiB/32 MiB 限制处理；
 - 验证 `ZeroPipeline.Core 1.2.0` 在 .NET 10 `win-x64` 发布目标中的 DAG 调度、背压、取消和节点失败隔离；
 - 验证 DPAPI 当前用户作用域、应用 entropy、密文损坏和用户/机器迁移失败行为；
