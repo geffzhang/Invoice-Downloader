@@ -101,6 +101,7 @@ PDF 页面渲染固定使用 PDFiumCore：
 
 ```xml
 <PackageReference Include="PDFiumCore" Version="155.0.8057" />
+<PackageReference Include="PdfPig" Version="0.1.17-alpha-202609192350-df33d" />
 ```
 
 ZeroPipeline 参考仓库：<https://github.com/kzxl/ZeroPipeline/tree/master>。
@@ -302,11 +303,25 @@ public interface IInvoiceFieldExtractor
 }
 ```
 
-文本请求包含 OCR 文本和坐标；多模态请求包含严格的提取提示词和图片 `DataContent`。两条路径共用类型化响应校验和本地业务校验。模型名称、端点、温度、token 上限、超时时间和重试策略均配置化；实现前必须根据目标 DeepSeek 账号验证具体的 DeepSeek Flash 模型标识。
+文本请求包含 OCR 文本和坐标；多模态请求使用 DeepSeek OpenAI 兼容 Chat Completions 格式：图片必须位于 `user` 消息的 content block 数组中，图片块使用 `image_url`。本地页面图像默认编码为 `data:image/jpeg;base64,...`，而不是上传临时公网 URL。两条路径共用类型化响应校验和本地业务校验。
+
+DeepSeek 视觉配置固定为：
+
+- 模型：`deepseek-flash`；
+- 端点：`https://api.deepseek.com`；
+- 支持图像格式：JPEG、PNG、GIF、WebP；
+- `image_url.detail` 可配置为 `low`、`high`、`original` 或 `auto`，发票识别默认使用 `original`；
+- 图片只放在 `user` 消息中，不能放在 `system` 或 `assistant` 消息中；
+- Base64 内联请求体上限为 48 MiB，单张 Base64/URL 图片最大 32 MiB；
+- 单边最大 8192 像素；单请求最多 600 张图片，并受总大小限制约束。
+
+`Microsoft.Extensions.AI` 的 `DataContent` 到 DeepSeek `image_url` content block 的序列化结果必须通过集成测试验证。如果目标版本的 `Microsoft.Extensions.AI.OpenAI` 不能生成 DeepSeek 所需的 block 结构，则在 `IInvoiceFieldExtractor` 内部增加受控的 OpenAI-compatible HTTP content adapter；业务层仍只依赖 `IInvoiceFieldExtractor`，不直接依赖 DeepSeek JSON。
+
+模型名称、端点、温度、token 上限、图片细节级别、超时时间和重试策略均配置化，但默认模型必须是 `deepseek-flash`。
 
 系统先尝试基于 OCR 文本的提取。如果 OCR 置信度过低、必填字段缺失或本地校验失败，则将原始页面图像发送给 DeepSeek Flash 进行多模态复核。新方案不包含 GLM 的配置、包引用、错误码或运行时路径。
 
-远程 AI 错误必须转换为稳定错误，包括超时、认证失败、限流、额度耗尽、响应无效和不支持多模态输入。单元测试使用假的 `IChatClient`，不需要真实 API Key。
+远程 AI 错误必须转换为稳定错误，包括超时、认证失败、限流、额度耗尽、请求体超过 48 MiB、图片格式不支持、响应无效和多模态序列化不兼容。单元测试使用假的 `IChatClient`，不需要真实 API Key；另设 DeepSeek 兼容端点集成测试验证最终 JSON content block。
 
 ## 8. 存储与安全
 
@@ -360,7 +375,7 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 - IMAP：使用 MailKit 适配器，支持供应商设置和受限邮箱扫描；
 - 链接恢复：使用 .NET 版 Playwright 和供应商专用下载适配器；
 - 报表：使用 ClosedXML 生成发票汇总、明细和人工复核工作簿；
-- PDF：使用 PdfPig 进行文本提取和页面判断，使用 `PDFiumCore` `155.0.8057` 将扫描页面渲染为 OCR 图像；
+- PDF：使用 `PdfPig` `0.1.17-alpha-202609192350-df33d` 进行文本提取和页面判断，使用 `PDFiumCore` `155.0.8057` 将扫描页面渲染为 OCR 图像；
 - OFD：本文档规定的专用 ZIP/XML 发票解析器；
 - 凭据：Windows DPAPI `CurrentUser` 保护器，参考 `Lyntai.Secrets.Dpapi`；
 - 持久化：EF Core 10 + `Microsoft.EntityFrameworkCore.Sqlite`；
@@ -381,7 +396,7 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 - 使用内存流或受控临时文件将渲染结果交给 `IInvoiceOcr`，任务完成后清理临时资源；
 - 在发布验收中确认 PDFiumCore 的许可证、原生组件再分发条款和第三方声明。
 
-文本型 PDF 仍先由 PdfPig 处理；只有文本缺失、文本质量不足或页面需要视觉识别时才调用 PDFium 渲染，避免不必要的 CPU 和内存开销。
+文本型 PDF 仍先由 PdfPig 处理；只有文本缺失、文本质量不足或页面需要视觉识别时才调用 PDFium 渲染，避免不必要的 CPU 和内存开销。由于当前 PdfPig 版本为 alpha 预览包，必须在依赖锁定文件和发布构建中固定精确版本，并使用代表性中文发票 PDF 样本验证文本提取结果。
 
 ### IMAP 适配边界
 
@@ -441,11 +456,14 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 ## 12. 风险与待验证事项
 
 - 通过目标端点验证 DeepSeek Flash 的具体模型标识和多模态内容格式；
+- 验证 `DataContent` 或受控 adapter 最终生成 `user.content[].type=image_url`，并正确承载 Base64 data URL；
+- 验证 `deepseek-flash` 的 `detail=original`、图片格式和 48 MiB/32 MiB 限制处理；
 - 验证 DPAPI 当前用户作用域、应用 entropy、密文损坏和用户/机器迁移失败行为；
 - 验证 Serilog 日志结构、滚动保留、异常事件、取消事件和敏感字段脱敏；
 - 测试 SimdPaddleOCR 对小字体、旋转、低分辨率和扫描发票的识别效果；
 - 验证 PDF/OFD 渲染质量是否满足 OCR 要求；
 - 验证 `PDFiumCore` `155.0.8057` 在自包含 `win-x64` 发布包中的原生 DLL 加载、版本诊断和许可证声明；
+- 验证 `PdfPig` `0.1.17-alpha-202609192350-df33d` 的中文发票文本提取、alpha 包还原和发布构建可重复性；
 - 使用 `original_invoice.xml` 和 `Tag.xml`/`CustomTag.xml` 两类样本验证 OFD 解析；
 - 确认 Playwright 供应商流程和打包后的浏览器行为；
 - 测量受限 OCR 并发下的内存占用；
