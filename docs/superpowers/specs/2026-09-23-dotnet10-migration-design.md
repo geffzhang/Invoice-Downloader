@@ -1200,16 +1200,59 @@ DeepSeek 视觉配置固定为：
 
 `InvoiceFlowDbContext` 位于 `InvoiceFlowAI.Infrastructure.Persistence`，领域层只依赖仓储或查询接口，不引用 EF Core 实体和 `DbContext`。数据库模型至少包含：
 
-- `Runs`：运行 ID、状态、阶段、开始/结束时间和结果摘要；
-- `Documents`：文档 ID、来源、文件哈希、文件类型和处理状态；
-- `Invoices`：发票主数据、归一化字段、查重键和归档状态；
-- `InvoiceItems`：发票明细；
-- `AuditEvents`：稳定 schema 的真值/审计事件；
-- `ManualReviewItems`：人工复核原因、状态和处理时间。
+数据库使用 UTF-8 SQLite，所有 UTC 时间存为 ISO-8601 text，金额存为 decimal scaled integer 或 invariant text，不能使用 binary floating point。领域模型和 EF entity 分离；下面的表结构是首版 schema 契约，列名可以在实现中采用 PascalCase，但迁移必须保持语义一致。
 
-使用 EF Core migrations 管理数据库结构。应用启动时只执行已发布的迁移，不在运行时自动创建或删除数据库。数据库写入使用显式事务，发票主数据、明细、归档状态和对应审计事件必须保持一致；日志写入不参与业务事务。
+| 表 | 主键和字段 | 外键、索引和约束 |
+| --- | --- | --- |
+| `Runs` | `RunId TEXT`、`State TEXT`、`Stage TEXT`、`TerminalReasonCode TEXT`、`DateFrom TEXT`、`DateToExclusive TEXT`、`AccountId TEXT`、`Mailbox TEXT`、`OutputRoot TEXT`、`ConfigurationFingerprint TEXT`、`RecipeVersion TEXT`、`StartedAtUtc TEXT`、`EndedAtUtc TEXT`、`CancellationRequestedAtUtc TEXT`、`LastEventSequence INTEGER`、`SummaryJson TEXT`、`PrimaryFailureJson TEXT`、`CreatedAtUtc TEXT` | `RunId` 主键；`ConfigurationFingerprint`、`State`、`Stage` 有普通索引；非终态运行建立 partial unique index，保证首版最多一个活动运行。 |
+| `Documents` | `DocumentId TEXT`、`SourceKind TEXT`、`SourceMessageUid TEXT`、`SourceFileName TEXT`、`SourceLocator TEXT`、`ProviderGroupKey TEXT`、`ContentHash TEXT`、`MimeType TEXT`、`CreatedAtUtc TEXT` | `DocumentId` 主键；`ContentHash` 可为空但非空时唯一；`(SourceKind, SourceLocator)` 非空时唯一；禁止保存原始授权 URL。 |
+| `DocumentProcessing` | `DocumentId TEXT`、`ProcessingRevision INTEGER`、`RunId TEXT`、`Sequence INTEGER`、`Stage TEXT`、`Status TEXT`、`ReasonCode TEXT`、`Retryable INTEGER`、`Attempt INTEGER`、`MaxAttempts INTEGER`、`ArtifactPath TEXT`、`ResultJson TEXT`、`TraceJson TEXT`、`StartedAtUtc TEXT`、`CompletedAtUtc TEXT`、`UpdatedAtUtc TEXT` | 复合主键 `(DocumentId, ProcessingRevision)`，即幂等键；`RunId` 外键；`(RunId, Sequence)` 唯一；`(RunId, DocumentId)` 当前 revision 索引；结果 JSON 禁止原文、图片和凭据。 |
+| `Invoices` | `InvoiceId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`InvoiceDate TEXT`、`Purchaser TEXT`、`Seller TEXT`、`Amount TEXT`、`TaxAmount TEXT`、`TotalAmount TEXT`、`InvoiceCode TEXT`、`InvoiceNumber TEXT`、`DocumentType TEXT`、`Category TEXT`、`Flags INTEGER`、`Confidence TEXT`、`DuplicateKey TEXT`、`ArchiveState TEXT`、`Revision INTEGER` | `(DocumentId, ProcessingRevision)` 外键；`InvoiceId` 主键；`DuplicateKey` 非空时普通索引；`(InvoiceNumber, Seller, InvoiceDate, TotalAmount)` 查询索引；不以发票号码单独做唯一约束。 |
+| `InvoiceItems` | `InvoiceItemId TEXT`、`InvoiceId TEXT`、`Ordinal INTEGER`、`Name TEXT`、`Specification TEXT`、`Unit TEXT`、`Quantity TEXT`、`UnitPrice TEXT`、`Amount TEXT`、`TaxRate TEXT`、`TaxAmount TEXT` | `InvoiceId` 外键；主键 `InvoiceItemId`；`(InvoiceId, Ordinal)` 唯一；删除发票时级联删除明细。 |
+| `Pairings` | `PairingId TEXT`、`RunId TEXT`、`InvoiceDocumentId TEXT`、`InvoiceProcessingRevision INTEGER`、`CompanionDocumentIdsJson TEXT`、`CompanionProcessingRevisionsJson TEXT`、`Score TEXT`、`State TEXT`、`ReasonCode TEXT`、`CreatedAtUtc TEXT`、`UpdatedAtUtc TEXT` | `RunId` 和 invoice processing 复合外键；`(RunId, InvoiceDocumentId, InvoiceProcessingRevision)` 唯一；companion revision 映射必须完整，不能只保存 document ID。 |
+| `ArchivedArtifacts` | `ArtifactId TEXT`、`RunId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`Role TEXT`、`RelativePath TEXT`、`FileName TEXT`、`ContentHash TEXT`、`State TEXT`、`AlreadyExisted INTEGER`、`CreatedAtUtc TEXT`、`CommittedAtUtc TEXT` | processing 复合外键；`ArtifactId` 主键；`(RunId, DocumentId, ProcessingRevision, Role, ContentHash)` 唯一；`RelativePath` 只保存相对输出路径。 |
+| `RunCheckpoints` | `RunId TEXT`、`NodeId TEXT`、`Stage TEXT`、`LastCommittedSequence INTEGER`、`InputCursorJson TEXT`、`OutputCount INTEGER`、`State TEXT`、`CheckpointRevision INTEGER`、`UpdatedAtUtc TEXT` | 复合主键 `(RunId, NodeId)`；`RunId` 外键；`(RunId, Stage, LastCommittedSequence)` 索引；cursor JSON 不得包含秘密或原始正文。 |
+| `MailboxCursors` | `AccountId TEXT`、`Mailbox TEXT`、`UidValidity INTEGER`、`LastCompletedUid INTEGER`、`CursorRevision INTEGER`、`UpdatedAtUtc TEXT` | 复合主键 `(AccountId, Mailbox)`；`UidValidity` 变化时必须重置 `LastCompletedUid`。 |
+| `AuditEvents` | `AuditEventId TEXT`、`RunId TEXT`、`EventSequence INTEGER`、`EventType TEXT`、`Stage TEXT`、`NodeId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`ReasonCode TEXT`、`PayloadJson TEXT`、`PayloadHash TEXT`、`OccurredAtUtc TEXT` | `AuditEventId` 主键；`RunId` 外键；`(RunId, EventSequence)` 唯一；`(DocumentId, ProcessingRevision, EventType)` 索引；append-only，不允许 update/delete。 |
+| `ManualReviewItems` | `ReviewId TEXT`、`RunId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`ReasonCode TEXT`、`State TEXT`、`CurrentRevision INTEGER`、`CurrentResultJson TEXT`、`CreatedAtUtc TEXT`、`ResolvedAtUtc TEXT`、`ResolvedBy TEXT` | processing 复合外键；`ReviewId` 主键；同一 processing revision 只能有一个 open review 的 partial unique index；`CurrentRevision` 用于 optimistic concurrency。 |
 
-单次运行使用独立的 DbContext 生命周期，禁止跨线程共享 DbContext。批处理使用有界批量写入，避免逐条提交造成性能和锁竞争问题。SQLite 的 busy timeout、WAL 模式和连接重试策略配置化，并对数据库损坏、磁盘满和迁移失败返回稳定错误码。
+`Runs`、`Documents` 和 `DocumentProcessing` 使用不同层次的身份：`DocumentId` 表示跨运行稳定来源身份，`ProcessingRevision` 表示一次处理尝试/结果版本，`RunId` 表示本次运行。所有写入文档处理结果的入口必须使用 `(DocumentId, ProcessingRevision)` 做 upsert；重复投递只能返回已提交结果，不能新增第二份发票、归档或审计结果。新的运行创建新的 revision，人工修正也创建新的 revision 并保留原 revision。
+
+数据库关系要求：删除运行不级联删除全局 `Documents` 或历史审计；首版只允许删除用户明确选择的运行索引和非审计临时数据。删除 `DocumentProcessing` 前必须不存在发票、配对、归档或人工复核引用。所有外键启用 `PRAGMA foreign_keys=ON`，所有 ID 和 enum 值由 `DomainValidation` 在入库前校验。
+
+### 事务、审计与外部文件一致性
+
+数据库写入使用显式事务，单个 candidate 的以下变更必须在同一 SQLite transaction 内提交：`DocumentProcessing` 终态、`Invoices`/`InvoiceItems`、`ManualReviewItems`、`ArchivedArtifacts` 的数据库状态和对应 `AuditEvents`。`AuditEvents` 是同一事务中的 append-only outbox，不是 Serilog 日志；事务回滚时业务数据和审计事件一起回滚。
+
+文件系统移动不能参加 SQLite transaction，因此归档采用两阶段状态：
+
+1. 事务 A 写入 `ArchivedArtifacts(State=Prepared)` 和审计事件，并保存临时文件哈希；
+2. 在受控输出目录内完成原子 rename/replace 并 fsync；
+3. 事务 B 校验最终文件哈希，将状态改为 `Committed` 并追加审计事件；
+4. 崩溃恢复根据 `Prepared` 记录、临时文件和最终文件哈希决定继续提交、清理临时文件或生成 `ARCHIVE_RECOVERY_FAILED`。
+
+报表文件同样先写临时文件，完成哈希和原子替换后，才在事务中保存 `ReportPath` 和 `ReportHash`。任何数据库提交成功但外部文件未完成的记录都必须可由启动恢复扫描，不得标记为已归档。
+
+### Checkpoint、重启恢复和迁移
+
+每个 ZeroPipeline 节点只在其输入 packet 已成功处理、输出 packet 已写入持久化边界且相关 `AuditEvents` 已提交后更新 `RunCheckpoints.LastCommittedSequence`。checkpoint 更新与该 packet 的业务结果使用同一 transaction；未提交的 packet 在恢复时允许重新执行，依靠 `(DocumentId, ProcessingRevision)` 幂等键消除重复副作用。
+
+应用启动时按以下顺序恢复：
+
+1. 获取单实例迁移/恢复锁，运行 `PRAGMA foreign_keys=ON`、WAL 配置和 `PRAGMA integrity_check`；
+2. 检查所有非终态 `Runs` 和 `RunCheckpoints`，将上次进程中断的节点标记为 `Recovering`；
+3. 验证 checkpoint 的 run、node、sequence、cursor 和配置指纹；
+4. 校验 `Prepared` 归档与临时文件/最终文件哈希；
+5. 从最后一个已提交 sequence 重新投递未提交输入，恢复游标和节点执行；
+6. 如果 checkpoint、文件哈希或配置指纹无法验证，运行终止为 `RUN_RECOVERY_FAILED`，保留数据库和现场，不静默丢弃数据。
+
+使用 EF Core migrations 管理结构。发布包只包含已审查的 migration，启动时在独占迁移锁内按顺序执行；禁止 `EnsureCreated`、自动删除数据库、降级 migration 或运行时生成未知 schema。EF 的 `__EFMigrationsHistory` 是唯一迁移版本来源，发布版本同时记录应用 schema compatibility range。
+
+迁移前将 SQLite 主文件、`-wal` 和 `-shm` 在 checkpoint/关闭连接后复制到带版本的备份目录，并记录备份哈希。迁移失败时回滚当前事务、保留失败诊断、阻止新运行并返回 `DB_MIGRATION_FAILED`；只有用户明确确认且备份校验成功时才允许恢复上一版本。数据库损坏或 `integrity_check` 失败时返回 `DB_CORRUPTED`，先复制只读诊断副本，再尝试最近的完整备份；不能自动新建空数据库替代原库。
+
+检测到 `SQLITE_FULL`、日志目录或临时目录磁盘不足时，停止新的 packet，回滚当前事务，写入可用的启动/诊断日志并返回 `PERSISTENCE_DISK_FULL`。恢复足够空间后，依据最近 checkpoint 重试；已提交事务不回滚，未提交事务不产生业务结果。SQLite busy timeout、WAL、连接重试和批量大小均配置化，但不能通过无限重试掩盖锁死或磁盘故障。
+
+单次运行使用独立的 `DbContext` 生命周期，禁止跨线程共享 `DbContext`。批处理使用有界批量写入，避免逐条提交造成性能和锁竞争问题。日志写入不参与业务事务，Serilog 失败也不能改变已提交业务状态；审计写入失败则按运行级 `Failed` 处理。
 
 ### DeepSeek API Key 的 DPAPI 存储
 
@@ -1380,7 +1423,7 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 }
 ```
 
-错误类别包括输入校验、单文件失败、可重试的网络/AI 失败、邮箱认证、AI 认证、持久化、磁盘、WebView2 和系统错误。邮箱扫描至少使用 `MAILBOX_CREDENTIALS_INVALID`、`MAILBOX_TLS_FAILED`、`MAILBOX_SELECT_FAILED`、`MAILBOX_CONNECTION_FAILED`、`MAILBOX_INPUT_UNRESOLVED`、`ATTACHMENT_OVER_SIZE`、`ZIP_LIMIT_EXCEEDED`；AI 认证使用 `AI_AUTHENTICATION_FAILED`。面向用户的消息安全且可本地化；诊断信息只保留脱敏后的技术细节。
+错误类别包括输入校验、单文件失败、可重试的网络/AI 失败、邮箱认证、AI 认证、持久化、磁盘、WebView2 和系统错误。邮箱扫描至少使用 `MAILBOX_CREDENTIALS_INVALID`、`MAILBOX_TLS_FAILED`、`MAILBOX_SELECT_FAILED`、`MAILBOX_CONNECTION_FAILED`、`MAILBOX_INPUT_UNRESOLVED`、`ATTACHMENT_OVER_SIZE`、`ZIP_LIMIT_EXCEEDED`；AI 认证使用 `AI_AUTHENTICATION_FAILED`；持久化使用 `PERSISTENCE_DISK_FULL`、`DB_CORRUPTED`、`DB_MIGRATION_FAILED`、`RUN_RECOVERY_FAILED` 和 `ARCHIVE_RECOVERY_FAILED`。面向用户的消息安全且可本地化；诊断信息只保留脱敏后的技术细节。
 
 ## 11. 测试与验收
 
