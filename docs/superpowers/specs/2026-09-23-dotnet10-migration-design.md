@@ -145,30 +145,122 @@ ZeroPipeline 只位于应用编排层。领域层不依赖 ZeroPipeline；节点
 
 ## 4. WebView2 契约
 
-前端通过 JSON/RPC 消息与后端通信。每个请求都有请求 ID；长时间运行的操作还拥有运行 ID。
+前端通过 `window.chrome.webview.postMessage` 向 `InvoiceFlowAI.App` 发送 JSON/RPC 请求，并通过 WebView2 `message` 事件接收响应和异步事件。协议固定为 `invoiceflow.rpc.v1`，JSON 属性使用 camelCase，时间使用 UTC ISO-8601，金额使用字符串或已明确精度的 JSON number，所有 ID 使用不透明字符串。页面不直接访问文件系统、DPAPI、数据库、MailKit、HTTP 或 ZeroPipeline。
 
-示例命令：
+### 消息 envelope
+
+请求、响应和事件使用不同但可判别的 envelope：
 
 ```json
 {
+  "protocol": "invoiceflow.rpc.v1",
   "id": "request-1",
   "method": "run.start",
   "params": {
     "dateFrom": "2026-09-01",
     "dateTo": "2026-09-23",
-    "savePath": "C:/Invoices"
+    "savePath": "C:/Invoices",
+    "customRules": "",
+    "accountId": "mail-account-1",
+    "mailbox": "INBOX",
+    "runMode": "interactive"
   }
 }
 ```
 
-进度和结束事件采用结构化、版本化格式：
+成功响应：
 
-- `run.stageChanged`
-- `run.progress`
-- `run.documentResult`
-- `run.failed`
-- `run.completed`
-- `run.cancelled`
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-1",
+  "ok": true,
+  "result": {
+    "runId": "run-1",
+    "state": "created"
+  }
+}
+```
+
+失败响应：
+
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-1",
+  "ok": false,
+  "error": {
+    "code": "RUN_ALREADY_ACTIVE",
+    "scope": "run",
+    "retryable": false,
+    "userMessage": "已有运行正在处理。",
+    "detailsAvailable": true
+  }
+}
+```
+
+异步事件：
+
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "event": "run.progress",
+  "runId": "run-1",
+  "eventSequence": 12,
+  "emittedAtUtc": "2026-09-23T10:00:00Z",
+  "payload": {
+    "stage": "extracting",
+    "completed": 4,
+    "total": 10,
+    "percent": 40
+  }
+}
+```
+
+`id` 只用于一次 RPC 请求关联，前端必须保证同一活动请求中唯一；`runId` 标识长任务；`eventSequence` 在单个 run 内严格递增，事件不能依赖 WebView2 传输顺序来重排。后端对重复的幂等请求返回相同语义的响应，不重复创建运行或重复取消。
+
+### 方法契约
+
+首版只公开以下方法，未知方法返回 `RPC_METHOD_NOT_FOUND`，未知参数返回 `RPC_INVALID_PARAMS`：
+
+| 方法 | 请求参数 | 成功结果 | 幂等/副作用 |
+| --- | --- | --- | --- |
+| `bridge.hello` | `clientVersion`、`supportedProtocolVersions` | `protocolVersion`、`serverVersion`、能力列表 | 无副作用；页面加载后必须先调用。 |
+| `run.start` | `RunInput` 的 RPC 映射 | `runId`、初始状态 | 同一 `id` 重复请求返回原响应；新 `id` 创建新 run。 |
+| `run.get` | `runId`、可选 `afterEventSequence` | 当前快照和可重放事件 | 只读；用于页面重连恢复。 |
+| `run.cancel` | `runId`、`reason` | `runId`、`state`、`accepted` | 重复取消安全；已终态运行返回当前终态。 |
+| `run.retry` | `runId`、`documentIds` 或 `retryAllEligible` | 新的 `runId` 或重试批次 ID | 只允许重试具有 `Retryable=true` 的候选。 |
+| `review.list` | `runId`、分页和状态筛选 | 人工复核摘要分页 | 只读。 |
+| `review.get` | `reviewId` | 脱敏的复核详情和字段 | 只读，不返回原始凭据。 |
+| `review.submit` | `reviewId`、修正字段、决定 | 更新后的候选终态 | 必须带 revision，重复 revision 不重复应用。 |
+| `settings.get` | 无或设置分组 | 非秘密设置 | API Key、邮箱授权码只返回 `configured` 和掩码状态。 |
+| `settings.update` | 非秘密设置 | 更新结果和配置指纹 | 不允许携带 API Key、邮箱授权码或其他秘密字段。 |
+| `secret.set` | `name`、`value` | `name`、`configured` | 只允许受控的秘密名称；写入 DPAPI 后不回显 value。 |
+| `secret.delete` | `name` | `name`、`configured=false` | 幂等删除；不返回旧值。 |
+| `report.open` | `runId`、报告类型 | 受控临时打开 token | 后端验证路径，不接受前端任意路径。 |
+
+`run.start` 的参数映射为 `RunInput`：`dateFrom`、`dateTo` 使用 `yyyy-MM-dd`；`savePath` 必须是用户可访问的目录；`accountId` 必须引用已保存的邮箱配置；`customRules` 有长度上限；`runMode` 只能取 `interactive` 或首版明确支持的枚举值。后端重新校验所有字段，不能信任前端校验。
+
+### 事件契约
+
+事件只由后端发送，前端不能伪造运行事件。所有事件都包含 `protocol`、`event`、`runId`、`eventSequence`、`emittedAtUtc` 和 `payload`。同一 `eventSequence` 只能发送一次；前端发现序号跳跃时调用 `run.get`，使用 `afterEventSequence` 请求缺失事件。
+
+- `run.stageChanged`：`previousStage`、`stage`、`stageSequence`；
+- `run.progress`：`stage`、`completed`、`total`、`percent`；
+- `run.documentResult`：脱敏的 `DocumentId`、sequence、`CandidateStatus`、reason code、人工复核标记和归档相对路径；
+- `run.failed`：`RunFailure` 的安全映射，包含 stage、reason code、retryable 和 `detailsAvailable`；
+- `run.completed`：`RunSummary` 的安全映射；
+- `run.cancelled`：取消原因、已完成数量、未处理数量和最终摘要。
+
+`run.documentResult` 不发送 OCR 文本、原始邮件、图片、完整 URL、API Key、完整模型响应或本地绝对路径。相同 candidate 的重试结果带有新的 processing revision，但不能改变原始 sequence。
+
+### 连接、取消和错误规则
+
+页面加载后先执行 `bridge.hello`；在 hello 成功前，后端只接受 hello 和诊断级握手请求。WebView2 重新加载或暂时断开不会取消运行，页面重新连接后通过 `run.get` 恢复当前快照和事件；事件重放有固定上限，超出范围时返回完整快照并要求前端丢弃旧事件缓存。
+
+`run.cancel` 只设置运行取消信号，不强制终止线程或删除已提交结果。节点在下一个安全检查点停止读取新输入，候选结果按 `Cancelled` 终态写入，最终发送且只发送一次 `run.cancelled`。取消一个不存在的 run 返回 `RUN_NOT_FOUND`，取消已完成 run 返回 `accepted=false` 和当前状态。
+
+错误 envelope 只使用稳定的 `code`、`scope`、`retryable`、`userMessage`、`detailsAvailable` 和可选的脱敏 `details`。原始异常类型、堆栈、完整 URL、邮件内容、OCR 内容和秘密不能进入 RPC。错误码至少覆盖：`RPC_INVALID_JSON`、`RPC_PROTOCOL_UNSUPPORTED`、`RPC_METHOD_NOT_FOUND`、`RPC_INVALID_PARAMS`、`RUN_ALREADY_ACTIVE`、`RUN_NOT_FOUND`、`RUN_NOT_CANCELLABLE`、`CREDENTIALS_NOT_CONFIGURED`、`RUN_FAILED`、`PERSISTENCE_UNAVAILABLE` 和 `WEBVIEW_BRIDGE_NOT_READY`。
 
 桥接层负责传输、请求关联、序列化和事件转发，不负责邮箱扫描或发票解析。
 
