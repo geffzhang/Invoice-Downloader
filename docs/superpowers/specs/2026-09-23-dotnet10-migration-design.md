@@ -81,8 +81,14 @@ tests/
 
 应用层引用 ZeroPipeline 的核心编排包：
 
-- `ZeroPipeline.Core`：DAG、拓扑调度、typed ports、背压和执行器；
+- `ZeroPipeline.Core` `1.2.0`：DAG、拓扑调度、typed ports、背压和执行器；
 - `ZeroPipeline.Recipe`：JSON Recipe 序列化、节点注册和图构建。
+
+```xml
+<PackageReference Include="ZeroPipeline.Core" Version="1.2.0" />
+```
+
+`ZeroPipeline.Recipe` 必须选择与 `ZeroPipeline.Core 1.2.0` 兼容的同系列版本，并在解决方案锁文件中固定；不能使用浮动版本。
 
 IMAP 处理固定使用以下包：
 
@@ -111,7 +117,7 @@ WebView2 使用指定的预览版本：
 ```
 
 ZeroPipeline 参考仓库：<https://github.com/kzxl/ZeroPipeline/tree/master>。
-其核心包支持 `net8.0` 和 `netstandard2.0`，可由 .NET 10 应用引用。暂不使用 `ZeroPipeline.UI`，因为本项目的界面由 WinUI 3 + WebView2 承载，不能把 WinForms 画布控件作为 UI 基础。
+其 `1.2.0` 核心包支持 `net8.0` 和 `netstandard2.0`，可由 .NET 10 应用引用。暂不使用 `ZeroPipeline.UI`，因为本项目的界面由 WinUI 3 + WebView2 承载，不能把 WinForms 画布控件作为 UI 基础。
 
 ### 职责边界
 
@@ -466,6 +472,7 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 - 通过目标端点验证 DeepSeek Flash 的具体模型标识和多模态内容格式；
 - 验证 `DataContent` 或受控 adapter 最终生成 `user.content[].type=image_url`，并正确承载 Base64 data URL；
 - 验证 `deepseek-flash` 的 `detail=original`、图片格式和 48 MiB/32 MiB 限制处理；
+- 验证 `ZeroPipeline.Core 1.2.0` 在 .NET 10 `win-x64` 发布目标中的 DAG 调度、背压、取消和节点失败隔离；
 - 验证 DPAPI 当前用户作用域、应用 entropy、密文损坏和用户/机器迁移失败行为；
 - 验证 Serilog 日志结构、滚动保留、异常事件、取消事件和敏感字段脱敏；
 - 测试 SimdPaddleOCR 对小字体、旋转、低分辨率和扫描发票的识别效果；
