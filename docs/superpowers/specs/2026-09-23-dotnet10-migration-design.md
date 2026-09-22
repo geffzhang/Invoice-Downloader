@@ -109,6 +109,7 @@ PDF 页面渲染固定使用 PDFiumCore：
 <PackageReference Include="PDFiumCore" Version="155.0.8057" />
 <PackageReference Include="PdfPig" Version="0.1.17-alpha-202609192350-df33d" />
 <PackageReference Include="SkiaSharp" Version="4.154.0-preview.1.26454.9" />
+<PackageReference Include="Sdcb.SimdPaddleOCR" Version="1.4.2" />
 ```
 
 WebView2 使用指定的预览版本：
@@ -833,7 +834,7 @@ PDF/OFD 页面图像
 
 使用以下组件：
 
-- `Sdcb.SimdPaddleOCR`；
+- `Sdcb.SimdPaddleOCR` `1.4.2`；
 - 初始使用 `Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny` 等适合中文发票的模型包；
 - 使用 ImageSharp 或 SkiaSharp 负责图像解码和像素转换。
 
