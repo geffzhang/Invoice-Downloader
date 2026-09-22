@@ -97,6 +97,12 @@ IMAP 处理固定使用以下包：
 <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.*" />
 ```
 
+PDF 页面渲染固定使用 PDFiumCore：
+
+```xml
+<PackageReference Include="PDFiumCore" Version="155.0.8057" />
+```
+
 ZeroPipeline 参考仓库：<https://github.com/kzxl/ZeroPipeline/tree/master>。
 其核心包支持 `net8.0` 和 `netstandard2.0`，可由 .NET 10 应用引用。暂不使用 `ZeroPipeline.UI`，因为本项目的界面由 WinUI 3 + WebView2 承载，不能把 WinForms 画布控件作为 UI 基础。
 
@@ -354,12 +360,28 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 - IMAP：使用 MailKit 适配器，支持供应商设置和受限邮箱扫描；
 - 链接恢复：使用 .NET 版 Playwright 和供应商专用下载适配器；
 - 报表：使用 ClosedXML 生成发票汇总、明细和人工复核工作簿；
-- PDF：文本提取和需要 OCR 时的页面渲染；
+- PDF：使用 PdfPig 进行文本提取和页面判断，使用 `PDFiumCore` `155.0.8057` 将扫描页面渲染为 OCR 图像；
 - OFD：本文档规定的专用 ZIP/XML 发票解析器；
 - 凭据：Windows DPAPI `CurrentUser` 保护器，参考 `Lyntai.Secrets.Dpapi`；
 - 持久化：EF Core 10 + `Microsoft.EntityFrameworkCore.Sqlite`；
 - 日志：Serilog 结构化日志，通过 `Microsoft.Extensions.Logging` 注入；
 - AI：由 `Microsoft.Extensions.AI.OpenAI` 提供 `IChatClient`，接入 DeepSeek 的 OpenAI 兼容端点。
+
+### PDF 渲染适配边界
+
+`PDFiumCore` 只位于 `InvoiceFlowAI.Infrastructure.Documents`，通过内部 `IPdfPageRenderer` 接口提供页面渲染能力。应用层和领域层不直接引用 PDFium 类型。
+
+渲染器必须：
+
+- 以 `win-x64` 为首个发布目标，验证 PDFium 原生 DLL 与 .NET 10 的加载方式；
+- 明确原生库搜索路径，优先从应用发布目录加载，禁止依赖开发机全局 DLL；
+- 支持配置 DPI、页面范围、像素格式和最大页面尺寸；
+- 将 PDFium 原生资源随自包含发布包一起发布，并在启动诊断中记录版本和加载结果；
+- 对损坏 PDF、超大页面、渲染超时和原生库加载失败返回稳定错误码；
+- 使用内存流或受控临时文件将渲染结果交给 `IInvoiceOcr`，任务完成后清理临时资源；
+- 在发布验收中确认 PDFiumCore 的许可证、原生组件再分发条款和第三方声明。
+
+文本型 PDF 仍先由 PdfPig 处理；只有文本缺失、文本质量不足或页面需要视觉识别时才调用 PDFium 渲染，避免不必要的 CPU 和内存开销。
 
 ### IMAP 适配边界
 
@@ -423,6 +445,7 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 - 验证 Serilog 日志结构、滚动保留、异常事件、取消事件和敏感字段脱敏；
 - 测试 SimdPaddleOCR 对小字体、旋转、低分辨率和扫描发票的识别效果；
 - 验证 PDF/OFD 渲染质量是否满足 OCR 要求；
+- 验证 `PDFiumCore` `155.0.8057` 在自包含 `win-x64` 发布包中的原生 DLL 加载、版本诊断和许可证声明；
 - 使用 `original_invoice.xml` 和 `Tag.xml`/`CustomTag.xml` 两类样本验证 OFD 解析；
 - 确认 Playwright 供应商流程和打包后的浏览器行为；
 - 测量受限 OCR 并发下的内存占用；
