@@ -84,6 +84,12 @@ tests/
 - `ZeroPipeline.Core`：DAG、拓扑调度、typed ports、背压和执行器；
 - `ZeroPipeline.Recipe`：JSON Recipe 序列化、节点注册和图构建。
 
+IMAP 处理固定使用以下包：
+
+```xml
+<PackageReference Include="MailKit" Version="4.18.0" />
+```
+
 ZeroPipeline 参考仓库：<https://github.com/kzxl/ZeroPipeline/tree/master>。
 其核心包支持 `net8.0` 和 `netstandard2.0`，可由 .NET 10 应用引用。暂不使用 `ZeroPipeline.UI`，因为本项目的界面由 WinUI 3 + WebView2 承载，不能把 WinForms 画布控件作为 UI 基础。
 
@@ -334,6 +340,20 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 - 日志：Serilog 结构化日志，通过 `Microsoft.Extensions.Logging` 注入；
 - AI：由 `Microsoft.Extensions.AI.OpenAI` 提供 `IChatClient`，接入 DeepSeek 的 OpenAI 兼容端点。
 
+### IMAP 适配边界
+
+`MailKit` 只位于 `InvoiceFlowAI.Infrastructure.Mail`，应用层依赖 `IMailboxScanner`，不直接引用 MailKit 类型。适配器负责：
+
+- 使用 IMAPS/TLS 连接 QQ、163 等邮箱；
+- 按日期范围和发件人/主题规则筛选邮件；
+- 递归读取 MIME、附件和嵌套 ZIP；
+- 将附件转换为 `DocumentCandidate`，不把 MimeKit 对象泄漏到领域层；
+- 支持 `CancellationToken`、连接超时、断线重连和单封邮件失败隔离；
+- 对邮件 UID、附件哈希和 Message-ID 去重，避免重复下载；
+- 不记录授权码、邮件正文、完整附件 URL 或完整邮件头。
+
+IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务器，覆盖 TLS 失败、认证失败、分页、重复邮件、嵌套附件、损坏 MIME、断线重连和取消。
+
 ## 10. 错误模型
 
 前端使用稳定错误码，而不是直接展示原始异常文本：
@@ -369,6 +389,7 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 验收以行为而非代码翻译相似度为标准：
 
 - 相同邮箱样本得到等价的候选集合；
+- 在 MailKit `4.18.0` 下，相同邮箱样本得到等价的候选集合；
 - 相同 PDF/OFD/XML 样本得到等价的发票字段和人工复核分类；
 - 配对、归档、查重、报表和审计结果正确；
 - 所有失败场景都有稳定且可解释的错误；
