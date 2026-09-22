@@ -100,8 +100,8 @@ IMAP 处理固定使用以下包：
 本地持久化使用 EF Core SQLite：
 
 ```xml
-<PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.*" />
-<PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.*" />
+<PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.12" />
+<PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
 ```
 
 PDF 页面渲染固定使用 PDFiumCore：
