@@ -82,13 +82,14 @@ tests/
 应用层引用 ZeroPipeline 的核心编排包：
 
 - `ZeroPipeline.Core` `1.2.0`：DAG、拓扑调度、typed ports、背压和执行器；
-- `ZeroPipeline.Recipe`：JSON Recipe 序列化、节点注册和图构建。
+- `ZeroPipeline.Recipe` `1.2.0`：JSON Recipe 序列化、节点注册和图构建。
 
 ```xml
 <PackageReference Include="ZeroPipeline.Core" Version="1.2.0" />
+<PackageReference Include="ZeroPipeline.Recipe" Version="1.2.0" />
 ```
 
-`ZeroPipeline.Recipe` 必须选择与 `ZeroPipeline.Core 1.2.0` 兼容的同系列版本，并在解决方案锁文件中固定；不能使用浮动版本。
+`ZeroPipeline.Core` 和 `ZeroPipeline.Recipe` 都固定为 `1.2.0`，并在解决方案锁文件中固定传递依赖；不能使用浮动版本。
 
 IMAP 处理固定使用以下包：
 
