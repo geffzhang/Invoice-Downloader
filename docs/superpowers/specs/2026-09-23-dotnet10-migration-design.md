@@ -660,6 +660,266 @@ public interface IManualReviewService
 
 人工复核提交必须校验 revision，防止两个页面覆盖彼此修改；`CorrectAndAccept` 产生新的领域 revision 并保留原始 AI 结果和修正审计；`RetryExtraction` 只能重新排队允许重试的 candidate；`Reject` 进入 `Unresolved` 或业务规定的非目标状态。人工复核不会直接写文件，重新归档和报表由后续应用命令触发。
 
+### 运行基础设施接口
+
+这些接口位于 `InvoiceFlowAI.Application` 的抽象边界，具体实现由 `InvoiceFlowAI.Infrastructure.Persistence`、`InvoiceFlowAI.App.Rpc` 或运行编排层提供。它们不暴露 EF Core、WebView2、MailKit 或 ZeroPipeline 类型。
+
+#### 运行状态与 checkpoint
+
+```csharp
+public sealed record RunSnapshot(
+  string RunId,
+  RunTerminalStatus? TerminalStatus,
+  string Stage,
+  string TerminalReasonCode,
+  long LastEventSequence,
+  IReadOnlyDictionary<string, RunCheckpoint> Checkpoints,
+  RunSummary? Summary,
+  int Version);
+
+public sealed record RunCheckpoint(
+  string RunId,
+  string NodeId,
+  string Stage,
+  long LastCommittedSequence,
+  string InputCursorJson,
+  int OutputCount,
+  string State,
+  int CheckpointRevision,
+  DateTimeOffset UpdatedAtUtc);
+
+public sealed record RunTransition(
+  string RunId,
+  string ExpectedState,
+  string NewState,
+  string Stage,
+  string ReasonCode = "",
+  int ExpectedVersion = 0);
+
+public interface IRunStateStore
+{
+  Task CreateAsync(
+    RunInput request,
+    string configurationFingerprint,
+    CancellationToken cancellationToken);
+
+  Task<RunSnapshot?> GetAsync(
+    string runId,
+    CancellationToken cancellationToken);
+
+  Task<IReadOnlyList<RunSnapshot>> ListRecoverableAsync(
+    CancellationToken cancellationToken);
+
+  Task<RunSnapshot> TransitionAsync(
+    RunTransition transition,
+    CancellationToken cancellationToken);
+
+  Task SaveCheckpointAsync(
+    RunCheckpoint checkpoint,
+    int expectedCheckpointRevision,
+    CancellationToken cancellationToken);
+
+  Task CompleteAsync(
+    string runId,
+    RunTerminalStatus status,
+    RunSummary summary,
+    CancellationToken cancellationToken);
+}
+```
+
+`IRunStateStore` 是唯一允许改变运行状态和 checkpoint 的接口。`TransitionAsync` 必须使用 optimistic concurrency；状态版本不匹配返回 `RUN_STATE_CONFLICT`，不能覆盖另一个线程或重连页面的状态。`CompleteAsync` 是一次性终态屏障，已终态运行重复提交只能返回已有快照。checkpoint 只保存已提交 packet 的 sequence，不能保存 API Key、OCR 原文、图片或完整邮件正文。
+
+#### 审计存储
+
+```csharp
+public sealed record AuditEvent(
+  string AuditEventId,
+  string RunId,
+  long EventSequence,
+  string EventType,
+  string Stage,
+  string NodeId,
+  string? DocumentId,
+  int? ProcessingRevision,
+  string ReasonCode,
+  string PayloadJson,
+  string PayloadHash,
+  DateTimeOffset OccurredAtUtc);
+
+public interface IAuditStore
+{
+  Task AppendAsync(
+    AuditEvent auditEvent,
+    CancellationToken cancellationToken);
+
+  Task AppendBatchAsync(
+    IReadOnlyList<AuditEvent> auditEvents,
+    CancellationToken cancellationToken);
+
+  Task<IReadOnlyList<AuditEvent>> ReadRunAsync(
+    string runId,
+    long afterSequence,
+    int limit,
+    CancellationToken cancellationToken);
+}
+```
+
+`IAuditStore` 只允许 append 和只读查询，不提供 update/delete。`AppendAsync`/`AppendBatchAsync` 必须加入调用方当前的应用 transaction；实现不能自行开启一个独立提交，否则业务状态成功而审计失败时会产生不可接受的不一致。审计 payload 只允许稳定 schema 和脱敏字段，原始正文、图片、秘密和完整 URL 必须在进入 store 前被拒绝。
+
+#### 重试协调
+
+```csharp
+public sealed record RetryContext(
+  string RunId,
+  string Stage,
+  int Attempt,
+  int MaxAttempts,
+  DateTimeOffset NowUtc);
+
+public sealed record RetryDecision(
+  bool Retryable,
+  TimeSpan Delay,
+  string ReasonCode,
+  int NextAttempt,
+  bool EscalateToRunFailure = false);
+
+public interface IRetryCoordinator
+{
+  RetryDecision Decide(
+    CandidateFailure failure,
+    RetryContext context);
+
+  Task EnqueueAsync(
+    DocumentCandidate candidate,
+    RetryDecision decision,
+    CancellationToken cancellationToken);
+
+  Task<IReadOnlyList<DocumentCandidate>> DequeueReadyAsync(
+    string runId,
+    int limit,
+    CancellationToken cancellationToken);
+}
+```
+
+`IRetryCoordinator` 只负责错误分类、退避、尝试次数和重新投递，不执行 parser、AI、邮箱或归档操作。取消、认证失败、非法 JSON、请求体过大和数据库错误不可盲目重试；超时、连接断开和限流按错误码与阶段策略决定。重新投递保留原 `DocumentId`、原始 `Sequence` 和 processing revision 关联，不能生成新 candidate 身份。
+
+#### 进度发布
+
+```csharp
+public sealed record ProgressEvent(
+  string RunId,
+  long EventSequence,
+  string EventType,
+  string Stage,
+  string PayloadJson,
+  DateTimeOffset EmittedAtUtc);
+
+public interface IProgressPublisher
+{
+  Task<ProgressEvent> PublishStageChangedAsync(
+    string runId,
+    string previousStage,
+    string stage,
+    CancellationToken cancellationToken);
+
+  Task<ProgressEvent> PublishProgressAsync(
+    string runId,
+    string stage,
+    int completed,
+    int total,
+    CancellationToken cancellationToken);
+
+  Task<ProgressEvent> PublishDocumentResultAsync(
+    string runId,
+    CandidateProcessResult result,
+    CancellationToken cancellationToken);
+
+  Task<ProgressEvent> PublishTerminalAsync(
+    string runId,
+    RunSummary summary,
+    CancellationToken cancellationToken);
+}
+```
+
+`IProgressPublisher` 不修改业务状态，也不决定终态；它只将已提交状态映射为脱敏事件。发布失败不能回滚已提交业务事务，但事件必须写入 `RunEvents` 以便重放；事件序号由后端单调分配，不能由前端提供。
+
+#### RPC 分发
+
+```csharp
+public sealed record RpcRequestEnvelope(
+  string Protocol,
+  string Id,
+  string Method,
+  string ParamsJson);
+
+public sealed record RpcConnectionContext(
+  string ConnectionId,
+  string ClientVersion,
+  string NegotiatedProtocol);
+
+public sealed record RpcResponseEnvelope(
+  string Protocol,
+  string Id,
+  bool Ok,
+  string? ResultJson,
+  RpcError? Error);
+
+public sealed record RpcError(
+  string Code,
+  string Scope,
+  bool Retryable,
+  string UserMessage,
+  bool DetailsAvailable,
+  string? DetailsJson = null);
+
+public interface IRpcDispatcher
+{
+  Task<RpcResponseEnvelope> DispatchAsync(
+    RpcRequestEnvelope request,
+    RpcConnectionContext connection,
+    CancellationToken cancellationToken);
+}
+```
+
+`IRpcDispatcher` 只负责协议版本协商、JSON/schema 校验、请求幂等键、方法路由、错误映射和调用权限边界；它不直接访问数据库或执行业务节点。`bridge.hello` 是连接初始化的唯一例外。长任务方法只返回 accepted/run ID，进度和终态通过 `IProgressPublisher` 发送；请求重复时按 `ConnectionId + request.Id` 返回已缓存响应，不重复创建运行或提交人工修改。
+
+#### 事件回放
+
+```csharp
+public sealed record StoredRunEvent(
+  string RunId,
+  long EventSequence,
+  string EventType,
+  string PayloadJson,
+  DateTimeOffset EmittedAtUtc);
+
+public sealed record EventReplayResult(
+  RunSnapshot Snapshot,
+  IReadOnlyList<StoredRunEvent> Events,
+  bool RequiresFullRefresh,
+  long LatestSequence);
+
+public interface IEventReplayStore
+{
+  Task AppendAsync(
+    StoredRunEvent runEvent,
+    CancellationToken cancellationToken);
+
+  Task<EventReplayResult> ReadSinceAsync(
+    string runId,
+    long afterSequence,
+    int limit,
+    CancellationToken cancellationToken);
+
+  Task CompactAsync(
+    string runId,
+    long throughSequence,
+    CancellationToken cancellationToken);
+}
+```
+
+`IEventReplayStore` 对应独立的 `RunEvents` 表，不等同于 `AuditEvents`：进度事件可以按保留策略压缩，审计事件必须长期 append-only 保存。`RunEvents` 使用 `(RunId, EventSequence)` 唯一约束；`ReadSinceAsync` 超出保留窗口时返回 `RequiresFullRefresh=true`，前端必须先使用最新 `RunSnapshot`，不能拼接不完整事件流。append 与 `Runs.LastEventSequence` 更新在同一事务内完成。
+
 ### 核心领域 DTO
 
 以下类型位于 `InvoiceFlowAI.Domain`，是 parser、候选流水线、配对、归档、审计和持久化之间的唯一业务数据契约。它们使用不可变 `record`，不引用 MailKit、PdfPig、PDFiumCore、SkiaSharp、WebView2、EF Core 或 ZeroPipeline 类型；JSON/RPC 和数据库分别使用 Contracts/Infrastructure 的映射 DTO，不能反向污染领域模型。
@@ -1214,6 +1474,7 @@ DeepSeek 视觉配置固定为：
 | `RunCheckpoints` | `RunId TEXT`、`NodeId TEXT`、`Stage TEXT`、`LastCommittedSequence INTEGER`、`InputCursorJson TEXT`、`OutputCount INTEGER`、`State TEXT`、`CheckpointRevision INTEGER`、`UpdatedAtUtc TEXT` | 复合主键 `(RunId, NodeId)`；`RunId` 外键；`(RunId, Stage, LastCommittedSequence)` 索引；cursor JSON 不得包含秘密或原始正文。 |
 | `MailboxCursors` | `AccountId TEXT`、`Mailbox TEXT`、`UidValidity INTEGER`、`LastCompletedUid INTEGER`、`CursorRevision INTEGER`、`UpdatedAtUtc TEXT` | 复合主键 `(AccountId, Mailbox)`；`UidValidity` 变化时必须重置 `LastCompletedUid`。 |
 | `AuditEvents` | `AuditEventId TEXT`、`RunId TEXT`、`EventSequence INTEGER`、`EventType TEXT`、`Stage TEXT`、`NodeId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`ReasonCode TEXT`、`PayloadJson TEXT`、`PayloadHash TEXT`、`OccurredAtUtc TEXT` | `AuditEventId` 主键；`RunId` 外键；`(RunId, EventSequence)` 唯一；`(DocumentId, ProcessingRevision, EventType)` 索引；append-only，不允许 update/delete。 |
+| `RunEvents` | `RunId TEXT`、`EventSequence INTEGER`、`EventType TEXT`、`PayloadJson TEXT`、`EmittedAtUtc TEXT`、`ExpiresAtUtc TEXT` | 复合主键 `(RunId, EventSequence)`；`RunId` 外键；`(RunId, ExpiresAtUtc)` 索引；允许按保留策略 compact，但不得改变既有 sequence。 |
 | `ManualReviewItems` | `ReviewId TEXT`、`RunId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`ReasonCode TEXT`、`State TEXT`、`CurrentRevision INTEGER`、`CurrentResultJson TEXT`、`CreatedAtUtc TEXT`、`ResolvedAtUtc TEXT`、`ResolvedBy TEXT` | processing 复合外键；`ReviewId` 主键；同一 processing revision 只能有一个 open review 的 partial unique index；`CurrentRevision` 用于 optimistic concurrency。 |
 
 `Runs`、`Documents` 和 `DocumentProcessing` 使用不同层次的身份：`DocumentId` 表示跨运行稳定来源身份，`ProcessingRevision` 表示一次处理尝试/结果版本，`RunId` 表示本次运行。所有写入文档处理结果的入口必须使用 `(DocumentId, ProcessingRevision)` 做 upsert；重复投递只能返回已提交结果，不能新增第二份发票、归档或审计结果。新的运行创建新的 revision，人工修正也创建新的 revision 并保留原 revision。
