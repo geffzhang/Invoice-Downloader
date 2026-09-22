@@ -1276,14 +1276,93 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 `MailKit` 只位于 `InvoiceFlowAI.Infrastructure.Mail`，应用层依赖 `IMailboxScanner`，不直接引用 MailKit 类型。适配器负责：
 
 - 使用 IMAPS/TLS 连接 QQ、163 等邮箱；
-- 按日期范围和发件人/主题规则筛选邮件；
-- 递归读取 MIME、附件和嵌套 ZIP；
+- 按日期范围、发件人和主题规则筛选邮件；
+- 递归读取 MIME、附件和受限深度的嵌套 ZIP；
 - 将附件转换为 `DocumentCandidate`，不把 MimeKit 对象泄漏到领域层；
 - 支持 `CancellationToken`、连接超时、断线重连和单封邮件失败隔离；
 - 对邮件 UID、附件哈希和 Message-ID 去重，避免重复下载；
 - 不记录授权码、邮件正文、完整附件 URL 或完整邮件头。
 
-IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务器，覆盖 TLS 失败、认证失败、分页、重复邮件、嵌套附件、损坏 MIME、断线重连和取消。
+#### 账户、扫描请求和游标
+
+```csharp
+public sealed record MailboxAccount(
+  string AccountId,
+  string EmailAddress,
+  string ImapHost,
+  int ImapPort = 993,
+  bool UseTls = true,
+  string CredentialName = "mail.imap.auth-code",
+  string DisplayName = "");
+
+public sealed record MailboxFilterRules(
+  IReadOnlySet<string>? AllowedSenderAddresses = null,
+  IReadOnlySet<string>? AllowedSenderDomains = null,
+  IReadOnlySet<string>? BlockedSenderDomains = null,
+  IReadOnlyList<string>? SubjectKeywords = null,
+  bool CaseInsensitive = true);
+
+public sealed record AttachmentFilterOptions(
+  IReadOnlySet<string> AllowedExtensions,
+  long MaxAttachmentBytes = 5 * 1024 * 1024,
+  int MaxZipDepth = 3,
+  int MaxZipMembersPerArchive = 256,
+  long MaxExpandedBytesPerArchive = 50 * 1024 * 1024,
+  long MaxExpandedBytesPerMessage = 100 * 1024 * 1024,
+  bool KeepFilteredOuterArchive = true);
+
+public sealed record MailboxScanCursor(
+  string AccountId,
+  string Mailbox,
+  uint UidValidity,
+  uint LastCompletedUid,
+  DateTimeOffset UpdatedAtUtc);
+
+public sealed record MailboxScanRequest(
+  MailboxAccount Account,
+  DateOnly Since,
+  DateOnly? BeforeExclusive,
+  string Mailbox,
+  string BusinessTimeZoneId,
+  MailboxFilterRules Rules,
+  AttachmentFilterOptions Attachments,
+  MailboxScanCursor? Cursor = null,
+  int HeaderBatchSize = 200,
+  int MessageBatchSize = 25,
+  int MaxAttempts = 2);
+
+public sealed record MailboxScanBatch(
+  MailboxMessageBatch Messages,
+  MailboxScanCursor Cursor,
+  IReadOnlyList<string> UnresolvedUidHashes,
+  bool IsFinalBatch);
+
+public interface IMailboxScanner
+{
+  IAsyncEnumerable<MailboxScanBatch> ScanAsync(
+    MailboxScanRequest request,
+    CancellationToken cancellationToken);
+}
+```
+
+默认 `AllowedExtensions` 为 `.pdf`、`.ofd`、`.xml`、`.jpg`、`.jpeg`、`.png` 和 `.zip`，比较时统一转为小写并以文件魔数复核，不能只信任扩展名。单个直接附件或 ZIP 成员超过 5 MiB 时不解包为正常 candidate；在 `KeepFilteredOuterArchive=true` 时保留外层文件并产生 `ATTACHMENT_OVER_SIZE` 或 `ZIP_MEMBER_OVER_SIZE` 的候选结果。ZIP 超过深度、成员数或展开总量限制时停止继续展开，保留外层容器并产生 `ZIP_LIMIT_EXCEEDED`，禁止 Zip Slip、绝对路径、符号链接和重复展开。
+
+日期语义与 Python 保持一致：`Since` 包含，`BeforeExclusive` 不包含；邮件 `Date` 头优先，缺失或非法时使用 IMAP `INTERNALDATE`；先转换到 `BusinessTimeZoneId`，首版固定为 `Asia/Shanghai`，再比较本地日期。`BeforeExclusive` 必须晚于 `Since`。日期过滤不能使用客户端机器的本地时区。
+
+扫描先以 UID 搜索建立稳定范围，再按 `HeaderBatchSize` 读取日期/内部日期，按 `MessageBatchSize` 拉取 RFC822 内容。只有一个 message batch 成功完成并将 `LastCompletedUid` 持久化后，游标才能前进。`UIDVALIDITY` 变化时旧游标失效，必须从新的 mailbox 范围重新扫描，不能继续使用旧 UID。未完成 UID 使用短 SHA-256 诊断指纹记录；重试耗尽后无法建立完整扫描范围时，扫描返回运行级 `MAILBOX_INPUT_UNRESOLVED`，已读取的 candidate 只作为诊断保留。
+
+#### 认证和失败边界
+
+邮箱认证属于运行级边界：
+
+- 凭据缺失、DPAPI 解密失败、IMAP `AUTHENTICATE` 返回 401/登录失败、TLS 证书验证失败或 `SELECT` 目标 mailbox 失败，产生 `MAILBOX_CREDENTIALS_INVALID`、`MAILBOX_TLS_FAILED` 或 `MAILBOX_SELECT_FAILED`，运行终态为 `Failed`，不能按候选级失败继续处理；
+- DNS、连接断开、临时服务器错误和超时可以按 `MaxAttempts` 重试，耗尽后产生 `MAILBOX_CONNECTION_FAILED`，仍属于运行级 `Failed`；
+- 单封邮件 MIME 损坏、单个附件解压失败或单个附件超过限制，不影响其他邮件，转换为该 candidate 的 `CandidateProcessResult`；
+- `CancellationToken` 取消只停止扫描和后续投递，已完成 batch 的游标保持有效，运行按统一取消规则结束。
+
+DeepSeek 认证边界不同：DeepSeek API Key 是整个运行共享的基础设施凭据，HTTP 401/403、API Key 缺失或 `AI_AUTHENTICATION_FAILED` 应立即停止新的 AI 请求并作为运行级 `Failed`；不能把同一失效 Key 重试成多个候选级 `AuthFailed`。DeepSeek 超时、连接失败、限流、非法 JSON 和图片过大仍按 adapter 规则产生候选级结果或可重试结果；只有服务策略明确判定为全局额度/服务不可用时，才升级为运行级失败。邮箱认证和 DeepSeek 认证都不得把原始响应、授权值或完整请求写入日志/RPC。
+
+IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务器，覆盖 TLS 失败、认证失败、分页、重复邮件、嵌套附件、损坏 MIME、断线重连和取消；还必须验证 `UIDVALIDITY` 变化会重置游标、`LastCompletedUid` 只在完整 batch 提交后推进、`Asia/Shanghai` 日期边界的包含/排除规则、发件人/主题筛选、5 MiB 附件限制、ZIP 深度/成员数/展开字节数限制，以及未完成 UID 导致运行级 `MAILBOX_INPUT_UNRESOLVED`。DeepSeek 测试必须验证 401/403 直接升级运行级失败且不会为每个候选重复重试。
 
 ## 10. 错误模型
 
@@ -1301,7 +1380,7 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 }
 ```
 
-错误类别包括输入校验、单文件失败、可重试的网络/AI 失败、认证、持久化、磁盘、WebView2 和系统错误。面向用户的消息安全且可本地化；诊断信息只保留脱敏后的技术细节。
+错误类别包括输入校验、单文件失败、可重试的网络/AI 失败、邮箱认证、AI 认证、持久化、磁盘、WebView2 和系统错误。邮箱扫描至少使用 `MAILBOX_CREDENTIALS_INVALID`、`MAILBOX_TLS_FAILED`、`MAILBOX_SELECT_FAILED`、`MAILBOX_CONNECTION_FAILED`、`MAILBOX_INPUT_UNRESOLVED`、`ATTACHMENT_OVER_SIZE`、`ZIP_LIMIT_EXCEEDED`；AI 认证使用 `AI_AUTHENTICATION_FAILED`。面向用户的消息安全且可本地化；诊断信息只保留脱敏后的技术细节。
 
 ## 11. 测试与验收
 
