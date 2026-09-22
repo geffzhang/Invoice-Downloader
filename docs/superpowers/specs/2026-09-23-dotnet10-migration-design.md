@@ -117,6 +117,7 @@ WebView2 使用指定的预览版本：
 
 ```xml
 <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4255-prerelease" />
+<PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.250916001" />
 ```
 
 DeepSeek 的统一 AI 适配器固定使用：
@@ -1835,6 +1836,54 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 - 持久化：EF Core 10 + `Microsoft.EntityFrameworkCore.Sqlite`；
 - 日志：Serilog 结构化日志，通过 `Microsoft.Extensions.Logging` 注入；
 - AI：由 `Microsoft.Extensions.AI.OpenAI` 提供 `IChatClient`，接入 DeepSeek 的 OpenAI 兼容端点。
+
+### Windows 11 x64 发布工程
+
+首版采用 Windows App SDK `1.8.250916001`、`net10.0-windows`、`win-x64`、self-contained、unpackaged 应用。应用本身不使用 MSIX；安装、升级和卸载由同一 ProductCode 的 WiX MSI 完成。发布产物分为签名安装器和可诊断的安装目录 manifest，不允许从开发机全局路径加载 native DLL、浏览器或 OCR 模型。
+
+发布目录固定为：
+
+```text
+InvoiceFlowAI/
+  InvoiceFlowAI.exe
+  InvoiceFlowAI.App.dll
+  runtimes/win-x64/native/pdfium/pdfium.dll
+  runtimes/win-x64/native/skia/libSkiaSharp.dll
+  webview2/FixedVersionRuntime/       # 与 1.0.4255-prerelease 匹配
+  models/paddle/chinese-v6-tiny/
+    model-manifest.json
+    *.pdmodel
+    *.pdiparams
+  browsers/playwright/chromium/
+    browser-manifest.json
+    chrome.exe
+    ...
+  web/index.html
+  licenses/THIRD-PARTY-NOTICES.txt
+  release-manifest.json
+```
+
+`release-manifest.json` 固定应用版本、Git revision、RID、每个 native 文件的 SHA-256、WebView2 Fixed Runtime 版本、OCR 模型版本/哈希、Playwright Chromium revision 和许可证清单版本。启动诊断只记录 manifest 校验结果，不记录密钥或发票内容。
+
+资源加载规则：
+
+- PDFium 使用显式绝对发布目录加载，调用前验证 DLL 哈希和架构；禁止依赖 PATH 或系统安装的 PDFium；
+- SkiaSharp native asset 从 `runtimes/win-x64/native/skia` 加载，验证 x64、版本和 `SKBitmap` stride/通道后才交给 OCR；
+- OCR `ChineseV6Tiny` 模型只从 `models/paddle/chinese-v6-tiny` 加载，manifest 或 SHA-256 不匹配时返回 `OCR_MODEL_LOAD_FAILED`；
+- Playwright 不在用户机器上执行 `playwright install`，构建阶段下载并固定 Chromium revision，运行时使用 manifest 中的 `ExecutablePath`；
+- WebView2 使用 Fixed Version Runtime，通过 `CoreWebView2Environment.CreateAsync` 指定 `webview2/FixedVersionRuntime`；不回退到 Evergreen，避免版本漂移；
+- 所有临时文件、SQLite、日志、secret 和用户输出目录仍位于 `%LocalAppData%/InvoiceFlowAI` 或用户显式选择的输出目录，不写入安装目录。
+
+签名和安装规则：
+
+- `InvoiceFlowAI.exe`、所有自有 DLL、WiX MSI 和 bootstrapper 使用 SHA-256 Authenticode 签名，并使用 RFC 3161 时间戳；
+- 发布证书只在 CI/发布机使用，证书私钥、thumbprint 和签名密码不进入仓库；开发构建允许未签名，但生产 manifest 必须标记签名状态；
+- WiX MSI 使用稳定 ProductCode，升级通过递增 ProductVersion/PackageCode 原地升级，不允许同一版本并行安装；
+- 升级前保留数据库、secrets、日志和用户输出，升级失败自动回滚应用文件但不覆盖用户数据；
+- 卸载移除程序文件、快捷方式和 Fixed Runtime，但默认保留 `%LocalAppData%/InvoiceFlowAI` 数据；提供显式“同时删除用户数据”选项并二次确认；
+- 安装器必须校验 Windows 11 x64、VC++/Windows App SDK 运行时依赖、Fixed Runtime 和发布 manifest，失败时不注册半成品安装。
+
+第三方许可证清单至少包含：Windows App SDK、WebView2 Fixed Runtime、ZeroPipeline、MailKit/MimeKit、EF Core、PDFiumCore/PDFium、PdfPig、SkiaSharp、SimdPaddleOCR 及 `ChineseV6Tiny` 模型、Microsoft.Playwright/Chromium、ClosedXML 和所有传递依赖。清单由 lock file、native manifest 和模型 manifest 生成，并随安装器发布。
 
 ### PDF 渲染适配边界
 
