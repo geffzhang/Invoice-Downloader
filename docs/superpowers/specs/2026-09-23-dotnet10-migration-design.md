@@ -397,6 +397,97 @@ public sealed record ExtractionBatch(
 
 `Messages`、`Candidates`、`Results` 等批次 DTO 只用于减少端口连接数量，不改变候选级语义；批次内部仍按 `DocumentCandidate.Sequence` 排序，且不得无限扩大。`CandidateBatch.TerminalResults` 用于恢复阶段提前失败的 candidate；后续节点必须将这些结果转发到唯一的结果端口，不得另建旁路失败端口。默认批次大小、端口容量和节点并发由 `PipelineOptions` 固定配置，并在启动日志中记录。
 
+### PipelineOptions 与流控默认值
+
+首版不使用 ZeroPipeline 默认的所有端口容量，而是在应用层统一创建 `PipelineOptions`，并把容量和并发限制作为每次运行的不可变配置快照：
+
+```csharp
+public sealed record PipelineOptions(
+  int ControlPortCapacity = 1,
+  int MailboxBatchPortCapacity = 4,
+  int CandidateBatchPortCapacity = 8,
+  int ExtractionBatchPortCapacity = 4,
+  int ResultBatchPortCapacity = 8,
+  int EventPortCapacity = 64,
+  int HeaderBatchSize = 200,
+  int MessageBatchSize = 25,
+  int CandidateBatchSize = 16,
+  int MaxInFlightCandidates = 32,
+  int MailboxScanConcurrency = 1,
+  int OcrPageConcurrency = 2,
+  int OcrLineWorkerCount = 2,
+  int AiRequestConcurrency = 2,
+  int BrowserConcurrency = 1,
+  int ArchiveConcurrency = 2,
+  int DatabaseWriterConcurrency = 1,
+  int MaxReorderBufferItems = 32,
+  int MaxRetryAttempts = 2,
+  int MaxEventReplayItems = 1000,
+  TimeSpan NodeExecutionTimeout,
+  TimeSpan RetryGapTimeout)
+{
+  public static PipelineOptions Default => new(
+    NodeExecutionTimeout: TimeSpan.FromMinutes(5),
+    RetryGapTimeout: TimeSpan.FromMinutes(10));
+}
+```
+
+实现必须从 `PipelineOptions.Default` 或显式配置工厂创建实例，不能直接传入 `TimeSpan.Zero`；`TimeSpan.Zero` 不表示无限等待，而是非法配置。所有业务输入端口使用 `BackpressurePolicy.Block`，禁止 `DropOldest` 和 `DropNewest`。控制 packet、EOF 和终态事件使用容量 1 或 64；邮箱 batch 使用容量 4；候选 batch 使用容量 8；OCR/AI 载荷使用容量 4；结果和归档 batch 使用容量 8。容量以 batch/packet 数计算，图像字节数另由 `MaxInFlightCandidates`、页面尺寸和 DeepSeek 请求体上限约束。
+
+并发上限是硬上限而不是建议值：每个运行只能有 1 个 IMAP 扫描 producer；OCR 最多同时处理 2 个页面，单个 `PaddleOcrAll` 实例内最多 2 个 line worker；DeepSeek 最多 2 个 in-flight request；Playwright 浏览器恢复全局最多 1 个活动 context；归档最多 2 个文件操作；SQLite writer 固定为 1。单个 run 的 `MaxInFlightCandidates` 为 32，多个 run 不共享带状态的节点或这些并发槽。配置文件可以降低上限，但不能超过首版硬上限。
+
+### SequenceReorderBuffer 的位置和语义
+
+`SequenceReorderBuffer<T>` 位于 `InvoiceFlowAI.Application.Pipeline.Ordering`，是节点内部有限并发 worker 与 ZeroPipeline `OutputPort<T>` 之间的应用层组件。它不放在 Domain，不修改 ZeroPipeline.Core，也不把排序逻辑放进 `PipelineContext`：
+
+```csharp
+public sealed class SequenceReorderBuffer<T>
+{
+  public SequenceReorderBuffer(long firstSequence, int capacity);
+
+  public IReadOnlyList<DataPacket<T>> Add(DataPacket<T> packet);
+
+  public IReadOnlyList<DataPacket<T>> CompleteEndOfStream(
+    DataPacket<T> endOfStream);
+}
+```
+
+规则如下：
+
+- 按 `DataPacket.SequenceNumber` 保存乱序 packet，只有从 `nextExpectedSequence` 连续可用时才释放到输出端口；
+- 小于已释放 sequence 的重复 packet 被视为幂等重放并丢弃，payload 不重复写库；
+- 超过 `MaxReorderBufferItems` 时停止向 worker 投递并依靠输入端口背压；
+- 收到 EOF 只记录结束 sequence，不立即传播；只有所有低于 EOF 的 sequence 已释放且 retry barrier 已清空时才传播 EOF；
+- 出现无法补齐的 sequence 时等待 `RetryGapTimeout`，之后抛出 `PIPELINE_SEQUENCE_GAP` 节点级故障，不能静默跳过；
+- `Add` 和 `CompleteEndOfStream` 只在单个节点的应用层协调器内调用，不跨线程共享同一个 ZeroPipeline port。
+
+### Retry 重新投递与 EOF
+
+候选失败后，`IRetryCoordinator` 在结果进入最终结果端口前决定是否重试。可重试 candidate 会保留原始 `DocumentId`、`Sequence` 和 `CorrelationId`，增加 `Attempt` 与 `ProcessingRevision`，重新进入对应阶段的 retry input；不创建新的业务 sequence。`SequenceReorderBuffer` 将该 sequence 标记为 reserved，后续已完成 sequence 可以暂存在 buffer，但不能越过它向下游释放。
+
+retry 发生时遵循以下顺序：
+
+1. 当前尝试的临时输出和未提交事务回滚；
+2. `IRetryCoordinator.Decide` 生成退避和下一次 attempt；
+3. candidate 进入有界 retry queue，队列满时通过上游背压；
+4. 成功或最终失败的唯一 `CandidateProcessResult` 替换 reserved sequence；
+5. buffer 连续释放结果，随后才允许下游消费。
+
+源节点收到 EOF 不代表整条链路可以立即结束。每个有 retry 能力的节点维护 `RetryBarrier`：`sourceEofReceived && retryQueueEmpty && activeAttempts==0 && reorderBufferEmpty` 全部成立时，才向下游发送 EOF。取消时不等待新的 retry，直接取消未开始的 retry，并为 reserved sequence 产生 `Cancelled` 结果后再关闭输出。retry 超时或持久化失败升级为节点/运行级失败，不发送伪造的 EOF。
+
+### 多输入汇聚与 EOF
+
+所有需要多个上游的汇聚节点使用 `AllInputsCompletionPolicy`，为每个已连接输入维护独立状态：`Open`、`EndOfStream`、`Faulted`、`Cancelled`。节点必须等待所有输入都达到 `EndOfStream` 后，才能产生最终汇总并向下游传播 EOF；一个输入没有数据不等于 EOF。
+
+汇聚规则固定为：
+
+- 业务 packet 按 `(RunId, Sequence, CorrelationId)` 归并；每个 required input 对同一 key 必须提供 packet 或显式 `NoValue` marker，不能用超时猜测缺失；
+- 任一输入发生 `RunFailure` 或节点异常，立即停止汇聚并使运行失败；候选级 `CandidateProcessResult` 作为普通值继续转发；
+- 重复 EOF 幂等忽略；EOF 到达后该输入不得再发送业务 packet，违反则产生 `PIPELINE_DATA_AFTER_EOF`；
+- 所有输入 EOF 且 retry barrier 清空后，汇聚节点发送一次最终 `PairingBatch`、`ArchiveBatch` 或 `RunSummary`，再向每个输出端口发送一次 EOF；
+- 取消时等待已取出的 packet 完成安全收尾，为未配对 key 生成 `Cancelled`/人工复核结果后关闭；
+- `RunCoordinator` 以所有 required output 汇聚节点完成为最终屏障，不以某一个上游 EOF 或 `PipelineExecutor` cycle 结束作为运行完成条件。
+
 ### 失败语义与异常边界
 
 ZeroPipeline 的 `PipelineNode.ExecuteAsync` 在异常后会把节点置为 `Faulted`，`PipelineExecutor` 也会触发 `NodeFaulted` 并抛出异常。因此应用节点遵守以下边界：
