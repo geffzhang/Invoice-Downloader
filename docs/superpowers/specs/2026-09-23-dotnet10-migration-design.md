@@ -108,6 +108,7 @@ PDF 页面渲染固定使用 PDFiumCore：
 ```xml
 <PackageReference Include="PDFiumCore" Version="155.0.8057" />
 <PackageReference Include="PdfPig" Version="0.1.17-alpha-202609192350-df33d" />
+<PackageReference Include="SkiaSharp" Version="4.154.0-preview.1.26454.9" />
 ```
 
 WebView2 使用指定的预览版本：
@@ -406,7 +407,7 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 
 ### PDF 渲染适配边界
 
-`PDFiumCore` 只位于 `InvoiceFlowAI.Infrastructure.Documents`，通过内部 `IPdfPageRenderer` 接口提供页面渲染能力。应用层和领域层不直接引用 PDFium 类型。
+`PDFiumCore` 只位于 `InvoiceFlowAI.Infrastructure.Documents`，通过内部 `IPdfPageRenderer` 接口提供页面渲染能力。`SkiaSharp` 负责图片解码、颜色空间/像素格式转换和向 `SimdPaddleOCR` 提供连续像素缓冲。应用层和领域层不直接引用 PDFium 或 SkiaSharp 类型。
 
 渲染器必须：
 
@@ -417,6 +418,8 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 - 对损坏 PDF、超大页面、渲染超时和原生库加载失败返回稳定错误码；
 - 使用内存流或受控临时文件将渲染结果交给 `IInvoiceOcr`，任务完成后清理临时资源；
 - 在发布验收中确认 PDFiumCore 的许可证、原生组件再分发条款和第三方声明。
+
+`SkiaSharp 4.154.0-preview.1.26454.9` 的 Windows x64 native assets 必须随发布包正确加载；需要验证 PDFium 输出到 SkiaSharp 位图的像素格式、stride、颜色通道顺序和资源释放，避免将未释放的 `SKBitmap` 或非连续缓冲传入 OCR。
 
 文本型 PDF 仍先由 PdfPig 处理；只有文本缺失、文本质量不足或页面需要视觉识别时才调用 PDFium 渲染，避免不必要的 CPU 和内存开销。由于当前 PdfPig 版本为 alpha 预览包，必须在依赖锁定文件和发布构建中固定精确版本，并使用代表性中文发票 PDF 样本验证文本提取结果。
 
@@ -486,6 +489,7 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 - 测试 SimdPaddleOCR 对小字体、旋转、低分辨率和扫描发票的识别效果；
 - 验证 PDF/OFD 渲染质量是否满足 OCR 要求；
 - 验证 `PDFiumCore` `155.0.8057` 在自包含 `win-x64` 发布包中的原生 DLL 加载、版本诊断和许可证声明；
+- 验证 `SkiaSharp` `4.154.0-preview.1.26454.9` 的 native assets、像素格式、stride 和 OCR 资源释放；
 - 验证 `PdfPig` `0.1.17-alpha-202609192350-df33d` 的中文发票文本提取、alpha 包还原和发布构建可重复性；
 - 使用 `original_invoice.xml` 和 `Tag.xml`/`CustomTag.xml` 两类样本验证 OFD 解析；
 - 确认 Playwright 供应商流程和打包后的浏览器行为；
