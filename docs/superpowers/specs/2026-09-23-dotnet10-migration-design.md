@@ -239,33 +239,105 @@ ZeroPipeline 的 DAG 调度负责节点依赖、队列和执行顺序；业务�
 
 ## 6. 文档处理与 OFD 解析
 
-文档层提供独立接口：
+文档层参考当前仓库与 `E:/GitHub/qingpiao/src/QingPiao/Parsers` 的实现，采用“统一入口 + 格式专用 parser + 领域归一化”的结构。QingPiao 的 `Invoice`、`InvoiceItem`、`ParseResult` 作为 C# 迁移的直接行为参考；当前 Python 的 `DocumentIdentity`、`InvoiceRecord`、金额/日期归一化和文档类型标记作为领域层约束参考。
+
+### 统一接口
 
 ```csharp
 public interface IInvoiceParser
 {
+    bool CanParse(DocumentSource source);
+
     Task<IReadOnlyList<InvoiceParseResult>> ParseAsync(
         DocumentSource source,
+        ParserContext context,
         CancellationToken cancellationToken);
 }
 ```
 
-PDF 优先使用文本提取；对于纯图片 PDF，则渲染页面后进入 OCR。XML 使用安全 XML 读取器，并将支持的发票 XML 结构映射为领域对象。
+实现由 `InvoiceParserDispatcher` 按文件扩展名、MIME、文件魔数和文档来源选择：
 
-### OFD 解析要求
+```text
+InvoiceParserDispatcher
+  -> XmlInvoiceParser
+  -> OfdInvoiceParser
+  -> PdfInvoiceParser
+  -> ManualReviewResult
+```
 
-OFD 必须保留专用的发票结构解析器，不能只依赖通用文本抽取。
+`InvoiceParseResult` 同时保留 QingPiao 风格的成功/人工处理结果和当前 Python 的稳定诊断信息：
 
-实现参考 `E:/GitHub/qingpiao/src/QingPiao/Parsers/OfdInvoiceParser.cs` 的行为，但不把该项目作为运行时依赖：
+```csharp
+public sealed record InvoiceParseResult(
+    bool Succeeded,
+    InvoiceDocument? Invoice,
+    string DocumentId,
+    string SourceFileName,
+    string ParserName,
+    string? ReasonCode,
+    string? ReasonMessage,
+    bool Retryable);
+```
 
-1. 将 OFD 作为受限 ZIP 包打开；
-2. 优先解析 `Doc_0/Attachs/original_invoice.xml`，用于纸电票/电子发票结构；
-3. 若不存在，则检查 `Doc_0/Tags/Tag.xml` 和 `Doc_0/Tags/CustomTag.xml`；
-4. 加载 `Doc_0/Pages/Page_0/Content.xml`，建立 `Object ID -> TextObject` 映射以解析 `ObjectRef`；
-5. 提取发票号码、开票日期、购买方、销售方、金额、税额和明细；
-6. 发票数据缺失或不完整时返回人工复核结果，不伪造字段。
+`InvoiceDocument` 包含发票主数据、`InvoiceItem` 明细、`DocumentIdentity`、来源类型、归一化金额/日期、文档类型、置信度和审计元数据。解析器不能直接写数据库、归档文件或 WebView2 事件。
 
-解析器必须禁用 DTD 和外部实体，拒绝 ZIP 路径穿越，限制条目数量和解压总大小，并兼容参考实现覆盖的 XML 命名空间差异。测试必须覆盖三种 XML 路径、数据缺失、XML 损坏、ZIP 损坏、超大压缩包和发票号码为空等情况。
+### XML 实现
+
+`XmlInvoiceParser` 对应 QingPiao 的 `XmlInvoiceParser.Parse`，但改为异步接口和安全 XML 读取器：
+
+- 先识别数电票 `Header`/`EInvoiceData` 结构；
+- 再识别传统 `InvoiceInfo`、`BuyerInfo`、`SellerInfo` 结构；
+- 解析发票号码、日期、购买方、销售方、金额和税额；
+- 日期统一进入当前 Python 的本地业务日期归一化逻辑；
+- 金额进入 Decimal 归一化和税额/价税合计校验；
+- 发票号码缺失返回 `XML_INVOICE_NUMBER_NOT_FOUND`，不抛出批次级异常；
+- XML DTD、外部实体、深度和文本长度受限。
+
+XML 是最确定的路径，成功后不再调用 OCR 或 DeepSeek，除非本地校验发现关键字段冲突且策略明确允许复核。
+
+### OFD 实现
+
+`OfdInvoiceParser` 对应 QingPiao 的 `OfdInvoiceParser.ParseAll`，保留以下顺序：
+
+1. `Doc_0/Attachs/original_invoice.xml`：纸电票专用 XML；
+2. `Doc_0/Tags/Tag.xml` 或 `Doc_0/Tags/CustomTag.xml`：数电票标签；
+3. `Doc_0/Pages/Page_*/Content.xml`：建立 `TextObject ID -> TextCode` 映射并解析 `ObjectRef`；
+4. 结构化 XML 无法得到有效发票号码时，返回 `OFD_INVOICE_XML_NOT_FOUND`，再由上层策略决定是否渲染页面进入 OCR/DeepSeek。
+
+OFD parser 只负责 ZIP/XML 结构和发票字段，不负责页面渲染。多页遍历不能只固定 `Page_0`；需要遍历所有 `Page_*`，并对同一 Object ID 的文本定义稳定合并规则。`original_invoice.xml` 与 Tag/Content 两条路径分别测试。
+
+### PDF 实现
+
+`PdfInvoiceParser` 合并 QingPiao 的 `PdfInvoiceParser` 与当前 Python `invoice_extractor.py`/`pdf_converter.py` 的行为，但拆成多个内部策略：
+
+- `PdfTextExtractor`：使用 PdfPig alpha 版本读取每页文本；
+- `PdfInvoiceSegmenter`：按发票标题和页面边界切分多页、多张发票；
+- `PdfFieldParser`：复用清理文本、号码、日期、公司、金额和明细的确定性规则；
+- `IPdfPageRenderer`：使用 PDFiumCore 渲染扫描页；
+- `IOcrFallback`：使用 SkiaSharp 转换像素，再交给 SimdPaddleOCR；
+- `IInvoiceFieldExtractor`：低置信度或字段缺失时调用 DeepSeek Flash 多模态提取；
+- `InvoiceNormalizer`：映射为不可变的 `InvoiceDocument`/`InvoiceRecord` 领域对象。
+
+PDF 的处理顺序为：
+
+```text
+PdfPig 文本提取
+  -> 文本清理与多发票切分
+  -> 确定性字段解析与本地校验
+  -> 成功：输出结构化结果
+  -> 文本为空/质量不足：PDFium 渲染
+  -> SimdPaddleOCR
+  -> DeepSeek Flash 文本或多模态提取
+  -> 本地校验，不通过则人工复核
+```
+
+当前 Python 中的火车票、行程单、国外发票和供应商特例不能被硬编码到通用 PDF parser；应实现为独立的 `IDocumentSpecialCaseParser`，在 `PdfInvoiceParser` 的确定性路径之后、通用 AI fallback 之前运行。其确定性字段修正必须优先于模型输出。
+
+### 归一化与编排边界
+
+三类 parser 只返回 `InvoiceParseResult`。`InvoiceNormalizer` 负责金额、日期、文档类型、身份和 flags 的统一表示；`InvoiceAcceptanceService` 负责关键字段校验、税额计算、查重键准备和人工复核原因；ZeroPipeline 节点负责批量调度、背压、重试、审计和结果汇总。
+
+这样既保留 QingPiao 的 parser 分层，也吸收当前 Python 的候选身份、低置信度 fallback、供应商特例和真值审计约束。
 
 ## 7. OCR 与 AI 提取
 
@@ -459,11 +531,11 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 
 ### 单元测试
 
-覆盖领域校验、金额和税额计算、规则、配对、查重、归档命名、路径安全、OFD XML 变体、OCR 归一化、DeepSeek 响应校验、DPAPI 密钥存储、Serilog 日志字段和报表映射。
+覆盖领域校验、金额和税额计算、规则、配对、查重、归档命名、路径安全、三类 parser 契约、OFD XML 变体、OCR 归一化、DeepSeek 响应校验、DPAPI 密钥存储、Serilog 日志字段和报表映射。
 
 ### 集成测试
 
-验证 WebView2 RPC 分发、完整本地文件链路、真实 OFD 样本、假的 `IChatClient` 响应、重试/取消、EF Core SQLite 持久化、迁移、事务、并发写入、审计事件和 Excel 生成。
+验证 WebView2 RPC 分发、完整本地文件链路、真实 OFD 样本、假的 `IChatClient` 响应、重试/取消、EF Core SQLite 持久化、迁移、事务、并发写入、审计事件和 Excel 生成。三类 parser 还必须用当前 Python 样本和 QingPiao 样本做行为对照：字段等价、人工复核原因稳定、PDF 多发票切分一致、XML/OFD 优先级一致。
 
 ### Windows 端到端测试
 
