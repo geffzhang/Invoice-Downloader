@@ -479,6 +479,187 @@ public sealed record RunFailure(
 
 `RunCoordinator` 负责将 ZeroPipeline 节点事件映射到运行状态：`NodeExecuting` 更新阶段开始，`NodeCompleted` 更新阶段耗时，`NodeFaulted` 只处理节点/运行级异常；候选级失败只能由结果端口汇总。这样可以保留 Python `ExtractionOutcome` 的候选级隔离、`RunLifecycle` 的运行级失败和取消语义，同时适配 ZeroPipeline 的异常模型。
 
+### 运行终态优先级
+
+运行阶段状态与运行终态分开保存。阶段可以是 `Scanning`、`Extracting`、`Archiving` 等；终态只在最终汇总屏障后确定，并且只写入一次：
+
+```csharp
+public enum RunTerminalStatus
+{
+  Completed,
+  PartialSuccess,
+  NeedsManualReview,
+  Cancelled,
+  Failed
+}
+```
+
+终态判定按以下优先级执行：
+
+1. **`Failed`**：存在运行级 `RunFailure`，包括凭据不可用、数据库/审计提交失败、输出目录不可写、ZeroPipeline 图校验失败、报表生成失败和不可恢复的节点故障。运行级失败优先于候选统计。
+2. **`Cancelled`**：没有更早记录的运行级失败，且用户取消已被接受。已完成的候选和已提交的归档不回滚，未处理候选产生 `Cancelled` 终态。
+3. **`NeedsManualReview`**：没有运行级失败或取消，但至少一个候选为 `ManualReview`，或所有候选均未得到可用发票结果而需要人工判断。
+4. **`PartialSuccess`**：没有运行级失败、取消或人工复核，但存在 `Unresolved`、`Timeout`、`QuotaExhausted` 或候选级 `AuthFailed`，表示批次完成但存在候选级失败。至少一个候选成功不是必要条件；零成功的批次也使用此状态，并通过 `NO_RESOLVED_CANDIDATES` 原因码说明。
+5. **`Completed`**：没有以上条件。包括所有候选为 `Resolved`、`Duplicate` 或 `Retained`，以及扫描完成但没有候选的 `NO_CANDIDATES` 运行。
+
+取消与失败的竞争按首次记录的原因决定：取消信号先被 `RunCoordinator` 接受且之后没有运行级失败时为 `Cancelled`；运行级失败先记录时为 `Failed`。报表、数据库提交和必需审计提交失败属于 `Failed`；邮箱断开、临时文件清理等非关键收尾失败只写入 `finalizerFailures`，不覆盖已经确定的终态。`RunSummary` 必须同时包含终态、终态原因、各 `CandidateStatus` 数量、运行级失败和收尾失败摘要。
+
+### 业务服务接口
+
+以下接口位于 `InvoiceFlowAI.Application`，实现位于 `InvoiceFlowAI.Infrastructure`，都只返回领域 DTO 或稳定失败结果，不向调用方泄漏供应商 SDK 类型。接口实现必须支持取消、幂等键和脱敏 trace。
+
+#### 配对
+
+```csharp
+public sealed record PairingContext(
+  string RunId,
+  string ConfigurationFingerprint,
+  decimal AutoAcceptScore,
+  decimal ManualReviewScore);
+
+public interface IPairingService
+{
+  Task<PairingBatch> PairAsync(
+    IReadOnlyList<CandidateProcessResult> results,
+    PairingContext context,
+    CancellationToken cancellationToken);
+}
+```
+
+配对只消费 `Resolved` 的 `InvoiceDocument` 和显式的 companion candidate；`Duplicate`、`Retained`、`Cancelled`、`Unresolved` 等结果原样进入 `PairingBatch.Results`。评分达到 `AutoAcceptScore` 自动配对，处于两个阈值之间进入 `ManualReview`，低于 `ManualReviewScore` 生成 `UNPAIRED_ARTIFACT` 候选结果。配对不得修改 invoice identity 或 source sequence。
+
+#### 链接恢复
+
+```csharp
+public sealed record UrlRecoveryOptions(
+  int MaxAttempts,
+  TimeSpan RequestTimeout,
+  long MaxDownloadBytes,
+  IReadOnlySet<string> AllowedDomains,
+  bool AllowBrowserFallback);
+
+public sealed record UrlRecoveryResult(
+  DocumentCandidate Candidate,
+  bool Recovered,
+  string LocalPath = "",
+  string ContentHash = "",
+  CandidateFailure? Failure = null);
+
+public interface IUrlRecoveryService
+{
+  Task<UrlRecoveryResult> RecoverAsync(
+    DocumentCandidate candidate,
+    UrlRecoveryOptions options,
+    CancellationToken cancellationToken);
+}
+```
+
+非 URL candidate 直接返回 `Recovered=true`；URL 恢复成功必须验证域名、重定向链、响应大小、文件魔数和内容哈希。恢复失败返回 `CandidateFailure`，由 `RecoverUrlsNode` 转换为唯一结果端口中的 `CandidateProcessResult`。认证失败、限流和网络超时分别映射为稳定 reason code，不在服务内部无限重试。
+
+#### 归档
+
+```csharp
+public sealed record ArchiveOptions(
+  string OutputRoot,
+  bool OverwriteExisting,
+  bool PreserveOriginal,
+  string NamingPolicyVersion);
+
+public interface IArchiveService
+{
+  Task<ArchiveBatch> ArchiveAsync(
+    PairingBatch pairing,
+    ArchiveOptions options,
+    CancellationToken cancellationToken);
+}
+```
+
+归档使用 `DocumentId + NamingPolicyVersion` 作为幂等键；命名策略只接受已归一化领域字段，生成相对路径后再由路径安全组件解析到 `OutputRoot`。同哈希文件视为已归档，内容不同的同名文件按明确冲突策略生成新名称或返回 `ARCHIVE_NAME_CONFLICT`。单个归档失败只更新对应 `CandidateProcessResult`，数据库状态和审计事件必须在同一应用事务中提交。
+
+#### 报表
+
+```csharp
+public sealed record ReportRequest(
+  string RunId,
+  string OutputRoot,
+  string ReportName,
+  IReadOnlyList<CandidateProcessResult> Results,
+  IReadOnlyList<ArchivedArtifact> Artifacts,
+  string TemplateVersion);
+
+public sealed record ReportExportResult(
+  string ReportPath,
+  string ContentHash,
+  int InvoiceRowCount,
+  int ManualReviewRowCount,
+  string TemplateVersion);
+
+public interface IReportExporter
+{
+  Task<ReportExportResult> ExportAsync(
+    ReportRequest request,
+    CancellationToken cancellationToken);
+}
+```
+
+报表必须由统一的候选终态结果生成，至少包含汇总页、发票明细页和人工复核页；失败候选不能被静默过滤。输出路径只能由 `OutputRoot + ReportName` 经过路径安全校验得到，重复导出使用内容哈希和幂等键处理。
+
+#### 人工复核
+
+```csharp
+public enum ManualReviewDecision
+{
+  Accept,
+  Reject,
+  CorrectAndAccept,
+  RetryExtraction
+}
+
+public enum ManualReviewState
+{
+  Open,
+  Resolved,
+  Rejected
+}
+
+public sealed record ManualReviewItem(
+  string ReviewId,
+  string RunId,
+  DocumentIdentity Identity,
+  CandidateProcessResult CurrentResult,
+  string ReasonCode,
+  int Revision,
+  DateTimeOffset CreatedAtUtc,
+  DateTimeOffset? ResolvedAtUtc);
+
+public sealed record ManualReviewUpdate(
+  string ReviewId,
+  int ExpectedRevision,
+  ManualReviewDecision Decision,
+  InvoiceDocument? CorrectedInvoice = null,
+  string Comment = "");
+
+public interface IManualReviewService
+{
+  Task<IReadOnlyList<ManualReviewItem>> ListAsync(
+    string runId,
+    ManualReviewState? state,
+    int offset,
+    int limit,
+    CancellationToken cancellationToken);
+
+  Task<ManualReviewItem?> GetAsync(
+    string reviewId,
+    CancellationToken cancellationToken);
+
+  Task<CandidateProcessResult> SubmitAsync(
+    ManualReviewUpdate update,
+    CancellationToken cancellationToken);
+}
+```
+
+人工复核提交必须校验 revision，防止两个页面覆盖彼此修改；`CorrectAndAccept` 产生新的领域 revision 并保留原始 AI 结果和修正审计；`RetryExtraction` 只能重新排队允许重试的 candidate；`Reject` 进入 `Unresolved` 或业务规定的非目标状态。人工复核不会直接写文件，重新归档和报表由后续应用命令触发。
+
 ### 核心领域 DTO
 
 以下类型位于 `InvoiceFlowAI.Domain`，是 parser、候选流水线、配对、归档、审计和持久化之间的唯一业务数据契约。它们使用不可变 `record`，不引用 MailKit、PdfPig、PDFiumCore、SkiaSharp、WebView2、EF Core 或 ZeroPipeline 类型；JSON/RPC 和数据库分别使用 Contracts/Infrastructure 的映射 DTO，不能反向污染领域模型。
@@ -663,12 +844,16 @@ public sealed record ArchiveBatch(
 
 public sealed record RunSummary(
   string RunId,
+  RunTerminalStatus Status,
+  string ReasonCode,
   CandidateStatusCounts Counts,
   int ScannedMessageCount,
   int CandidateCount,
   string? ReportPath,
   bool AuditCommitted,
-  TimeSpan Duration);
+  TimeSpan Duration,
+  RunFailure? PrimaryFailure = null,
+  IReadOnlyList<RunFailure>? FinalizerFailures = null);
 
 public sealed record CandidateStatusCounts(
   int Resolved,
