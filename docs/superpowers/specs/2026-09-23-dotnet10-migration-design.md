@@ -237,6 +237,361 @@ ZeroPipeline 节点在执行开始、成功、失败、重试和取消时写入�
 
 ZeroPipeline 的 DAG 调度负责节点依赖、队列和执行顺序；业务重试、错误码、审计写入和人工复核规则仍由应用层控制，避免把业务语义隐藏在通用编排器中。
 
+### ZeroPipeline 节点输入输出契约
+
+ZeroPipeline `1.2.0` 的执行模型是：`IPipelineNode.ExecuteAsync` 每次执行一个 cycle；节点从 `InputPort<T>` 取出一个 `DataPacket<T>`，处理后通过 `OutputPort<T>` 发布；`DataPacket<T>` 携带 `SequenceNumber`、时间戳和 `IsEndOfStream`。输入端口是有界队列，首版业务端口统一使用 `BackpressurePolicy.Block`，禁止使用 `DropOldest` 或 `DropNewest` 丢失发票数据。
+
+因此，业务层不把 ZeroPipeline 的 `PipelineContext` 字典当作数据通道，也不把一个大批次藏在 context 中。`PipelineContext` 只保存本次运行的只读运行标识、配置快照、取消令牌和基础设施服务引用；候选、文档、发票和失败结果全部通过强类型端口传递。
+
+节点使用以下通用包装类型承载运行和候选关联信息：
+
+```csharp
+public sealed record PipelineItem<T>(
+  string RunId,
+  long Sequence,
+  string CorrelationId,
+  T? Value,
+  CandidateFailure? Failure = null);
+
+public sealed record RunInput(
+  string RunId,
+  DateOnly DateFrom,
+  DateOnly DateTo,
+  string SavePath,
+  string CustomRules,
+  string AccountId,
+  string Mailbox = "INBOX",
+  string RunMode = "interactive");
+
+public sealed record ValidatedRunInput(
+  RunInput Request,
+  string StagingDirectory,
+  string ConfigurationFingerprint);
+
+public sealed record MailboxMessageBatch(
+  string AccountId,
+  string Mailbox,
+  long BatchSequence,
+  IReadOnlyList<MailboxMessage> Messages,
+  bool IsFinalBatch,
+  int ScannedCount);
+
+public sealed record CandidateBatch(
+  IReadOnlyList<DocumentCandidate> Candidates,
+  int SourceMessageCount,
+  bool IsFinalBatch);
+
+public sealed record ExtractionBatch(
+  IReadOnlyList<CandidateProcessResult> Results,
+  bool IsFinalBatch);
+```
+
+`PipelineItem<T>.Sequence` 是业务顺序，必须与外层 `DataPacket<T>.SequenceNumber` 保持一致。允许节点在内部有限并发处理，但输出由 `SequenceReorderBuffer` 按 sequence 释放；下游永远收到确定顺序的结果。一个节点不能依赖执行线程顺序，也不能把 `DataPacket` 实例写入数据库。
+
+节点图的端口契约固定如下：
+
+| 节点 | 输入端口 | 输出端口 | 处理规则 |
+| --- | --- | --- | --- |
+| `ValidateRequestNode` | `Input<RunInput>` | `Valid<ValidatedRunInput>`、`Failure<RunFailure>` | 参数、路径、日期范围、凭据引用和配置指纹校验；失败是运行级结果，不启动后续节点。 |
+| `ScanMailboxNode` | `Input<ValidatedRunInput>` | `Messages<PipelineItem<MailboxMessageBatch>>`、`Failure<RunFailure>` | 按页读取 IMAP；每页一个 packet，结束时发送 EOF；单封邮件损坏转候选前置失败，不中断扫描。 |
+| `CollectCandidatesNode` | `Messages<PipelineItem<MailboxMessageBatch>>` | `Candidates<PipelineItem<CandidateBatch>>`、`Failure<RunFailure>` | 过滤发票候选、递归展开附件和嵌套 ZIP，生成不可变 candidate；保持 source message 和 candidate sequence。 |
+| `RecoverUrlsNode` | `Candidates<PipelineItem<CandidateBatch>>` | `Candidates<PipelineItem<CandidateBatch>>`、`Failures<PipelineItem<CandidateProcessResult>>` | URL 候选逐项恢复；成功候选继续下游，供应商 URL 失败按候选失败语义输出，不抛批次异常。 |
+| `ExtractDocumentsNode` | `Candidates<PipelineItem<CandidateBatch>>` | `Results<PipelineItem<ExtractionBatch>>`、`Failures<PipelineItem<CandidateProcessResult>>` | XML/OFD/PDF/OCR/DeepSeek 处理；每个 candidate 必须产生一个终态 `CandidateProcessResult`。 |
+| `PairArtifactsNode` | `Results<PipelineItem<ExtractionBatch>>` | `Pairs<PipelineItem<PairingBatch>>`、`Failures<PipelineItem<CandidateProcessResult>>` | 只消费已终态结果；配对冲突和无法配对进入人工复核，不使整次运行失败。 |
+| `ArchiveDocumentsNode` | `Pairs<PipelineItem<PairingBatch>>` | `Archived<PipelineItem<ArchiveBatch>>`、`Failures<PipelineItem<CandidateProcessResult>>` | 归档操作必须幂等；单文件路径、命名或移动失败作为候选结果保留。 |
+| `ExportReportNode` | `Archived<PipelineItem<ArchiveBatch>>` | `Completed<RunSummary>`、`Failure<RunFailure>` | 汇总所有候选终态并生成报表；报表写入、数据库提交或审计提交失败属于运行级故障。 |
+
+`Messages`、`Candidates`、`Results` 等批次 DTO 只用于减少端口连接数量，不改变候选级语义；批次内部仍按 `DocumentCandidate.Sequence` 排序，且不得无限扩大。默认批次大小、端口容量和节点并发由 `PipelineOptions` 固定配置，并在启动日志中记录。
+
+### 失败语义与异常边界
+
+ZeroPipeline 的 `PipelineNode.ExecuteAsync` 在异常后会把节点置为 `Faulted`，`PipelineExecutor` 也会触发 `NodeFaulted` 并抛出异常。因此应用节点遵守以下边界：
+
+1. **候选级失败不抛异常**：文件损坏、格式不支持、号码缺失、OCR 低质量、DeepSeek 非法 JSON、URL 恢复失败、配对冲突、归档单文件失败，都转换为 `CandidateProcessResult`，写入 `Failures` 或结果端口，并继续处理其他候选。
+2. **可重试候选失败不在节点内部无限重试**：节点根据 `RetryPolicy` 产生带 `Retryable=true` 的结果；应用层 `RetryCoordinator` 根据错误码、尝试次数和退避计划重新投递同一个 candidate，保持原 `DocumentId`、`Sequence` 和幂等键。
+3. **节点级故障才抛异常**：端口类型错误、节点配置非法、依赖初始化失败、不可恢复的内部不变量破坏、无法创建临时目录等，抛出带稳定 `ReasonCode` 的 `PipelineNodeException`，由 `RunCoordinator` 将运行置为 `Failed`。
+4. **运行级故障终止 DAG**：凭据认证失败、数据库迁移/提交失败、日志和审计存储不可用、输出根目录不可写、ZeroPipeline 图校验失败，写入 `RunFailure` 并停止新的输入；已完成的候选结果保留。
+5. **取消不是失败**：收到 `CancellationToken` 后，节点停止读取新 packet；已取出的候选按 `CANCELLED` 产生终态结果，未取出的输入由上游清空或发送 EOF，运行最终为 `Cancelled`。不得把 `OperationCanceledException` 记录为普通错误或自动重试。
+6. **EOF 必须传播**：源节点对每个输出端口发送一次 `DataPacket<T>.EndOfStream(sequence)`；转换节点收到 EOF 后只传播 EOF，不再消费业务数据；汇聚节点在所有上游 EOF 后输出最终汇总。
+
+候选级结果使用以下稳定模型，不用异常文本驱动前端：
+
+```csharp
+public enum CandidateStatus
+{
+  Resolved,
+  Duplicate,
+  Retained,
+  ManualReview,
+  Unresolved,
+  Cancelled,
+  QuotaExhausted,
+  AuthFailed,
+  Timeout
+}
+
+public enum FailureScope
+{
+  Candidate,
+  Node,
+  Run
+}
+
+public enum FailureCategory
+{
+  Input,
+  Document,
+  Network,
+  Authentication,
+  Quota,
+  Persistence,
+  Cancellation,
+  Validation,
+  Internal
+}
+
+public sealed record CandidateFailure(
+  string ReasonCode,
+  FailureScope Scope,
+  FailureCategory Category,
+  bool Retryable,
+  string SafeMessage,
+  int Attempt = 0,
+  int MaxAttempts = 0,
+  string ExceptionType = "",
+  string Fingerprint = "");
+
+public sealed record CandidateProcessResult(
+  DocumentCandidate Candidate,
+  CandidateStatus Status,
+  InvoiceDocument? Invoice = null,
+  string ArtifactPath = "",
+  CandidateFailure? Failure = null,
+  IReadOnlyList<string>? Warnings = null,
+  IReadOnlyDictionary<string, string>? Trace = null);
+
+public sealed record RunFailure(
+  string RunId,
+  string Stage,
+  string ReasonCode,
+  FailureCategory Category,
+  bool Retryable,
+  string SafeMessage,
+  string ExceptionType = "",
+  string Fingerprint = "");
+```
+
+`CandidateProcessResult` 必须满足：同一个 `DocumentId` 在一次运行中最多产生一个最终结果；重复投递时由 `DocumentId + processing revision` 幂等去重；`ManualReview`、`Unresolved`、`Retained` 和 `Cancelled` 都是已终态，不得被下游重新解释为成功。`RunSummary` 统计各状态数量、阶段耗时、失败原因计数、报表路径和审计提交状态，但不包含 OCR 原文、图片、凭据或完整邮件正文。
+
+`RunCoordinator` 负责将 ZeroPipeline 节点事件映射到运行状态：`NodeExecuting` 更新阶段开始，`NodeCompleted` 更新阶段耗时，`NodeFaulted` 只处理节点/运行级异常；候选级失败只能由结果端口汇总。这样可以保留 Python `ExtractionOutcome` 的候选级隔离、`RunLifecycle` 的运行级失败和取消语义，同时适配 ZeroPipeline 的异常模型。
+
+### 核心领域 DTO
+
+以下类型位于 `InvoiceFlowAI.Domain`，是 parser、候选流水线、配对、归档、审计和持久化之间的唯一业务数据契约。它们使用不可变 `record`，不引用 MailKit、PdfPig、PDFiumCore、SkiaSharp、WebView2、EF Core 或 ZeroPipeline 类型；JSON/RPC 和数据库分别使用 Contracts/Infrastructure 的映射 DTO，不能反向污染领域模型。
+
+#### 来源身份与候选
+
+```csharp
+public enum DocumentSourceKind
+{
+  Attachment,
+  Url,
+  LocalFile,
+  EmailBody,
+  Generated
+}
+
+public sealed record DocumentIdentity(
+  string DocumentId,
+  string SourceMessageUid = "",
+  string SourceFileName = "",
+  string SourceLocator = "",
+  DocumentSourceKind SourceKind = DocumentSourceKind.Attachment,
+  string ProviderGroupKey = "");
+
+public sealed record DocumentSource(
+  DocumentIdentity Identity,
+  string LocalPath = "",
+  string SourceUrl = "",
+  string MimeType = "",
+  string ContentHash = "",
+  string AttachmentPartId = "",
+  string Mailbox = "",
+  string Subject = "",
+  string Sender = "");
+
+public sealed record MailboxMessage(
+  string AccountId,
+  string Mailbox,
+  string MessageUid,
+  string MessageId,
+  DateTimeOffset ReceivedAt,
+  string Subject,
+  string Sender,
+  IReadOnlyList<MailAttachment> Attachments,
+  IReadOnlyDictionary<string, string>? Headers = null);
+
+public sealed record MailAttachment(
+  string PartId,
+  string FileName,
+  string MimeType,
+  long Size,
+  string LocalPath = "",
+  string ContentHash = "");
+
+public sealed record DocumentCandidate(
+  DocumentIdentity Identity,
+  int Sequence,
+  DocumentSource Source,
+  string Channel = "",
+  string SourceFileName = "",
+  string CompatibilityHistoryKey = "",
+  string ProviderFamily = "",
+  bool IsParallelSafe = true,
+  IReadOnlyDictionary<string, string>? Hints = null);
+```
+
+`DocumentId` 必须在 candidate 收集阶段生成并在整次运行内保持不变：本地附件优先使用内容 SHA-256，URL 优先使用规范化 URL 的 SHA-256，无法计算时使用包含邮件 UID、附件 part、文件名和 sequence 的稳定降级键。`CompatibilityHistoryKey` 只用于避免重复处理和兼容历史判断，不作为发票号码。`SourceLocator` 保存受控的本地相对定位信息或脱敏 URL 标识，不把原始授权 URL 放进领域事件。
+
+`Sequence` 从 candidate 收集阶段开始分配，按邮箱扫描顺序单调递增；重试、URL 恢复和节点重投递不能改变它。`IsParallelSafe=false` 用于 URL 浏览器恢复、供应商上下文或其他不能并发共享状态的 candidate；应用层并发调度器必须尊重该标记。
+
+#### 发票与明细
+
+```csharp
+public enum InvoiceDocumentType
+{
+  Other,
+  Catering,
+  TrainTicket,
+  Taxi,
+  AccommodationInvoice,
+  AccommodationStatement,
+  FlightTicket,
+  Itinerary,
+  TravelService,
+  NonTargetCompanyInvoice
+}
+
+[Flags]
+public enum InvoiceFlags
+{
+  None = 0,
+  Itinerary = 1,
+  Folio = 2,
+  CreditNote = 4,
+  Cancellation = 8,
+  LowConfidence = 16,
+  RequiresManualReview = 32
+}
+
+public sealed record InvoiceRoute(
+  DateOnly? DepartureDate = null,
+  string DepartureCity = "",
+  string DestinationCity = "");
+
+public sealed record InvoiceItem(
+  string Name = "",
+  string Specification = "",
+  string Unit = "",
+  decimal? Quantity = null,
+  decimal? UnitPrice = null,
+  decimal? Amount = null,
+  decimal? TaxRate = null,
+  decimal? TaxAmount = null);
+
+public sealed record InvoiceDocument(
+  DocumentIdentity Identity,
+  bool IsInvoice = true,
+  DateOnly? InvoiceDate = null,
+  string Purchaser = "",
+  string Seller = "",
+  decimal? Amount = null,
+  decimal? TaxAmount = null,
+  decimal? TotalAmount = null,
+  string InvoiceCode = "",
+  string InvoiceNumber = "",
+  InvoiceDocumentType DocumentType = InvoiceDocumentType.Other,
+  string Category = "其他",
+  InvoiceRoute? Route = null,
+  InvoiceFlags Flags = InvoiceFlags.None,
+  IReadOnlyList<InvoiceItem>? Items = null,
+  decimal Confidence = 0m,
+  string ParserName = "",
+  string ExtractionRevision = "");
+```
+
+领域不保存模型原始字段名 `Date`、`Type`、`Departure_Date` 等；这些名称只允许出现在 DeepSeek/旧 Python 兼容映射层。`InvoiceNormalizer` 负责：日期按业务时区转为 `DateOnly`；金额使用 `decimal`，禁止 `double`；括号负数和红字票保留负号；`TotalAmount` 优先使用价税合计并校验 `Amount + TaxAmount`；空、未知和非法值统一为 `null` 或空字符串；文档类型必须归一化到 `InvoiceDocumentType`。
+
+`InvoiceDocument` 的 `Identity` 必须与输入 candidate 一致。解析器不得根据模型输出重新生成 `DocumentId`。`Confidence` 是 0 到 1 的本地归一化值，不直接等同于 OCR 或 DeepSeek 的原始置信度；无法比较时使用 0 并设置 `LowConfidence`。`Items` 为空表示未提取明细，不代表发票没有明细；需要人工复核的原因必须通过 `CandidateFailure` 或 `InvoiceFlags.RequiresManualReview` 明确表达。
+
+#### 解析、配对与归档结果
+
+```csharp
+public sealed record InvoiceParseResult(
+  bool Succeeded,
+  InvoiceDocument? Invoice,
+  string DocumentId,
+  string SourceFileName,
+  string ParserName,
+  CandidateFailure? Failure = null,
+  bool Retryable = false);
+
+public sealed record PairingKey(
+  string InvoiceNumber = "",
+  string SourceMessageUid = "",
+  string Seller = "",
+  DateOnly? BusinessDate = null,
+  decimal? Amount = null);
+
+public sealed record PairedArtifacts(
+  DocumentIdentity InvoiceIdentity,
+  IReadOnlyList<DocumentIdentity> CompanionIdentities,
+  PairingKey Key,
+  decimal Score,
+  bool RequiresManualReview,
+  string ReasonCode = "");
+
+public sealed record PairingBatch(
+  IReadOnlyList<PairedArtifacts> Pairs,
+  IReadOnlyList<CandidateProcessResult> Results);
+
+public sealed record ArchivedArtifact(
+  DocumentIdentity Identity,
+  string Role,
+  string RelativePath,
+  string FileName,
+  string ContentHash,
+  bool AlreadyExisted = false);
+
+public sealed record ArchiveBatch(
+  IReadOnlyList<ArchivedArtifact> Artifacts,
+  IReadOnlyList<CandidateProcessResult> Results);
+
+public sealed record RunSummary(
+  string RunId,
+  CandidateStatusCounts Counts,
+  int ScannedMessageCount,
+  int CandidateCount,
+  string? ReportPath,
+  bool AuditCommitted,
+  TimeSpan Duration);
+
+public sealed record CandidateStatusCounts(
+  int Resolved,
+  int Duplicate,
+  int Retained,
+  int ManualReview,
+  int Unresolved,
+  int Cancelled,
+  int QuotaExhausted,
+  int AuthFailed,
+  int Timeout);
+```
+
+`InvoiceParseResult` 是 parser 到应用层的局部结果；`CandidateProcessResult` 是贯穿恢复、提取、配对和归档的最终候选结果，二者不能混用。配对只能消费已完成解析的 `InvoiceDocument` 和显式的 companion identity；归档只接受 `RelativePath`，绝不接受由模型或邮件内容直接拼接的绝对路径。`RunSummary` 只在所有输入端收到 EOF、所有候选达到终态且报表/审计策略完成后生成。
+
+上述 DTO 的不变量统一由构造函数或 `DomainValidation` 校验：ID 和 sequence 非空且合法，金额为有限 decimal，日期为有效 `DateOnly`，置信度在 `[0,1]`，负数金额只有在红字/贷项标记或明确业务规则允许时才接受，结果中的 candidate identity 与 invoice identity 必须相同。跨层映射失败必须返回稳定 `DOMAIN_CONTRACT_INVALID`，不能静默丢字段。
+
 ## 6. 文档处理与 OFD 解析
 
 文档层参考当前仓库与 `E:/GitHub/qingpiao/src/QingPiao/Parsers` 的实现，采用“统一入口 + 格式专用 parser + 领域归一化”的结构。QingPiao 的 `Invoice`、`InvoiceItem`、`ParseResult` 作为 C# 迁移的直接行为参考；当前 Python 的 `DocumentIdentity`、`InvoiceRecord`、金额/日期归一化和文档类型标记作为领域层约束参考。
@@ -255,6 +610,18 @@ public interface IInvoiceParser
 }
 ```
 
+`ParserContext` 是应用层创建的本次解析只读上下文，不是领域实体，也不进入 JSON/RPC 或数据库：
+
+```csharp
+public sealed record ParserContext(
+    string RunId,
+    string StagingDirectory,
+    bool AllowOcrFallback,
+    bool AllowVisionFallback,
+    string CustomRules,
+    string ConfigurationFingerprint);
+```
+
 实现由 `InvoiceParserDispatcher` 按文件扩展名、MIME、文件魔数和文档来源选择：
 
 ```text
@@ -265,21 +632,7 @@ InvoiceParserDispatcher
   -> ManualReviewResult
 ```
 
-`InvoiceParseResult` 同时保留 QingPiao 风格的成功/人工处理结果和当前 Python 的稳定诊断信息：
-
-```csharp
-public sealed record InvoiceParseResult(
-    bool Succeeded,
-    InvoiceDocument? Invoice,
-    string DocumentId,
-    string SourceFileName,
-    string ParserName,
-    string? ReasonCode,
-    string? ReasonMessage,
-    bool Retryable);
-```
-
-`InvoiceDocument` 包含发票主数据、`InvoiceItem` 明细、`DocumentIdentity`、来源类型、归一化金额/日期、文档类型、置信度和审计元数据。解析器不能直接写数据库、归档文件或 WebView2 事件。
+`InvoiceParseResult` 已在本节前的领域 DTO 中定义，同时保留 QingPiao 风格的成功/人工处理结果和当前 Python 的稳定诊断信息。`InvoiceDocument` 包含发票主数据、`InvoiceItem` 明细、`DocumentIdentity`、来源身份、归一化金额/日期、文档类型和置信度；审计元数据由应用层事件单独保存。解析器不能直接写数据库、归档文件或 WebView2 事件。
 
 ### XML 实现
 
@@ -359,6 +712,27 @@ public sealed record FieldExtractionResult(
   string ReasonCode,
   bool RequiresManualReview,
   ExtractionTrace Trace);
+```
+
+`ExtractionRoute` 和 `ExtractionTrace` 是不包含原文和图像的诊断 DTO：
+
+```csharp
+public enum ExtractionRoute
+{
+  LocalFastPath,
+  OcrText,
+  VisionFallback
+}
+
+public sealed record ExtractionTrace(
+  ExtractionRoute Route,
+  string TrackAStatus,
+  string TrackBStatus,
+  string ReasonCode,
+  long DurationMs,
+  string ModelName,
+  string InputKind,
+  string ResponseFingerprint = "");
 ```
 
 #### 请求构造
@@ -462,6 +836,36 @@ PDF/OFD 页面图像
 - `Sdcb.SimdPaddleOCR`；
 - 初始使用 `Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny` 等适合中文发票的模型包；
 - 使用 ImageSharp 或 SkiaSharp 负责图像解码和像素转换。
+
+OCR 输出和 PDF 渲染输出只在应用/基础设施内存中短暂存在，不能作为领域实体持久化：
+
+```csharp
+public sealed record BoundingBox(int Left, int Top, int Width, int Height);
+
+public sealed record OcrLine(
+  string Text,
+  BoundingBox Bounds,
+  decimal Confidence,
+  int PageNumber,
+  int Ordinal);
+
+public sealed record OcrDocument(
+  DocumentIdentity Identity,
+  IReadOnlyList<OcrLine> Lines,
+  decimal Confidence,
+  string EngineName,
+  int PageCount);
+
+public sealed record RenderedPage(
+  int PageNumber,
+  int Width,
+  int Height,
+  string MimeType,
+  ReadOnlyMemory<byte> EncodedBytes,
+  long ByteLength);
+```
+
+`OcrLine.Confidence` 和 `OcrDocument.Confidence` 限定在 `[0,1]`；`Ordinal` 记录同页原始识别顺序，字段提取前按页码、Y 坐标、X 坐标和 ordinal 稳定排序。`RenderedPage.EncodedBytes` 只允许存在于受控的 transient buffer，不能进入 `PipelineContext` 的持久化快照、日志、审计或 Recipe。
 
 `PaddleOcrAll` 在应用生命周期内只加载一次并复用。OCR 在受限的后台 worker 中运行，通过 `LineWorkerCount`、页面并发数和图像尺寸限制内存峰值。首个版本使用普通的自包含 `win-x64` JIT/ReadyToRun 发布，暂不采用 Native AOT。
 
