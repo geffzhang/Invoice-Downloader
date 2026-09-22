@@ -280,7 +280,8 @@ public sealed record MailboxMessageBatch(
 public sealed record CandidateBatch(
   IReadOnlyList<DocumentCandidate> Candidates,
   int SourceMessageCount,
-  bool IsFinalBatch);
+  bool IsFinalBatch,
+  IReadOnlyList<CandidateProcessResult>? TerminalResults = null);
 
 public sealed record ExtractionBatch(
   IReadOnlyList<CandidateProcessResult> Results,
@@ -296,19 +297,19 @@ public sealed record ExtractionBatch(
 | `ValidateRequestNode` | `Input<RunInput>` | `Valid<ValidatedRunInput>`、`Failure<RunFailure>` | 参数、路径、日期范围、凭据引用和配置指纹校验；失败是运行级结果，不启动后续节点。 |
 | `ScanMailboxNode` | `Input<ValidatedRunInput>` | `Messages<PipelineItem<MailboxMessageBatch>>`、`Failure<RunFailure>` | 按页读取 IMAP；每页一个 packet，结束时发送 EOF；单封邮件损坏转候选前置失败，不中断扫描。 |
 | `CollectCandidatesNode` | `Messages<PipelineItem<MailboxMessageBatch>>` | `Candidates<PipelineItem<CandidateBatch>>`、`Failure<RunFailure>` | 过滤发票候选、递归展开附件和嵌套 ZIP，生成不可变 candidate；保持 source message 和 candidate sequence。 |
-| `RecoverUrlsNode` | `Candidates<PipelineItem<CandidateBatch>>` | `Candidates<PipelineItem<CandidateBatch>>`、`Failures<PipelineItem<CandidateProcessResult>>` | URL 候选逐项恢复；成功候选继续下游，供应商 URL 失败按候选失败语义输出，不抛批次异常。 |
-| `ExtractDocumentsNode` | `Candidates<PipelineItem<CandidateBatch>>` | `Results<PipelineItem<ExtractionBatch>>`、`Failures<PipelineItem<CandidateProcessResult>>` | XML/OFD/PDF/OCR/DeepSeek 处理；每个 candidate 必须产生一个终态 `CandidateProcessResult`。 |
-| `PairArtifactsNode` | `Results<PipelineItem<ExtractionBatch>>` | `Pairs<PipelineItem<PairingBatch>>`、`Failures<PipelineItem<CandidateProcessResult>>` | 只消费已终态结果；配对冲突和无法配对进入人工复核，不使整次运行失败。 |
-| `ArchiveDocumentsNode` | `Pairs<PipelineItem<PairingBatch>>` | `Archived<PipelineItem<ArchiveBatch>>`、`Failures<PipelineItem<CandidateProcessResult>>` | 归档操作必须幂等；单文件路径、命名或移动失败作为候选结果保留。 |
+| `RecoverUrlsNode` | `Candidates<PipelineItem<CandidateBatch>>` | `Candidates<PipelineItem<CandidateBatch>>`、`Failure<RunFailure>` | URL 候选逐项恢复；成功候选保留在 `Candidates`，失败候选写入同一批次的 `TerminalResults`，不抛批次异常。 |
+| `ExtractDocumentsNode` | `Candidates<PipelineItem<CandidateBatch>>` | `Results<PipelineItem<ExtractionBatch>>`、`Failure<RunFailure>` | XML/OFD/PDF/OCR/DeepSeek 处理；输入批次中的既有终态结果原样转发，尚未终态的 candidate 必须补充一个 `CandidateProcessResult`。 |
+| `PairArtifactsNode` | `Results<PipelineItem<ExtractionBatch>>` | `Pairs<PipelineItem<PairingBatch>>`、`Failure<RunFailure>` | 只消费已终态结果；配对冲突和无法配对更新为人工复核结果，既有失败结果原样转发，不使整次运行失败。 |
+| `ArchiveDocumentsNode` | `Pairs<PipelineItem<PairingBatch>>` | `Archived<PipelineItem<ArchiveBatch>>`、`Failure<RunFailure>` | 归档操作必须幂等；单文件路径、命名或移动失败追加/更新候选结果，最终统一进入 `ArchiveBatch.Results`。 |
 | `ExportReportNode` | `Archived<PipelineItem<ArchiveBatch>>` | `Completed<RunSummary>`、`Failure<RunFailure>` | 汇总所有候选终态并生成报表；报表写入、数据库提交或审计提交失败属于运行级故障。 |
 
-`Messages`、`Candidates`、`Results` 等批次 DTO 只用于减少端口连接数量，不改变候选级语义；批次内部仍按 `DocumentCandidate.Sequence` 排序，且不得无限扩大。默认批次大小、端口容量和节点并发由 `PipelineOptions` 固定配置，并在启动日志中记录。
+`Messages`、`Candidates`、`Results` 等批次 DTO 只用于减少端口连接数量，不改变候选级语义；批次内部仍按 `DocumentCandidate.Sequence` 排序，且不得无限扩大。`CandidateBatch.TerminalResults` 用于恢复阶段提前失败的 candidate；后续节点必须将这些结果转发到唯一的结果端口，不得另建旁路失败端口。默认批次大小、端口容量和节点并发由 `PipelineOptions` 固定配置，并在启动日志中记录。
 
 ### 失败语义与异常边界
 
 ZeroPipeline 的 `PipelineNode.ExecuteAsync` 在异常后会把节点置为 `Faulted`，`PipelineExecutor` 也会触发 `NodeFaulted` 并抛出异常。因此应用节点遵守以下边界：
 
-1. **候选级失败不抛异常**：文件损坏、格式不支持、号码缺失、OCR 低质量、DeepSeek 非法 JSON、URL 恢复失败、配对冲突、归档单文件失败，都转换为 `CandidateProcessResult`，写入 `Failures` 或结果端口，并继续处理其他候选。
+1. **候选级失败不抛异常**：文件损坏、格式不支持、号码缺失、OCR 低质量、DeepSeek 非法 JSON、URL 恢复失败、配对冲突、归档单文件失败，都转换为 `CandidateProcessResult`，写入当前阶段唯一的结果端口，并继续处理其他候选。候选失败不得通过独立旁路端口绕过后续汇总。
 2. **可重试候选失败不在节点内部无限重试**：节点根据 `RetryPolicy` 产生带 `Retryable=true` 的结果；应用层 `RetryCoordinator` 根据错误码、尝试次数和退避计划重新投递同一个 candidate，保持原 `DocumentId`、`Sequence` 和幂等键。
 3. **节点级故障才抛异常**：端口类型错误、节点配置非法、依赖初始化失败、不可恢复的内部不变量破坏、无法创建临时目录等，抛出带稳定 `ReasonCode` 的 `PipelineNodeException`，由 `RunCoordinator` 将运行置为 `Failed`。
 4. **运行级故障终止 DAG**：凭据认证失败、数据库迁移/提交失败、日志和审计存储不可用、输出根目录不可写、ZeroPipeline 图校验失败，写入 `RunFailure` 并停止新的输入；已完成的候选结果保留。
@@ -382,7 +383,7 @@ public sealed record RunFailure(
   string Fingerprint = "");
 ```
 
-`CandidateProcessResult` 必须满足：同一个 `DocumentId` 在一次运行中最多产生一个最终结果；重复投递时由 `DocumentId + processing revision` 幂等去重；`ManualReview`、`Unresolved`、`Retained` 和 `Cancelled` 都是已终态，不得被下游重新解释为成功。`RunSummary` 统计各状态数量、阶段耗时、失败原因计数、报表路径和审计提交状态，但不包含 OCR 原文、图片、凭据或完整邮件正文。
+`CandidateProcessResult` 必须满足：同一个 `DocumentId` 在一次运行中最多产生一个最终结果；重复投递时由 `DocumentId + processing revision` 幂等去重；`ManualReview`、`Unresolved`、`Retained` 和 `Cancelled` 都是已终态，不得被下游重新解释为成功。每个阶段只能有一个候选结果输出端口；下游节点对已终态结果只允许转发、补充阶段 trace 或按明确规则更新状态，不得复制成第二个结果。`RunSummary` 统计各状态数量、阶段耗时、失败原因计数、报表路径和审计提交状态，但不包含 OCR 原文、图片、凭据或完整邮件正文。
 
 `RunCoordinator` 负责将 ZeroPipeline 节点事件映射到运行状态：`NodeExecuting` 更新阶段开始，`NodeCompleted` 更新阶段耗时，`NodeFaulted` 只处理节点/运行级异常；候选级失败只能由结果端口汇总。这样可以保留 Python `ExtractionOutcome` 的候选级隔离、`RunLifecycle` 的运行级失败和取消语义，同时适配 ZeroPipeline 的异常模型。
 
