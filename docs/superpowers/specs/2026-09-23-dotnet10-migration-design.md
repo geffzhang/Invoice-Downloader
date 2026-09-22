@@ -26,11 +26,11 @@
 迁移顺序如下：
 
 1. WinUI 3/WebView2 外壳和 JSON/RPC 桥接层；
-2. 领域契约、运行生命周期、取消、进度和诊断；
-3. XML、OFD、PDF、本地 OCR、字段提取、校验和归档的本地文件链路；
-4. IMAP 扫描和候选筛选；
-5. 通过 `IChatClient` 接入 DeepSeek Flash 文本和多模态提取；
-6. 链接恢复和供应商专用处理；
+2. ZeroPipeline DAG、领域契约、运行生命周期、取消、进度和诊断；
+3. XML、OFD、PDF、本地 OCR、字段提取、校验和归档的本地文件节点；
+4. IMAP 扫描和候选筛选节点；
+5. 通过 `IChatClient` 接入 DeepSeek Flash 文本和多模态提取节点；
+6. 链接恢复和供应商专用节点；
 7. 配对、高级规则、报表、真值审计和发布加固。
 
 每个切片都必须先具备可执行的测试面，再扩展到下一个切片。
@@ -46,6 +46,7 @@ src/
     Rpc/
   InvoiceFlowAI.Application/
     Runs/
+    Pipeline/
     Commands/
     Events/
     Services/
@@ -77,15 +78,25 @@ tests/
   InvoiceFlowAI.App.Tests/
 ```
 
+应用层引用 ZeroPipeline 的核心编排包：
+
+- `ZeroPipeline.Core`：DAG、拓扑调度、typed ports、背压和执行器；
+- `ZeroPipeline.Recipe`：JSON Recipe 序列化、节点注册和图构建。
+
+ZeroPipeline 参考仓库：<https://github.com/kzxl/ZeroPipeline/tree/master>。
+其核心包支持 `net8.0` 和 `netstandard2.0`，可由 .NET 10 应用引用。暂不使用 `ZeroPipeline.UI`，因为本项目的界面由 WinUI 3 + WebView2 承载，不能把 WinForms 画布控件作为 UI 基础。
+
 ### 职责边界
 
 - `InvoiceFlowAI.App`：WinUI 窗口、WebView2 初始化、生命周期、DPI、打包和桥接接线。不包含发票业务规则。
 - `InvoiceFlowAI.Contracts`：可 JSON 序列化的命令、事件、DTO、稳定错误码和前端契约。
-- `InvoiceFlowAI.Application`：运行编排、准入校验、取消、重试策略、阶段转换、并发限制和进度发送。
+- `InvoiceFlowAI.Application`：使用 ZeroPipeline 构建运行 DAG，负责准入校验、取消、重试策略、阶段转换、并发限制和进度发送。
 - `InvoiceFlowAI.Domain`：发票实体、解析结果、分类规则、配对规则、校验和真值契约。该层不依赖 WebView2、HTTP、数据库或供应商 SDK。
 - `InvoiceFlowAI.Infrastructure`：IMAP、文档、OCR、AI、浏览器、归档、报表、持久化和凭据等具体实现。
 
 整体分层借鉴 `E:/GitHub/qingpiao/src/QingPiao` 中 `Services/Parsers/Exporters` 的职责拆分，同时使用接口替代具体依赖，以适配桌面端编排和自动化测试。
+
+ZeroPipeline 只位于应用编排层。领域层不依赖 ZeroPipeline；节点通过应用层定义的端口 DTO 与领域服务通信，避免将 DAG 类型扩散到业务实体中。
 
 ## 4. WebView2 契约
 
@@ -116,9 +127,26 @@ tests/
 
 桥接层负责传输、请求关联、序列化和事件转发，不负责邮箱扫描或发票解析。
 
-## 5. 运行生命周期
+## 5. ZeroPipeline 编排与运行生命周期
 
-由 `RunCoordinator` 统一管理运行生命周期：
+由 `RunCoordinator` 创建运行上下文并构建 ZeroPipeline 图，由 `PipelineExecutor` 执行图。每次 `run.start` 都创建独立的图实例和运行上下文，不共享带状态的节点。
+
+推荐的节点图如下：
+
+```text
+ValidateRequest
+  -> ScanMailbox
+  -> CollectCandidates
+  -> RecoverUrls
+  -> ExtractDocuments
+  -> PairArtifacts
+  -> ArchiveDocuments
+  -> ExportReport
+```
+
+节点之间使用 typed ports 传递候选、文档、解析结果和报表数据。候选级处理使用有界队列和背压，避免邮箱附件、OCR 页面或 AI 请求无限制堆积。单文件失败作为结果端口输出并进入人工复核分支，不直接使整张 DAG 失败。
+
+运行生命周期仍保持以下状态：
 
 ```text
 Created
@@ -136,6 +164,16 @@ Created
 运行也可能以 `Cancelled`、`Failed`、`PartialSuccess` 或 `NeedsManualReview` 结束。单个损坏文档不能中断整批任务；只有凭据无效、存储不可用或无法恢复的持久化错误等运行级错误才终止整次运行。
 
 每个阶段都接收 `CancellationToken`，写入审计事件，并发送安全的进度事件。凭据、原始授权值和未脱敏的敏感 URL 不能出现在事件或日志中。
+
+### ZeroPipeline 适配边界
+
+- `RunCoordinator`：创建/销毁图实例、绑定运行 ID、接收取消请求、汇总节点状态并向 WebView2 发事件；
+- `PipelineGraph`：描述阶段依赖和数据流，不承载用户凭据或持久化状态；
+- `PipelineExecutor`：执行拓扑调度、节点并发和背压；
+- 应用节点：将 `IMailboxScanner`、`IInvoiceParser`、`IInvoiceOcr`、`IInvoiceFieldExtractor`、`IArchiveService` 和 `IReportExporter` 适配为 ZeroPipeline 节点；
+- `ZeroPipeline.Recipe`：保存可诊断的流程版本和节点元数据，不保存授权码、API Key 或原始发票内容。
+
+ZeroPipeline 的 DAG 调度负责节点依赖、队列和执行顺序；业务重试、错误码、审计写入和人工复核规则仍由应用层控制，避免把业务语义隐藏在通用编排器中。
 
 ## 6. 文档处理与 OFD 解析
 
