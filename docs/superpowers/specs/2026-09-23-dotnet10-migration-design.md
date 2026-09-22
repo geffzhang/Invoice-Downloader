@@ -66,6 +66,7 @@ src/
     Reports/
     Persistence/
     Security/
+    Logging/
   InvoiceFlowAI.Contracts/
     Rpc/
     Models/
@@ -92,7 +93,7 @@ ZeroPipeline 参考仓库：<https://github.com/kzxl/ZeroPipeline/tree/master>�
 - `InvoiceFlowAI.Contracts`：可 JSON 序列化的命令、事件、DTO、稳定错误码和前端契约。
 - `InvoiceFlowAI.Application`：使用 ZeroPipeline 构建运行 DAG，负责准入校验、取消、重试策略、阶段转换、并发限制和进度发送。
 - `InvoiceFlowAI.Domain`：发票实体、解析结果、分类规则、配对规则、校验和真值契约。该层不依赖 WebView2、HTTP、数据库或供应商 SDK。
-- `InvoiceFlowAI.Infrastructure`：IMAP、文档、OCR、AI、浏览器、归档、报表、持久化和凭据等具体实现。
+- `InvoiceFlowAI.Infrastructure`：IMAP、文档、OCR、AI、浏览器、归档、报表、持久化、凭据和日志等具体实现。
 
 整体分层借鉴 `E:/GitHub/qingpiao/src/QingPiao` 中 `Services/Parsers/Exporters` 的职责拆分，同时使用接口替代具体依赖，以适配桌面端编排和自动化测试。
 
@@ -164,6 +165,24 @@ Created
 运行也可能以 `Cancelled`、`Failed`、`PartialSuccess` 或 `NeedsManualReview` 结束。单个损坏文档不能中断整批任务；只有凭据无效、存储不可用或无法恢复的持久化错误等运行级错误才终止整次运行。
 
 每个阶段都接收 `CancellationToken`，写入审计事件，并发送安全的进度事件。凭据、原始授权值和未脱敏的敏感 URL 不能出现在事件或日志中。
+
+### Serilog 结构化日志
+
+运行日志使用 Serilog，通过 `Microsoft.Extensions.Logging` 的 `ILogger<T>` 注入到应用层和基础设施层。日志输出为结构化事件，不在业务代码中拼接长字符串。
+
+每条日志尽量包含以下公共字段：
+
+- `Timestamp`、`Level`、`MessageTemplate`；
+- `Application`、`Version`、`ProcessId`；
+- `RunId`、`Stage`、`NodeId`、`DocumentId`；
+- `EventType`、`ReasonCode`、`Retryable`、`DurationMs`；
+- `MachineName` 和脱敏后的外部服务域名。
+
+ZeroPipeline 节点在执行开始、成功、失败、重试和取消时写入结构化事件。WebView2 桥接记录 RPC 方法名、请求 ID、运行 ID 和耗时，但不记录参数中的凭据、原始 OCR 文本或图片内容。DeepSeek 调用只记录模型名、输入类型、token/耗时元数据和结果状态，不记录 API Key、完整提示词、发票图像或完整发票文本。OFD 解析只记录来源 XML 路径、解析分支和结果状态，不记录完整 XML。
+
+日志与审计分离：Serilog 日志用于诊断和运行观测；真值审计事件使用独立的 `IAuditStore` 持久化，并以稳定 schema 保存。日志可以按保留策略滚动清理，不能替代审计证据。
+
+默认写入 `%LocalAppData%/InvoiceFlowAI/logs/invoiceflowai-.log`，按日期滚动并限制文件大小和保留数量。发布版默认记录 `Information` 及以上级别；调试模式可以提升到 `Debug`，但仍必须执行相同的脱敏策略。未配置可用的日志文件目录时，应用回退到安全的诊断目录，并将失败写入启动诊断信息。
 
 ### ZeroPipeline 适配边界
 
@@ -312,6 +331,7 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 - PDF：文本提取和需要 OCR 时的页面渲染；
 - OFD：本文档规定的专用 ZIP/XML 发票解析器；
 - 凭据：Windows DPAPI `CurrentUser` 保护器，参考 `Lyntai.Secrets.Dpapi`；
+- 日志：Serilog 结构化日志，通过 `Microsoft.Extensions.Logging` 注入；
 - AI：由 `Microsoft.Extensions.AI.OpenAI` 提供 `IChatClient`，接入 DeepSeek 的 OpenAI 兼容端点。
 
 ## 10. 错误模型
@@ -336,7 +356,7 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 
 ### 单元测试
 
-覆盖领域校验、金额和税额计算、规则、配对、查重、归档命名、路径安全、OFD XML 变体、OCR 归一化、DeepSeek 响应校验、DPAPI 密钥存储和报表映射。
+覆盖领域校验、金额和税额计算、规则、配对、查重、归档命名、路径安全、OFD XML 变体、OCR 归一化、DeepSeek 响应校验、DPAPI 密钥存储、Serilog 日志字段和报表映射。
 
 ### 集成测试
 
@@ -358,6 +378,7 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 
 - 通过目标端点验证 DeepSeek Flash 的具体模型标识和多模态内容格式；
 - 验证 DPAPI 当前用户作用域、应用 entropy、密文损坏和用户/机器迁移失败行为；
+- 验证 Serilog 日志结构、滚动保留、异常事件、取消事件和敏感字段脱敏；
 - 测试 SimdPaddleOCR 对小字体、旋转、低分辨率和扫描发票的识别效果；
 - 验证 PDF/OFD 渲染质量是否满足 OCR 要求；
 - 使用 `original_invoice.xml` 和 `Tag.xml`/`CustomTag.xml` 两类样本验证 OFD 解析；
