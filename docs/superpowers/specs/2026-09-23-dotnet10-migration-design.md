@@ -619,6 +619,30 @@ public interface IPairingService
 
 配对只消费 `Resolved` 的 `InvoiceDocument` 和显式的 companion candidate；`Duplicate`、`Retained`、`Cancelled`、`Unresolved` 等结果原样进入 `PairingBatch.Results`。评分达到 `AutoAcceptScore` 自动配对，处于两个阈值之间进入 `ManualReview`，低于 `ManualReviewScore` 生成 `UNPAIRED_ARTIFACT` 候选结果。配对不得修改 invoice identity 或 source sequence。
 
+配对首版规则固定为：
+
+1. 先按文档类型建立 family 和 role：`打车 -> ride_invoice/ride_itinerary`、`住宿 -> hotel_invoice/hotel_folio`；不在同一 family 或 role 不匹配时不建边。
+2. 兼容性 gate 依次检查金额、供应商、日期窗口和必要的 merchant token；供应商两侧都非空且不相等时拒绝配对。
+3. 金额使用 Decimal 分；普通住宿要求差值小于 `0.01`，打车允许精确金额或价税换算后的 `0.50` slack。
+4. 住宿日期差最多 3 天；打车日期用于评分，不作为缺失日期时的硬拒绝条件。
+5. 建立二分图的连通分量，在每个分量内先最大化配对数量，再最大化总分；输入按 `DocumentId` 排序，保证结果确定性。
+
+默认评分公式为：
+
+```text
+score = providerExact * 100
+  + sourceMessageUidExact * 60
+  + sharedMerchantTokenRatio * 40
+  + amountScore
+  + dateScore
+```
+
+其中 `amountScore` 为精确金额 30、打车价税关系 10、否则 0；住宿 `dateScore=max(0, 20 - days*4)`，其他交通 `dateScore=max(0, 10-min(days,10))`。默认 `AutoAcceptScore=180`、`ManualReviewScore=100`，且必须满足 `AutoAcceptScore > ManualReviewScore`。分数达到自动阈值才可自动接受；处于两个阈值之间进入人工复核，低于人工阈值为 `UNPAIRED_ARTIFACT`。
+
+冲突规则固定为：同一 family/provider group 内的多个候选先求最优 assignment；如果存在多个“配对数量相同且总分相同”的最优 assignment，则整个连通分量不自动配对，生成一个 `PAIRING_AMBIGUOUS` 复核项。一个 `DocumentId` 在同一运行中最多参与一个 pairing；重复输入或已存在相同 pairing key 的候选转为 `Duplicate`，不产生第二个归档副作用。
+
+跨邮件配对默认允许但不默认自动接受：只有供应商相同、金额精确、日期在允许窗口内且 merchant token 足够匹配、总分达到 `AutoAcceptScore` 时，跨 `SourceMessageUid` 的配对才可自动接受；否则必须人工复核。用户可通过配置关闭跨邮件配对，关闭后 source UID 不同直接进入 `PAIRING_CROSS_MESSAGE_DISABLED`。
+
 #### 链接恢复
 
 ```csharp
@@ -666,6 +690,18 @@ public interface IArchiveService
 ```
 
 归档使用 `DocumentId + NamingPolicyVersion` 作为幂等键；命名策略只接受已归一化领域字段，生成相对路径后再由路径安全组件解析到 `OutputRoot`。同哈希文件视为已归档，内容不同的同名文件按明确冲突策略生成新名称或返回 `ARCHIVE_NAME_CONFLICT`。单个归档失败只更新对应 `CandidateProcessResult`，数据库状态和审计事件必须在同一应用事务中提交。
+
+`NamingPolicyVersion=2026-09-23-v1` 的具体规则与当前 Python 保持一致：
+
+- 普通票据：`{Date}_{DisplayType}_{Amount}_{Seller}{Extension}`；`DisplayType` 对行程单追加“行程单”，folio 固定为“住宿水单”；
+- 火车票：`{DepartureDate}-{DepartureCity}-{DestinationCity}-火车票{Extension}`；缺失城市使用“未知”；
+- 不满足最低归档字段时进入 `待人工复核/NeedsReview_{OriginalFileName}`；无法识别类型进入 `待人工复核/Unrecognized_{OriginalFileName}`；
+- 目录优先使用 `InvoiceDocumentType` 注册表的 `ArchiveFolder`，然后应用已通过校验的公司/供应商路由规则；不能由模型直接指定绝对目录；
+- 非法字符 `\\ / : * ? " < > |`、CR/LF 替换为 `_`，连续空白压缩为一个空格，去除首尾空格、点和下划线；
+- 单个 path segment 最大 120 个 UTF-16 code units，完整相对路径最大 240 个 UTF-16 code units；截断必须保留扩展名和 `DocumentId` 前 8 位；
+- 同内容哈希视为 `Duplicate`；同名不同内容按 `_01`、`_02` 递增后缀处理，不能使用不可审计的随机 UUID；达到 99 后返回 `ARCHIVE_NAME_CONFLICT` 并进入人工复核。
+
+归档采用 `Prepared -> Committed` 两阶段补偿：移动前先写 `Prepared` 记录和临时文件哈希，文件原子替换并 fsync 后再提交 `Committed`。归档成功但数据库提交失败时，启动恢复根据哈希把文件绑定回 `Prepared` 记录并重试数据库提交；数据库成功但移动失败时，记录保持 `Prepared`，不标记为已归档，由恢复任务重试移动。文件和数据库都无法证明一致时进入 `ARCHIVE_RECOVERY_FAILED`，保留文件并人工复核，禁止静默删除。
 
 #### 报表
 
@@ -750,6 +786,16 @@ public interface IManualReviewService
 ```
 
 人工复核提交必须校验 revision，防止两个页面覆盖彼此修改；`CorrectAndAccept` 产生新的领域 revision 并保留原始 AI 结果和修正审计；`RetryExtraction` 只能重新排队允许重试的 candidate；`Reject` 进入 `Unresolved` 或业务规定的非目标状态。人工复核不会直接写文件，重新归档和报表由后续应用命令触发。
+
+人工复核闭环固定为：
+
+1. `review.submit` 在一个 transaction 内锁定 `ManualReviewItems.CurrentRevision`，校验 `ExpectedRevision`、字段白名单和当前 candidate 状态；冲突返回 `REVIEW_REVISION_CONFLICT`，不覆盖已有修正。
+2. `Accept` 保留原解析结果，生成新的 accepted processing revision，写入人工决定和审计事件；若原结果已有 `Prepared` 归档，则进入归档补偿队列。
+3. `CorrectAndAccept` 只允许修正 `InvoiceDate`、`Purchaser`、`Seller`、`Amount`、`TaxAmount`、`TotalAmount`、`InvoiceCode`、`InvoiceNumber`、`DocumentType`、`Category`、路线字段和明细；禁止修改 `DocumentId`、来源身份、文件哈希、模型 trace 和原始附件。
+4. `Reject` 的最终候选状态固定为 `Unresolved`，reason code 为 `MANUAL_REJECTED`；如果用户选择明确的非目标公司结果，则状态为 `Retained`，文档类型为 `NonTargetCompanyInvoice`，不能使用模糊的“删除”。
+5. `RetryExtraction` 只允许原失败为 `Retryable=true` 且尚未超过最大次数的 candidate；它创建新的 `ProcessingRevision`，回到 `ExtractDocumentsNode`，不重复扫描邮箱或创建新 `DocumentId`。
+6. 接受或修正后由 `ReviewResolutionCoordinator` 依次触发：领域校验 -> 重新配对 -> 归档/归档补偿 -> 报表增量或重生成 -> 审计事件；任一步失败都保留已提交 revision，并创建可恢复的后续任务，不回滚人工决定。
+7. 修正字段使用领域校验：金额必须是有限 Decimal，日期必须是有效 `DateOnly`，金额/税额/价税合计关系必须通过 `InvoiceAcceptanceService`，文档类型必须在注册白名单中。审核人使用当前 Windows 用户的不可变审计标识和显示名快照，不接受前端自报身份。
 
 ### 运行基础设施接口
 
@@ -1252,6 +1298,102 @@ public sealed record ParserContext(
     string ConfigurationFingerprint);
 ```
 
+  ### 公司、供应商和自定义规则
+
+  `CustomRules` 不作为任意 C#、正则脚本或模板字符串执行，而是在请求准入阶段解析为版本化、可审计的规则 AST：
+
+  ```csharp
+  public sealed record RuleSet(
+    string RuleSetId,
+    int Version,
+    IReadOnlyList<InvoiceRule> Rules,
+    string SourceFingerprint);
+
+  public sealed record InvoiceRule(
+    string RuleId,
+    int Priority,
+    InvoiceRuleCondition When,
+    InvoiceRuleAction Then,
+    bool Enabled = true);
+
+  public sealed record InvoiceRuleCondition(
+    string? ProviderFamily = null,
+    InvoiceDocumentType? DocumentType = null,
+    string? SellerContains = null,
+    string? PurchaserRelation = null,
+    string? SubjectContains = null,
+    string? InvoiceNumberPrefix = null);
+
+  public sealed record InvoiceRuleAction(
+    string? ArchiveFolder = null,
+    string? Category = null,
+    bool? RequireManualReview = null,
+    bool? AllowCrossMessagePairing = null);
+
+  public interface IRuleSetParser
+  {
+    RuleSet Parse(string customRules, string ruleSetId, CancellationToken cancellationToken);
+  }
+  ```
+
+  规则优先级固定为：安全/路径和 `InvoiceAcceptanceService` 准入 > 文档类型内置规则 > 供应商规则 > 公司规则 > 用户自定义路由规则。用户规则只能改变允许的归档目录、分类、人工复核标记和跨邮件配对开关，不能修改 `DocumentId`、发票金额/日期、来源身份，不能绕过非目标公司检查、最低字段检查、路径安全或模型响应 schema。规则 AST 解析失败、未知字段、未知目录或同优先级冲突返回 `RULESET_INVALID`，不能部分应用。
+
+  公司规则使用当前 Python 的三态关系：`target`、`non_target`、`unknown`。目标公司名称规范化后做大小写不敏感包含匹配；空值、`未知购买方` 等占位值为 `unknown`。文档类型的 `ExemptFromPurchaserCheck=true` 时不因 purchaser mismatch 拒绝；其他类型的 `non_target` 进入 `NonTargetCompanyInvoice` 或用户明确配置的保留策略，`unknown` 默认人工复核。
+
+  供应商规则通过注册表加载，注册表只接受内置程序集或经过签名/哈希校验的程序集，不从邮件或用户规则动态加载代码：
+
+  ```csharp
+  public sealed record ProviderRuleMatch(
+    string ProviderId,
+    string ProviderFamily,
+    int Priority,
+    string EvidenceCode);
+
+  public interface IInvoiceProviderRule
+  {
+    string ProviderId { get; }
+    int Priority { get; }
+
+    bool CanHandle(DocumentSource source, InvoiceDocument? document);
+
+    Task<ProviderRuleMatch?> EvaluateAsync(
+      DocumentSource source,
+      InvoiceDocument? document,
+      CancellationToken cancellationToken);
+  }
+
+  public interface IProviderRuleRegistry
+  {
+    IReadOnlyList<IInvoiceProviderRule> GetOrderedRules();
+  }
+  ```
+
+  供应商规则按 `Priority` 降序、`ProviderId` 升序确定性执行；多个规则匹配但给出不同 provider family 时进入 `PROVIDER_RULE_CONFLICT` 人工复核。供应商规则可以提供预期字段、配对 family 和归档目录建议，但不能直接写数据库、归档文件或覆盖人工修正。
+
+  特殊票据 parser 使用同样的显式注册机制：
+
+  ```csharp
+  public interface IDocumentSpecialCaseParser
+  {
+    string ParserId { get; }
+    int Priority { get; }
+
+    bool CanParse(DocumentSource source, ParserContext context);
+
+    Task<InvoiceParseResult?> TryParseAsync(
+      DocumentSource source,
+      ParserContext context,
+      CancellationToken cancellationToken);
+  }
+
+  public interface IDocumentSpecialCaseParserRegistry
+  {
+    IReadOnlyList<IDocumentSpecialCaseParser> GetOrderedParsers();
+  }
+  ```
+
+  注册顺序固定为：格式确定性 parser -> 特殊票据 parser（火车票、Folio、国外发票、供应商专用布局）-> 通用 OCR/DeepSeek fallback。`CanParse=false` 返回 null；`CanParse=true` 但解析失败必须返回稳定的 `InvoiceParseResult`，不能静默降级成普通票据。相同 priority 的多个 parser 同时匹配时返回 `SPECIAL_PARSER_CONFLICT`，交由人工复核。注册表在应用启动时冻结并记录版本指纹，运行中不能改变。
+
 实现由 `InvoiceParserDispatcher` 按文件扩展名、MIME、文件魔数和文档来源选择：
 
 ```text
@@ -1464,12 +1606,23 @@ PDF/OFD 页面图像
 使用以下组件：
 
 - `Sdcb.SimdPaddleOCR` `1.4.2`；
-- 初始使用 `Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny` 等适合中文发票的模型包；
-- 使用 ImageSharp 或 SkiaSharp 负责图像解码和像素转换。
+- 首版锁定 `Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny` `1.4.2`，模型文件随发布包提供；
+- 使用 `SkiaSharp` `4.154.0-preview.1.26454.9` 负责图像解码和像素转换。
 
 OCR 输出和 PDF 渲染输出只在应用/基础设施内存中短暂存在，不能作为领域实体持久化：
 
 ```csharp
+public sealed record DocumentImage(
+  DocumentIdentity Identity,
+  int PageNumber,
+  int Width,
+  int Height,
+  int Dpi,
+  string MimeType,
+  ReadOnlyMemory<byte> EncodedBytes,
+  string ContentHash,
+  string TemporaryPath = "");
+
 public sealed record BoundingBox(int Left, int Top, int Width, int Height);
 
 public sealed record OcrLine(
@@ -1493,11 +1646,45 @@ public sealed record RenderedPage(
   string MimeType,
   ReadOnlyMemory<byte> EncodedBytes,
   long ByteLength);
+
+public sealed record PdfRenderOptions(
+  int Dpi = 200,
+  int MaxPages = 2,
+  int MaxWidth = 4096,
+  int MaxHeight = 8192,
+  string OutputMimeType = "image/png");
+
+public interface IPdfPageRenderer
+{
+  Task<IReadOnlyList<RenderedPage>> RenderAsync(
+    DocumentSource source,
+    PdfRenderOptions options,
+    CancellationToken cancellationToken);
+}
+
+public interface IImagePreprocessor
+{
+  Task<DocumentImage> PrepareAsync(
+    DocumentIdentity identity,
+    RenderedPage page,
+    CancellationToken cancellationToken);
+}
+
+public interface IDocumentImageLease : IAsyncDisposable
+{
+  DocumentImage Image { get; }
+}
 ```
 
 `OcrLine.Confidence` 和 `OcrDocument.Confidence` 限定在 `[0,1]`；`Ordinal` 记录同页原始识别顺序，字段提取前按页码、Y 坐标、X 坐标和 ordinal 稳定排序。`RenderedPage.EncodedBytes` 只允许存在于受控的 transient buffer，不能进入 `PipelineContext` 的持久化快照、日志、审计或 Recipe。
 
-`PaddleOcrAll` 在应用生命周期内只加载一次并复用。OCR 在受限的后台 worker 中运行，通过 `LineWorkerCount`、页面并发数和图像尺寸限制内存峰值。首个版本使用普通的自包含 `win-x64` JIT/ReadyToRun 发布，暂不采用 Native AOT。
+PDF 文字提取成功时不渲染图像。进入 OCR/视觉 fallback 后，`IPdfPageRenderer` 最多渲染前两页，默认 200 DPI，长边超过限制时等比例缩放；输出固定为 PNG，像素由 SkiaSharp 解码为连续的 non-premultiplied RGB/RGBA8 buffer，校验 stride、宽高和 content hash。首版不做不可逆二值化，只执行 EXIF/方向归一化、尺寸限制、颜色空间转换和 NFKC OCR 文本归一化。
+
+`PaddleOcrAll` 在应用生命周期内只加载一次并复用。模型 manifest 固定模型包版本、文件相对路径、SHA-256 和引擎配置；启动时先校验 manifest，模型缺失或 hash 不匹配返回运行级 `OCR_MODEL_LOAD_FAILED`，禁止运行时静默下载未知模型。OCR 在受限的后台 worker 中运行，通过 `OcrPageConcurrency=2`、`OcrLineWorkerCount=2`、页面尺寸和 `MaxInFlightCandidates` 限制内存峰值。
+
+`DocumentImage` 的生命周期由 `DocumentImageLease` 管理：渲染阶段在 `%LocalAppData%/InvoiceFlowAI/runs/{runId}/temp/{documentId}/{processingRevision}/pages/` 创建临时目录，文件使用随机临时名写入、flush 后原子改名；OCR、Track A 和必要的 Track B 完成且相关审计/处理结果提交后释放内存并删除临时文件。进程崩溃时启动恢复依据 checkpoint 和 processing 状态清理已完成 revision 的临时目录；未完成 revision 保留到恢复或诊断结束，不能把临时绝对路径写入领域 DTO、RPC 或日志。
+
+首个版本使用普通的自包含 `win-x64` JIT/ReadyToRun 发布，暂不采用 Native AOT。损坏图像、像素格式不支持、渲染超时和单页读取失败转为候选级 `OCR_IMAGE_INVALID`/`PDF_RENDER_FAILED`；模型加载、原生库加载和统一内存分配失败属于运行级故障。
 
 ```csharp
 public interface IInvoiceOcr
@@ -1775,13 +1962,13 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 }
 ```
 
-错误类别包括输入校验、单文件失败、可重试的网络/AI 失败、邮箱认证、AI 认证、持久化、磁盘、WebView2 和系统错误。邮箱扫描至少使用 `MAILBOX_CREDENTIALS_INVALID`、`MAILBOX_TLS_FAILED`、`MAILBOX_SELECT_FAILED`、`MAILBOX_CONNECTION_FAILED`、`MAILBOX_INPUT_UNRESOLVED`、`ATTACHMENT_OVER_SIZE`、`ZIP_LIMIT_EXCEEDED`；AI 认证使用 `AI_AUTHENTICATION_FAILED`；持久化使用 `PERSISTENCE_DISK_FULL`、`DB_CORRUPTED`、`DB_MIGRATION_FAILED`、`RUN_RECOVERY_FAILED` 和 `ARCHIVE_RECOVERY_FAILED`。面向用户的消息安全且可本地化；诊断信息只保留脱敏后的技术细节。
+错误类别包括输入校验、单文件失败、可重试的网络/AI 失败、邮箱认证、AI 认证、配对、规则、归档、人工复核、OCR、持久化、磁盘、WebView2 和系统错误。邮箱扫描至少使用 `MAILBOX_CREDENTIALS_INVALID`、`MAILBOX_TLS_FAILED`、`MAILBOX_SELECT_FAILED`、`MAILBOX_CONNECTION_FAILED`、`MAILBOX_INPUT_UNRESOLVED`、`ATTACHMENT_OVER_SIZE`、`ZIP_LIMIT_EXCEEDED`；AI 认证使用 `AI_AUTHENTICATION_FAILED`；配对/规则使用 `PAIRING_AMBIGUOUS`、`PAIRING_CROSS_MESSAGE_DISABLED`、`RULESET_INVALID`、`PROVIDER_RULE_CONFLICT`、`SPECIAL_PARSER_CONFLICT`；归档/复核/OCR 使用 `ARCHIVE_NAME_CONFLICT`、`ARCHIVE_RECOVERY_FAILED`、`REVIEW_REVISION_CONFLICT`、`OCR_MODEL_LOAD_FAILED`、`OCR_IMAGE_INVALID`、`PDF_RENDER_FAILED`；持久化使用 `PERSISTENCE_DISK_FULL`、`DB_CORRUPTED`、`DB_MIGRATION_FAILED` 和 `RUN_RECOVERY_FAILED`。面向用户的消息安全且可本地化；诊断信息只保留脱敏后的技术细节。
 
 ## 11. 测试与验收
 
 ### 单元测试
 
-覆盖领域校验、金额和税额计算、规则、配对、查重、归档命名、路径安全、三类 parser 契约、OFD XML 变体、OCR 归一化、DeepSeek 响应校验、DPAPI 密钥存储、Serilog 日志字段和报表映射。
+覆盖领域校验、金额和税额计算、规则 AST/优先级、公司/供应商冲突、配对兼容性/评分/多最优解、查重、归档命名/清洗/冲突后缀、路径安全、人工复核字段白名单和 revision、三类 parser 契约、特殊 parser registry、OFD XML 变体、DocumentImage 生命周期、PDF 渲染和 OCR 归一化、模型 manifest hash 校验、DeepSeek 响应校验、DPAPI 密钥存储、Serilog 日志字段和报表映射。
 
 ### 集成测试
 
