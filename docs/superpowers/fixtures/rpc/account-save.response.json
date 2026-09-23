@@ -1,0 +1,21 @@
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-account-save-1",
+  "ok": true,
+  "result": {
+    "account": {
+      "accountId": "mail-account-1",
+      "emailAddress": "u***@example.com",
+      "imapHost": "imap.example.com",
+      "imapPort": 993,
+      "useTls": true,
+      "credentialName": "mail.imap.auth-code",
+      "displayName": "Primary mailbox",
+      "revision": 1,
+      "credentialConfigured": true,
+      "maskedEmailAddress": "u***@example.com",
+      "updatedAtUtc": "2026-09-23T10:00:00Z"
+    },
+    "configurationFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

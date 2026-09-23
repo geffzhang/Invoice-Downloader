@@ -1,0 +1,16 @@
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-account-save-conflict-1",
+  "ok": false,
+  "error": {
+    "code": "MAILBOX_ACCOUNT_REVISION_CONFLICT",
+    "scope": "account",
+    "retryable": false,
+    "userMessage": "邮箱账户已被其他操作修改，请刷新后重试。",
+    "detailsAvailable": true,
+    "details": {
+      "expectedRevision": 0,
+      "actualRevision": 1
+    }
+  }
+}

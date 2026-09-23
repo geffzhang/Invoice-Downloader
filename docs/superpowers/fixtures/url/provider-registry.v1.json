@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0",
+  "registryFingerprint": "fixture-registry-fingerprint",
+  "providers": [
+    {
+      "providerId": "direct-http",
+      "priority": 200,
+      "supportsDirectHttp": true,
+      "supportsBrowserFallback": false,
+      "capabilitiesVersion": "1.0"
+    },
+    {
+      "providerId": "playwright-browser",
+      "priority": 100,
+      "supportsDirectHttp": false,
+      "supportsBrowserFallback": true,
+      "capabilitiesVersion": "1.0"
+    }
+  ]
+}
