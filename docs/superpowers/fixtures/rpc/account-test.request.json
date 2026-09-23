@@ -1,0 +1,9 @@
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-account-test-1",
+  "method": "account.test",
+  "params": {
+    "accountId": "mail-account-1",
+    "mailbox": "INBOX"
+  }
+}

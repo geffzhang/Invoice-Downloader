@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "1.0",
+  "registryFingerprint": "fixture-parser-registry-fingerprint",
+  "parsers": [
+    { "parserId": "railway-ticket", "version": "1.0", "priority": 400, "sourceKinds": ["pdf"], "fixtureId": "railway-ticket-basic", "failureCode": "RAILWAY_PARSER_FAILED" },
+    { "parserId": "accommodation-folio", "version": "1.0", "priority": 390, "sourceKinds": ["pdf"], "fixtureId": "accommodation-folio-basic", "failureCode": "FOLIO_PARSER_FAILED" },
+    { "parserId": "foreign-invoice", "version": "1.0", "priority": 380, "sourceKinds": ["pdf", "image"], "fixtureId": "foreign-invoice-basic", "failureCode": "FOREIGN_INVOICE_PARSER_FAILED" },
+    { "parserId": "provider-special-layout", "version": "1.0", "priority": 300, "sourceKinds": ["pdf", "ofd", "xml", "url"], "fixtureId": "provider-special-layout-basic", "failureCode": "SPECIAL_PARSER_FAILED" }
+  ]
+}

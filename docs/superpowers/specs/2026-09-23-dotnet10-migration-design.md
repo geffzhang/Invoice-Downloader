@@ -363,7 +363,7 @@ public interface IWebViewNavigationPolicy
 | `account.list` | 无 | 非秘密邮箱账户摘要 | 只读；不返回授权码。 |
 | `account.save` | 非秘密账户 DTO、`expectedRevision` | 账户摘要和新 revision | 乐观并发；不保存 secret value。 |
 | `account.delete` | `accountId`、`expectedRevision` | 删除确认 | 活动运行引用时拒绝。 |
-| `account.test` | `accountId` 或临时非秘密连接参数 | 脱敏连接结果 | 不修改账户；授权码只从 DPAPI 按 `CredentialName` 读取。 |
+| `account.test` | `accountId`、可选 `mailbox` | 脱敏连接结果 | 不修改账户；省略 mailbox 时使用 `UserSettings.DefaultMailbox`；授权码只从 DPAPI 按 `CredentialName` 读取。 |
 | `ruleset.list` | `ruleSetId` | 规则版本摘要分页/列表 | 只读；按 version 降序返回。 |
 | `ruleset.get` | `ruleSetId`、`version` 可选 | 脱敏规则 JSON、AST fingerprint 和版本元数据 | 只读。 |
 | `ruleset.save` | `ruleSetId`、`expectedVersion`、schema JSON | 新规则版本、fingerprint 和配置指纹 | 乐观并发；不覆盖历史版本。 |
@@ -499,7 +499,9 @@ public sealed record AccountDeleteRequest(
   string AccountId,
   int ExpectedRevision);
 
-public sealed record AccountTestRequest(string AccountId);
+public sealed record AccountTestRequest(
+  string AccountId,
+  string? Mailbox = null);
 
 public sealed record AccountMutationResult(
   MailboxAccountSnapshot Account,
@@ -629,7 +631,12 @@ fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SET
 - `docs/superpowers/fixtures/rpc/run-progress.event.json`：事件 reducer 的顺序与重放样本；
 - `docs/superpowers/fixtures/providers/registry.v1.json`：首版内置供应商规则注册表和 parser 绑定；
 - `docs/superpowers/fixtures/providers/conflict.response.json`：`PROVIDER_RULE_CONFLICT` 字段级 details；
+- `docs/superpowers/fixtures/parsers/registry.v1.json`：首版特殊 parser registry；
+- `docs/superpowers/fixtures/parsers/conflict.response.json`：`SPECIAL_PARSER_CONFLICT` 字段级 details；
+- `docs/superpowers/fixtures/rpc/account-test.request.json`：账户测试 RPC request；
+- `docs/superpowers/fixtures/rpc/account-test.error.json`：账户 TLS 失败 RPC response；
 - `docs/superpowers/fixtures/url/provider-registry.v1.json`：首版 URL provider 注册表；
+- `docs/superpowers/fixtures/url/errors.v1.json`：URL 恢复错误、重试和 browser fallback 矩阵；
 - `docs/superpowers/fixtures/release/release-manifest.example.json`：发布 manifest 字段和资源条目示例。
 
 这些 fixture 是测试输入，不是用户数据，也不包含真实凭据。正式 .NET scaffold 后，测试项目必须将它们复制或链接到 `tests/*/Fixtures`，并为每个 fixture 增加 serializer round-trip、schema validation 和 fingerprint golden test。
@@ -2521,6 +2528,8 @@ public sealed record ParserContext(
 
   `xml-invoice`、`ofd-invoice` 和 `pdf-text` 是格式确定性 parser，不参与特殊 parser priority；通用 `ocr-text` 和 `vision-fallback` 不是 registry parser，而是 dispatcher 的 fallback route。每个 registry entry 必须拥有 source kind、MIME/魔数约束、fixture ID 和版本字符串；同一输入命中多个同 priority 条目时必须返回冲突，不通过注册顺序隐式选胜者。registry fingerprint 参与 `ConfigurationFingerprint`，运行开始后冻结。
 
+  `SPECIAL_PARSER_CONFLICT` 的 field-level details 固定为 `{ field: "parserId", documentId, candidates, resolution: "manual_review", requiresManualReview: true }`；`candidates` 按 `Priority DESC, ParserId ASC` 排序，只包含 parser ID、版本、priority 和 fixture ID，不包含原始文档内容。该错误不可重试，候选状态为 `ManualReview`，不得继续进入通用 OCR/DeepSeek fallback。
+
 实现由 `InvoiceParserDispatcher` 按文件扩展名、MIME、文件魔数和文档来源选择：
 
 ```text
@@ -3013,7 +3022,9 @@ DeepSeek 视觉配置固定为：
 
 使用 EF Core migrations 管理结构。发布包只包含已审查的 migration，启动时在独占迁移锁内按顺序执行；禁止 `EnsureCreated`、自动删除数据库、降级 migration 或运行时生成未知 schema。EF 的 `__EFMigrationsHistory` 是唯一迁移版本来源，发布版本同时记录应用 schema compatibility range。
 
-首版 migration assembly 固定为 `InvoiceFlowAI.Infrastructure`，migration history 使用 EF 默认表 `__EFMigrationsHistory`，首个 migration ID 固定为 `20260923_InitialSchema`，包含本规格表格中的全部表、外键、partial unique index、`RuleSets` 当前版本约束和 `MailboxAccounts` revision 约束。首版不拆出运行时 seed migration；内置 Recipe、parser/provider registry 和默认 RuleSet 通过只读发布资源加载，不写入业务数据库。
+首版 migration assembly 固定为 `InvoiceFlowAI.Infrastructure`，migration history 使用 EF 默认表 `__EFMigrationsHistory`，首个 migration ID 固定为 `20260923_InitialSchema`，包含本规格表格中的全部表、外键、partial unique index、`RuleSets` 当前版本约束和 `MailboxAccounts` revision 约束。首版不拆出运行时 seed migration；内置 Recipe、parser/provider registry 通过只读发布资源加载。默认 RuleSet 是例外：首次启动完成 migration 后，`RuleSetBootstrapper` 在独占恢复锁和同一 UoW 内将发布 fixture 导入 `RuleSets(ruleSetId="default", version=1)`，若该版本已存在则只校验 fingerprint，不重复插入或覆盖。
+
+`UserSettings` 的初始行在同一个 bootstrap UoW 中创建：`SettingsId="default"`、`Revision=1`、`DefaultMailbox="INBOX"`、`RuleSetId="default"`、`RuleSetVersion=1`。因此 `UserSettings` 的 RuleSet 外键始终有效；bootstrap 失败返回 `RULESET_BOOTSTRAP_FAILED`，阻止进入 `Ready`，不能静默使用内存默认规则。后续用户规则保存/回滚只追加新 RuleSet version，并在同一事务中更新 `UserSettings.RuleSetVersion` 指针。
 
 `20260923_InitialSchema` 的验收必须验证：
 
@@ -3195,7 +3206,7 @@ public sealed record MailboxAccount(
   string DisplayName = "");
 
 public sealed record MailboxAccountDraft(
-  string AccountId,
+  string? AccountId,
   string EmailAddress,
   string ImapHost,
   int ImapPort,
@@ -3283,6 +3294,8 @@ public interface IMailboxScanner
 ```
 
 `IMailboxAccountStore` 只保存非秘密账户配置；授权码永远只通过 `CredentialName` 引用 `ISecretStore`。`AccountId` 是本地生成的 opaque ID，不能使用邮箱地址作为主键；保存账户时必须规范化邮箱、host、mailbox 和 TLS 选项，校验 QQ/163 的 host 白名单或用户明确配置的受支持 host。删除账户前必须没有非终态运行引用它；账户 revision 冲突返回 `MAILBOX_ACCOUNT_REVISION_CONFLICT`。账户保存、删除和 secret 引用变更分别写入审计事件，但审计 payload 不含授权码。
+
+`MailboxAccountDraft.AccountId == null` 只允许在 `expectedRevision == 0` 的创建操作中出现，仓储在同一事务内生成新的 opaque `AccountId`；更新操作必须带已有 `AccountId` 和当前 expected revision。创建成功返回 `AccountMutationResult.Account.Revision=1`。账户测试使用请求中的 mailbox，省略时读取 `UserSettings.DefaultMailbox`，但测试不会改变默认 mailbox 或任何 revision。
 
 SQLite 增加 `MailboxAccounts` 表：`AccountId` 主键、`EmailAddress`、`ImapHost`、`ImapPort`、`UseTls`、`CredentialName`、`DisplayName`、`Revision`、`CreatedAtUtc`、`UpdatedAtUtc`；`EmailAddress` 不做全局唯一约束，`CredentialName` 只能匹配受控 secret 名称。`settings.get` 返回账户摘要和 `CredentialConfigured`，不返回授权码；`settings.update` 只能更新已有账户的非秘密字段，首次建账户使用独立的账户保存 command，避免空 `AccountId` 被隐式创建。
 
