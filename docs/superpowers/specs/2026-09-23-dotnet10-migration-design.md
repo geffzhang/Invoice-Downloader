@@ -483,6 +483,67 @@ fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SET
 
 桥接层负责传输、请求关联、序列化和事件转发，不负责邮箱扫描或发票解析。
 
+### 现有 HTML/JavaScript 前端接入映射
+
+首版继续使用仓库中的 `templates/index.html`、`templates/index_app.js` 和 `templates/static/**`，但 Python `window.pywebview.api` 不进入 .NET 运行时。WinUI 3 通过 WebView2 本地加载 `Web/index.html`，页面使用一个显式 `RpcClient` 和一个单一 `AppStore`；页面组件不直接调用 `window.chrome.webview`，也不直接持有运行级状态。
+
+现有页面到 .NET 模块的映射固定如下：
+
+| 现有前端表面 | .NET/WebView2 目标 | RPC/事件 |
+| --- | --- | --- |
+| `SettingsPage` 路由 `/` | `SettingsView` + `SettingsStore` | `bridge.hello`, `settings.get`, `settings.update`, `secret.set`, `secret.delete`, `run.start` |
+| `ProcessingPage` 路由 `/processing` | `ProcessingView` + `RunStore` | `run.get`, `run.cancel`, `run.retry`; 消费 `run.stageChanged`, `run.progress`, `run.documentResult`, `run.failed`, `run.completed`, `run.cancelled` |
+| `AnalysisPage` 路由 `/analysis` | `AnalysisView` + `ReviewStore` | `review.list`, `review.get`, `review.submit`, `report.open` |
+| `callApi()`/`waitForApi()` | `RpcClient` | request ID、超时、取消、错误 envelope、hello 状态和 WebView2 message transport |
+| 页面多个 `useState` | `AppStore` reducer | 所有页面通过 selector 读取状态，只能 dispatch action |
+| `load_user_settings` | `settings.get` | 非秘密设置、revision、fingerprint、秘密 configured/masked 状态 |
+| `save_user_settings` | `settings.update` | `ExpectedRevision`、规则集 revision、pipeline patch 和新的 fingerprint |
+| `test_email_auth` / `test_api_key` | 设置验证 command（首版可作为 `settings.validate` 扩展） | 只返回脱敏成功/失败状态，不返回秘密 |
+| `start_processing` | `run.start` | 只发送 `accountId`、非秘密运行参数和 secret reference |
+| `get_progress` | `run.get` + 推送事件 | 不再轮询；断线或 event sequence 跳跃时请求快照/补发事件 |
+| `get_results` | `run.get`、`review.list`、`report.open` | 分离运行摘要、复核分页和受控文件打开 |
+| `open_folder` / `view_invoice` | `report.open` 或受控 artifact command | 后端根据 `runId`、artifact ID 和相对路径校验，不接受任意绝对路径 |
+
+`RpcClient` 的唯一传输入口是：
+
+```javascript
+class RpcClient {
+  async call(method, params, options) {}
+  subscribe(handler) {}
+  close() {}
+}
+```
+
+它使用 `window.chrome.webview.postMessage(request)` 发送 JSON，监听 `window.chrome.webview.addEventListener("message", ...)` 接收 response/event。每个 request 使用唯一 `id`，维护 `pending[id]`，在超时、页面卸载或显式取消时清理；后端错误统一转换为 `{ code, scope, retryable, userMessage, detailsAvailable, details }`。`RpcClient` 只负责协议，不负责把错误写入页面文案。
+
+`AppStore` 的首版状态形状固定为：
+
+```javascript
+{
+  bridge: { status: "connecting|ready|degraded", protocolVersion: null, capabilities: [] },
+  settings: { value: null, revision: 0, configurationFingerprint: null, dirty: false, error: null },
+  run: { snapshot: null, events: [], lastEventSequence: 0, status: "idle", error: null },
+  reviews: { items: [], offset: 0, limit: 50, total: 0, hasMore: false, selected: null },
+  ui: { route: "/", busy: false, toast: null }
+}
+```
+
+reducer 只接受协议相关 action：`BRIDGE_READY`、`SETTINGS_LOADED`、`SETTINGS_UPDATED`、`RUN_STARTED`、`RUN_SNAPSHOT_REPLACED`、`RUN_EVENT_APPLIED`、`RUN_EVENT_GAP_DETECTED`、`RUN_CANCEL_REQUESTED`、`RUN_TERMINAL`、`REVIEW_PAGE_LOADED`、`REVIEW_SELECTED`、`REVIEW_UPDATED` 和 `RPC_FAILED`。事件 reducer 必须检查 `runId`、`eventSequence` 和终态幂等性：重复序号丢弃，序号跳跃触发 `run.get`，旧 run 的事件不能污染当前 run，终态事件只应用一次。React 组件不得自行合并后端事件或用本地计时器推断进度。
+
+页面启动顺序固定为：加载本地资源 -> `bridge.hello` -> `settings.get` 和当前 run 探测 -> 注册事件 listener -> 渲染设置页。WebView2 重新加载不会取消后端运行；重连后先用 `run.get(afterEventSequence)` 恢复，再开放取消、复核和导出操作。秘密永不写入 `sessionStorage`；sessionStorage 只允许保存当前路由、非秘密表单草稿和受控 QA token。
+
+资源复制和发布规则固定为：
+
+1. `templates/index.html` 复制为发布目录 `Web/index.html`；
+2. `templates/index_app.js` 复制为 `Web/index_app.js`；
+3. `templates/static/**` 原样复制为 `Web/static/**`，包括 React、ReactDOM、React Router、Tailwind、Material Symbols 字体；
+4. MSBuild `Content` 项目必须声明 `CopyToOutputDirectory=PreserveNewest` 和 `CopyToPublishDirectory=Always`，禁止运行时从 CDN 或网络补齐依赖；
+5. 每个 Web 资源进入 `release-manifest.json`，记录相对路径、长度、SHA-256 和资源版本；
+6. WebView2 固定导航到本地 `Web/index.html`，禁止导航到外部 URL，外部链接必须交给受控 shell command；
+7. 任一资源缺失、manifest hash 不匹配或本地导航失败都阻止进入可运行状态，并返回 `WEB_ASSET_INVALID`。
+
+迁移验收必须覆盖现有三页的路由进入、设置加载/更新、秘密 configured 状态、run.start、事件实时更新、断线重连、事件缺口重放、取消、复核 revision 冲突、报告打开和资源 hash 校验。旧的 Python 方法名只能出现在映射测试 fixture 中，不能作为 .NET RPC 的公开方法名。
+
 ## 5. ZeroPipeline 编排与运行生命周期
 
 由 `RunCoordinator` 创建运行上下文并构建 ZeroPipeline 图，由 `PipelineExecutor` 执行图。每次 `run.start` 都创建独立的图实例和运行上下文，不共享带状态的节点。
@@ -2002,7 +2063,121 @@ public sealed record ParserContext(
   }
   ```
 
-  规则优先级固定为：安全/路径和 `InvoiceAcceptanceService` 准入 > 文档类型内置规则 > 供应商规则 > 公司规则 > 用户自定义路由规则。用户规则只能改变允许的归档目录、分类、人工复核标记和跨邮件配对开关，不能修改 `DocumentId`、发票金额/日期、来源身份，不能绕过非目标公司检查、最低字段检查、路径安全或模型响应 schema。规则 AST 解析失败、未知字段、未知目录或同优先级冲突返回 `RULESET_INVALID`，不能部分应用。
+  用户规则使用 SQLite 保存不可变版本；文件系统不作为规则事实来源。当前版本通过 `IsCurrent`/当前指针确定，历史版本永不覆盖或删除。规则仓储属于 `InvoiceFlowAI.Application` 契约，EF Core 实现在 `InvoiceFlowAI.Infrastructure.Persistence`：
+
+  ```csharp
+  public sealed record RuleSetDraft(
+    string RuleSetId,
+    string SchemaVersion,
+    string SourceJson,
+    string CreatedBy);
+
+  public sealed record RuleSetSnapshot(
+    string RuleSetId,
+    string SchemaVersion,
+    int Version,
+    int? ParentVersion,
+    int? RollbackFromVersion,
+    int? RollbackTargetVersion,
+    string SourceJson,
+    RuleSet RuleSet,
+    string SourceFingerprint,
+    string AstFingerprint,
+    bool IsCurrent,
+    string CreatedBy,
+    DateTimeOffset CreatedAtUtc);
+
+  public sealed record RuleSetSummary(
+    string RuleSetId,
+    int Version,
+    string SchemaVersion,
+    string SourceFingerprint,
+    bool IsCurrent,
+    bool IsRollback,
+    DateTimeOffset CreatedAtUtc);
+
+  public interface IRuleSetStore
+  {
+    Task<RuleSetSnapshot?> GetCurrentAsync(
+      string ruleSetId,
+      CancellationToken cancellationToken);
+
+    Task<RuleSetSnapshot?> GetAsync(
+      string ruleSetId,
+      int version,
+      CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<RuleSetSummary>> ListVersionsAsync(
+      string ruleSetId,
+      CancellationToken cancellationToken);
+
+    Task<RuleSetSnapshot> SaveAsync(
+      RuleSetDraft draft,
+      int expectedCurrentVersion,
+      IUnitOfWork transaction,
+      CancellationToken cancellationToken);
+
+    Task<RuleSetSnapshot> RollbackAsync(
+      string ruleSetId,
+      int targetVersion,
+      int expectedCurrentVersion,
+      IUnitOfWork transaction,
+      CancellationToken cancellationToken);
+  }
+  ```
+
+  `SaveAsync` 和 `RollbackAsync` 必须在同一 UoW 内完成“锁定当前版本 -> 校验 expected version -> 解析/规范化 -> 插入新版本 -> 更新当前指针 -> 写入审计事件”。并发版本不一致返回 `RULESET_REVISION_CONFLICT`；解析、schema、字段、目录或优先级冲突返回 `RULESET_INVALID`/`RULESET_CONFLICT`，不得写入半成品。回滚不是删除或重用旧 revision，而是复制目标版本的规范化 AST 创建新版本，并填充 `RollbackFromVersion` 和 `RollbackTargetVersion`。运行、重试和人工复核只读取开始时保存的规则快照，不追随当前版本。
+
+  用户规则 JSON schema 首版为 `schemaVersion == "1.0"`。根对象只允许 `schemaVersion`、`ruleSetId` 和 `rules`；规则只允许 `ruleId`、`priority`、`enabled`、`when` 和 `then`。`when` 只允许 `providerFamily`、`documentType`、`sellerContains`、`purchaserRelation`、`subjectContains` 和 `invoiceNumberPrefix`；`then` 只允许 `archiveFolder`、`category`、`requireManualReview` 和 `allowCrossMessagePairing`。未声明字段、空 `ruleId`、重复 `ruleId`、非整数 priority、空规则数组、未知 enum、未知目录和 action 全为空均拒绝。
+
+  <!-- ruleset-json-fixture -->
+  ```json
+  {
+    "schemaVersion": "1.0",
+    "ruleSetId": "default",
+    "rules": [
+      {
+        "ruleId": "archive-flight",
+        "priority": 100,
+        "enabled": true,
+        "when": {
+          "documentType": "FlightInvoice",
+          "sellerContains": "航空"
+        },
+        "then": {
+          "archiveFolder": "交通/机票",
+          "category": "交通费",
+          "requireManualReview": false,
+          "allowCrossMessagePairing": true
+        }
+      }
+    ]
+  }
+  ```
+
+  规则升级链是显式、幂等、无副作用的纯函数：原始 JSON -> schema migration -> strict validation -> normalized AST -> fingerprints。首版只注册 `1.0 -> 1.0` 的 identity migration；未来 schema 升级必须提供 `IRuleSetSchemaMigration`，禁止运行时猜测字段含义。迁移失败、降级尝试或目标版本未知均返回 `RULESET_SCHEMA_UNSUPPORTED`，不改变当前版本。`SourceFingerprint` 对规范化 JSON 计算，`AstFingerprint` 对规范化 `RuleSet` 计算；两者都使用 canonical JSON 和 SHA-256。
+
+  规则优先级和冲突判定固定为：内置安全与准入规则优先于用户规则；用户规则按 `priority DESC, ruleId ASC` 稳定排序；同一优先级同时匹配且 action 结果不一致时返回 `RULESET_CONFLICT`，不能依赖 JSON 顺序选胜者。priority 相同但 action 完全相同的规则只保留第一个规范化规则，并写入诊断 warning，不改变业务结果；规范化后的 AST 参与 `AstFingerprint`。
+
+  `ConfigurationFingerprint` 的 canonical JSON 具体包含以下结构：
+
+  ```json
+  {
+    "applicationCompatibilityVersion": "2026-09-23-v1",
+    "recipeFingerprint": "sha256-lowercase-hex",
+    "settings": { "accountId": "account-1", "mailbox": "INBOX", "allowVisionFallback": true },
+    "ruleSet": { "ruleSetId": "default", "version": 3, "sourceFingerprint": "sha256-lowercase-hex", "astFingerprint": "sha256-lowercase-hex" },
+    "modelManifestVersion": "2026-09-23-v1",
+    "ocrManifestVersion": "2026-09-23-v1",
+    "pipelineOptions": { "aiRequestConcurrency": 2, "maxRetryAttempts": 2 }
+  }
+  ```
+
+  canonical JSON 规则固定为：对象属性按 ordinal 字典序排序；规则数组按 `priority DESC, ruleId ASC` 排序；连接数组按 `fromNodeId, fromPort, toNodeId, toPort` 排序；字符串先 trim 并按字段定义执行 Unicode NFC、大小写和路径规范化；缺省值在 schema 层补齐后再序列化；`DateOnly` 使用 `yyyy-MM-dd`；Decimal 使用 invariant culture 的固定规范表示；数组和集合不得因哈希表遍历顺序变化；空可选字段按 schema 统一省略或统一写入 null，首版统一省略未设置字段。时间戳、机器名、运行 ID、绝对路径、临时目录、秘密值、解密后的 API Key 和授权码永不进入 canonical JSON。
+
+  `RuleSetFingerprint` 参与 `ConfigurationFingerprint`，但 `ConfigurationFingerprint` 不反向写入规则内容，避免循环。规则保存、回滚、Recipe 变更、非秘密设置变更、模型/OCR manifest 变更都会生成新的完整 `ConfigurationFingerprint`；同一规范化输入必须得到同一结果。
+
+  规则优先级固定为：安全/路径和 `InvoiceAcceptanceService` 准入 > 文档类型内置规则 > 供应商规则 > 公司规则 > 用户自定义路由规则。用户规则只能改变允许的归档目录、分类、人工复核标记和跨邮件配对开关，不能修改 `DocumentId`、发票金额/日期、来源身份，不能绕过非目标公司检查、最低字段检查、路径安全或模型响应 schema。规则 AST 解析失败、未知字段、未知目录返回 `RULESET_INVALID`；同优先级 action 冲突返回 `RULESET_CONFLICT`；两者都不能部分应用。
 
   公司规则使用当前 Python 的三态关系：`target`、`non_target`、`unknown`。目标公司名称规范化后做大小写不敏感包含匹配；空值、`未知购买方` 等占位值为 `unknown`。文档类型的 `ExemptFromPurchaserCheck=true` 时不因 purchaser mismatch 拒绝；其他类型的 `non_target` 进入 `NonTargetCompanyInvoice` 或用户明确配置的保留策略，`unknown` 默认人工复核。
 
@@ -2466,6 +2641,7 @@ DeepSeek 视觉配置固定为：
 | `MailboxCursors` | `AccountId TEXT`、`Mailbox TEXT`、`UidValidity INTEGER`、`LastCompletedUid INTEGER`、`CursorRevision INTEGER`、`UpdatedAtUtc TEXT` | 复合主键 `(AccountId, Mailbox)`；`UidValidity` 变化时必须重置 `LastCompletedUid`。 |
 | `AuditEvents` | `AuditEventId TEXT`、`RunId TEXT`、`EventSequence INTEGER`、`EventType TEXT`、`Stage TEXT`、`NodeId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`ReasonCode TEXT`、`PayloadJson TEXT`、`PayloadHash TEXT`、`OccurredAtUtc TEXT` | `AuditEventId` 主键；`RunId` 外键；`(RunId, EventSequence)` 唯一；`(DocumentId, ProcessingRevision, EventType)` 索引；append-only，不允许 update/delete。 |
 | `RunEvents` | `RunId TEXT`、`EventSequence INTEGER`、`EventType TEXT`、`PayloadJson TEXT`、`EmittedAtUtc TEXT`、`ExpiresAtUtc TEXT` | 复合主键 `(RunId, EventSequence)`；`RunId` 外键；`(RunId, ExpiresAtUtc)` 索引；允许按保留策略 compact，但不得改变既有 sequence。 |
+| `RuleSets` | `RuleSetId TEXT`、`Version INTEGER`、`SchemaVersion TEXT`、`ParentVersion INTEGER`、`RollbackFromVersion INTEGER`、`RollbackTargetVersion INTEGER`、`SourceJson TEXT`、`NormalizedAstJson TEXT`、`SourceFingerprint TEXT`、`AstFingerprint TEXT`、`IsCurrent INTEGER`、`CreatedBy TEXT`、`CreatedAtUtc TEXT` | 复合主键 `(RuleSetId, Version)`；`RuleSetId` 当前版本 partial unique index；`SourceFingerprint`、`AstFingerprint` 索引；历史行 append-only，不允许 update/delete；`SourceJson`/AST 禁止秘密、原始邮件、图片和动态代码。 |
 | `ManualReviewItems` | `ReviewId TEXT`、`RunId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`ReasonCode TEXT`、`State TEXT`、`CurrentRevision INTEGER`、`CurrentResultJson TEXT`、`CreatedAtUtc TEXT`、`ResolvedAtUtc TEXT`、`ResolvedBy TEXT` | processing 复合外键；`ReviewId` 主键；同一 processing revision 只能有一个 open review 的 partial unique index；`CurrentRevision` 用于 optimistic concurrency。 |
 
 `Runs`、`Documents` 和 `DocumentProcessing` 使用不同层次的身份：`DocumentId` 表示跨运行稳定来源身份，`ProcessingRevision` 表示一次处理尝试/结果版本，`RunId` 表示本次运行。所有写入文档处理结果的入口必须使用 `(DocumentId, ProcessingRevision)` 做 upsert；重复投递只能返回已提交结果，不能新增第二份发票、归档或审计结果。新的运行创建新的 revision，人工修正也创建新的 revision 并保留原 revision。
