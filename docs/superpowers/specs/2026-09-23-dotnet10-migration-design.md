@@ -261,6 +261,24 @@ CI 顺序固定为：`verify-toolchain.ps1`、`dotnet restore --locked-mode`、R
 
 `id` 只用于一次 RPC 请求关联，前端必须保证同一活动请求中唯一；`runId` 标识长任务；`eventSequence` 在单个 run 内严格递增，事件不能依赖 WebView2 传输顺序来重排。后端对重复的幂等请求返回相同语义的响应，不重复创建运行或重复取消。
 
+### WebView2 安全边界
+
+WebView2 只承载随安装包发布的本地 UI，不被当作通用浏览器或本地文件管理器使用。`CoreWebView2Environment` 必须使用固定 WebView2 Runtime 路径、独立 user data folder 和禁用自动下载的配置；启动时校验 `Web/index.html` 及 `Web/static/**` 的 release manifest hash，校验失败不得导航。
+
+安全策略固定为：
+
+- 只允许初始导航到应用生成的本地 `Web/index.html`；`NavigationStarting` 拒绝所有 `http`、`https`、`file`、`data` 和未知 scheme 导航，外部链接只能由后端校验后交给 `ProcessStartInfo.UseShellExecute=true`；
+- 只接受来自当前 WebView2 页面 source 的 `WebMessageReceived`，消息必须是 UTF-8 JSON，单条请求上限 1 MiB，单条事件上限 4 MiB，超过上限返回 `RPC_MESSAGE_TOO_LARGE` 并断开当前 pending request；
+- 初始化后注入固定 CSP：禁止 `connect-src` 外联、禁止对象和插件、禁止 inline script/eval；本地资源依赖必须来自 manifest 中的相对路径；
+- 不启用 `AddHostObjectToScript`、`AllowExternalDrop`、自动下载、摄像头、麦克风、地理位置、通知、剪贴板读取或持久化浏览器凭据；页面不得访问 `localStorage` 保存秘密；
+- `WebResourceRequested` 只允许 `Web/` 根目录下的 manifest 资源，拒绝路径穿越、绝对路径、UNC 路径和符号链接解析后的目录外路径；
+- `CoreWebView2.Settings` 默认关闭 `AreDevToolsEnabled`、`AreDefaultContextMenusEnabled`、`IsZoomControlEnabled` 和密码保存；Debug 构建也只能由显式环境变量开启 DevTools，Release 永久关闭；
+- native host 不向页面暴露 DPAPI、数据库连接、MailKit、HTTP client、ZeroPipeline 或任意文件系统对象；桥接层只暴露单一 JSON message channel；
+- 处理 `ProcessFailed`、`WebResourceResponseReceived` 和 `NavigationCompleted` 失败时记录脱敏诊断并显示 `WEBVIEW_BRIDGE_NOT_READY`/`WEB_ASSET_INVALID`，不得把异常文本或本地路径发送给页面；
+- WebView2 重启或页面重载不终止后端运行，重新建立 message channel 后必须重新 `bridge.hello`，再通过 `run.get` 恢复状态。
+
+桥接层还必须设置请求级取消和生命周期边界：窗口关闭时先拒绝新请求，再等待 bridge flush 的短超时；窗口最小化、WebView2 崩溃和页面导航失败不能触发 `run.cancel`。所有 WebView2 事件处理器在环境销毁时注销，防止旧页面继续向新运行发送消息。WebView2 安全设置、固定 runtime 版本和资源 manifest 版本参与启动诊断，但不参与业务 `ConfigurationFingerprint`。
+
 ### 方法契约
 
 首版只公开以下方法，未知方法返回 `RPC_METHOD_NOT_FOUND`，未知参数返回 `RPC_INVALID_PARAMS`：
@@ -277,6 +295,10 @@ CI 顺序固定为：`verify-toolchain.ps1`、`dotnet restore --locked-mode`、R
 | `review.submit` | `reviewId`、修正字段、决定 | 更新后的候选终态 | 必须带 revision，重复 revision 不重复应用。 |
 | `settings.get` | 无或设置分组 | 非秘密设置 | API Key、邮箱授权码只返回 `configured` 和掩码状态。 |
 | `settings.update` | 非秘密设置 | 更新结果和配置指纹 | 不允许携带 API Key、邮箱授权码或其他秘密字段。 |
+| `ruleset.list` | `ruleSetId` | 规则版本摘要分页/列表 | 只读；按 version 降序返回。 |
+| `ruleset.get` | `ruleSetId`、`version` 可选 | 脱敏规则 JSON、AST fingerprint 和版本元数据 | 只读。 |
+| `ruleset.save` | `ruleSetId`、`expectedVersion`、schema JSON | 新规则版本、fingerprint 和配置指纹 | 乐观并发；不覆盖历史版本。 |
+| `ruleset.rollback` | `ruleSetId`、`targetVersion`、`expectedCurrentVersion` | 新 rollback 版本和配置指纹 | 创建新版本，不删除目标版本。 |
 | `secret.set` | `name`、`value` | `name`、`configured` | 只允许受控的秘密名称；写入 DPAPI 后不回显 value。 |
 | `secret.delete` | `name` | `name`、`configured=false` | 幂等删除；不返回旧值。 |
 | `report.open` | `runId`、报告类型 | 受控临时打开 token | 后端验证路径，不接受前端任意路径。 |
@@ -387,11 +409,47 @@ public sealed record SettingsUpdateResult(
     int Revision,
     string ConfigurationFingerprint,
     IReadOnlyList<string> ChangedSections);
+
+public sealed record RuleSetListRequest(string RuleSetId);
+
+public sealed record RuleSetGetRequest(string RuleSetId, int? Version = null);
+
+public sealed record RuleSetSaveRequest(
+  string RuleSetId,
+  int ExpectedVersion,
+  JsonElement RuleSetJson);
+
+public sealed record RuleSetRollbackRequest(
+  string RuleSetId,
+  int TargetVersion,
+  int ExpectedCurrentVersion);
+
+public sealed record RuleSetVersionDto(
+  string RuleSetId,
+  string SchemaVersion,
+  int Version,
+  int? ParentVersion,
+  int? RollbackFromVersion,
+  int? RollbackTargetVersion,
+  string SourceFingerprint,
+  string AstFingerprint,
+  bool IsCurrent,
+  DateTimeOffset CreatedAtUtc);
+
+public sealed record RuleSetGetResult(
+  RuleSetVersionDto Version,
+  JsonElement NormalizedRuleSetJson);
+
+public sealed record RuleSetMutationResult(
+  RuleSetVersionDto Version,
+  string ConfigurationFingerprint);
 ```
 
 分页规则固定为 offset/limit：`Offset >= 0`、`1 <= Limit <= 100`，排序为 `CreatedAtUtc ASC, ReviewId ASC`，返回 `Total`、`HasMore` 和 `NextOffset`。`review.get` 不返回 OCR 原文、图片、完整邮件正文、秘密或本地绝对路径；`EditableFields` 是后端白名单，不由前端决定。`review.submit` 的 `Decision` 与 `Correction` 组合必须满足：`CorrectAndAccept` 必须有 correction，其他决定不能携带 correction；`ExpectedRevision` 必须等于当前 review revision。
 
 `run.retry` 的 `DocumentIds` 与 `RetryAllEligible` 互斥；单次最多 100 个 document，只有 `Retryable=true` 且未超过最大次数的候选进入 `AcceptedDocumentIds`，其余进入 `RejectedDocumentIds` 并带稳定原因详情。`settings.update` 只允许非秘密配置，修改后由后端规范化 JSON、规则 AST 和 pipeline options 生成新的 `ConfigurationFingerprint`；`ExpectedRevision` 冲突返回 `SETTINGS_REVISION_CONFLICT`。
+
+`ruleset.save` 的 `RuleSetJson` 只能由后端按 `schemaVersion`、字段白名单、目录白名单、priority 范围和冲突规则解析；前端不得发送已解析 AST 作为权威输入。`ruleset.rollback` 只接受存在的历史版本，结果总是新的 version；规则保存/回滚和 `settings.update` 都返回新的 `ConfigurationFingerprint`，但不改变已运行任务的配置快照。规则 RPC 的未知字段、版本冲突、未知目标版本和无权限目录分别映射为 `RPC_INVALID_PARAMS`、`RULESET_REVISION_CONFLICT`、`RULESET_VERSION_NOT_FOUND` 和 `RULESET_INVALID`。
 
 首版 JSON fixtures 固定覆盖以下请求/响应：
 
@@ -1089,6 +1147,62 @@ public interface IUrlRecoveryService
     CancellationToken cancellationToken);
 }
 ```
+
+URL 恢复通过冻结的 provider registry 选择实现，禁止在 candidate 中携带 CLR 类型名或动态脚本：
+
+```csharp
+public sealed record UrlRecoveryProviderContext(
+  string ProviderId,
+  int Priority,
+  IReadOnlySet<string> AllowedDomains,
+  bool SupportsDirectHttp,
+  bool SupportsBrowserFallback);
+
+public interface IUrlRecoveryProvider
+{
+  string ProviderId { get; }
+  int Priority { get; }
+  bool CanHandle(Uri url);
+
+  Task<UrlRecoveryDownload> DownloadAsync(
+    Uri url,
+    UrlRecoveryProviderContext context,
+    CancellationToken cancellationToken);
+}
+
+public interface IUrlRecoveryProviderRegistry
+{
+  IReadOnlyList<IUrlRecoveryProvider> GetOrderedProviders();
+  string RegistryFingerprint { get; }
+}
+
+public sealed record UrlRecoveryDownload(
+  Uri FinalUri,
+  IReadOnlyList<string> RedirectedHostHashes,
+  string ContentType,
+  long ContentLength,
+  string TemporaryPath,
+  string ContentHash,
+  string ProviderId);
+
+public interface IUrlRecoveryDownloadLease : IAsyncDisposable
+{
+  string TemporaryPath { get; }
+  long BytesWritten { get; }
+  string ContentHash { get; }
+
+  Task<UrlRecoveryDownload> CommitAsync(
+    CancellationToken cancellationToken);
+
+  ValueTask AbandonAsync();
+}
+```
+
+首版 registry 只注册 `direct-http` 和 `playwright-browser` 两类 provider。provider 按 `Priority DESC, ProviderId ASC` 选择；同一 URL 多 provider 命中时选择第一项，但必须把候选 provider 列表和 registry fingerprint 写入脱敏 trace。`AllowedDomains` 使用规范化 host 后缀匹配，禁止把 `example.com.evil.test` 视为 `example.com`；每次重定向都重新执行协议、host、端口和私有网段检查。只允许 `https`，除非内置 provider 明确声明受控的 `http` 本地测试模式。
+
+下载必须通过 `IUrlRecoveryDownloadLease : IAsyncDisposable` 管理临时文件：先限制响应头 `Content-Length`，再以流式读取执行硬字节上限，写入应用 staging 目录并计算 SHA-256；随后依次验证最终 URI、响应 MIME、文件魔数、扩展名、大小和内容哈希，验证成功后由 `CommitAsync` 原子转交 candidate processing。任何失败都调用 `AbandonAsync`/`DisposeAsync` 删除临时文件并返回稳定的 `URL_*` candidate failure。`TemporaryPath` 不进入持久化、日志或 RPC，只在 lease 生命周期内有效；lease 只能 commit 一次，重复 commit 返回已提交摘要，不能生成第二个 candidate。
+
+`playwright-browser` 使用单个受限 browser context lease：禁止下载到默认 Downloads、禁止页面导航到非允许域名、禁止执行用户脚本、禁止访问本地文件和非必要权限；下载事件必须在 context 关闭前完成 hash/魔数校验。浏览器 context、page、response stream 和临时文件都必须在成功、失败、取消和超时路径释放。provider registry 在应用启动后冻结，变更 registry fingerprint 必须生成新的 `ConfigurationFingerprint`。
 
 非 URL candidate 直接返回 `Recovered=true`；URL 恢复成功必须验证域名、重定向链、响应大小、文件魔数和内容哈希。恢复失败返回 `CandidateFailure`，由 `RecoverUrlsNode` 转换为唯一结果端口中的 `CandidateProcessResult`。认证失败、限流和网络超时分别映射为稳定 reason code，不在服务内部无限重试。
 
@@ -2021,7 +2135,7 @@ public sealed record ParserContext(
     string StagingDirectory,
     bool AllowOcrFallback,
     bool AllowVisionFallback,
-    string CustomRules,
+  RuleSet RuleSet,
     string ConfigurationFingerprint);
 ```
 
@@ -2235,6 +2349,17 @@ public sealed record ParserContext(
 
   注册顺序固定为：格式确定性 parser -> 特殊票据 parser（火车票、Folio、国外发票、供应商专用布局）-> 通用 OCR/DeepSeek fallback。`CanParse=false` 返回 null；`CanParse=true` 但解析失败必须返回稳定的 `InvoiceParseResult`，不能静默降级成普通票据。相同 priority 的多个 parser 同时匹配时返回 `SPECIAL_PARSER_CONFLICT`，交由人工复核。注册表在应用启动时冻结并记录版本指纹，运行中不能改变。
 
+  首版特殊 parser registry 的稳定条目为：
+
+  | ParserId | Priority | 匹配条件 | 失败语义 |
+  | --- | ---: | --- | --- |
+  | `railway-ticket` | 400 | PDF 文本/版式包含铁路票据特征 | `RAILWAY_PARSER_FAILED` |
+  | `accommodation-folio` | 390 | 供应商或 PDF 文本命中 folio 特征 | `FOLIO_PARSER_FAILED` |
+  | `foreign-invoice` | 380 | 非中文金额/日期布局和供应商证据同时命中 | `FOREIGN_INVOICE_PARSER_FAILED` |
+  | `provider-special-layout` | 300 | `IProviderRuleRegistry` 返回明确 parser ID | `SPECIAL_PARSER_FAILED` |
+
+  `xml-invoice`、`ofd-invoice` 和 `pdf-text` 是格式确定性 parser，不参与特殊 parser priority；通用 `ocr-text` 和 `vision-fallback` 不是 registry parser，而是 dispatcher 的 fallback route。每个 registry entry 必须拥有 source kind、MIME/魔数约束、fixture ID 和版本字符串；同一输入命中多个同 priority 条目时必须返回冲突，不通过注册顺序隐式选胜者。registry fingerprint 参与 `ConfigurationFingerprint`，运行开始后冻结。
+
 实现由 `InvoiceParserDispatcher` 按文件扩展名、MIME、文件魔数和文档来源选择：
 
 ```text
@@ -2325,7 +2450,7 @@ public sealed record FieldExtractionRequest(
   string OcrText,
   IReadOnlyList<OcrLine> OcrLines,
   IReadOnlyList<RenderedPage> Pages,
-  string CustomRules,
+  RuleSet RuleSet,
   bool AllowVisionFallback);
 
 public sealed record FieldExtractionResult(
@@ -2335,6 +2460,55 @@ public sealed record FieldExtractionResult(
   bool RequiresManualReview,
   ExtractionTrace Trace);
 ```
+
+`InvoiceFlowAI.Application` 只依赖 `IInvoiceFieldExtractor`；`IChatClient`、`OpenAIClient`、HTTP handler 和 DeepSeek JSON 都只能存在于 `InvoiceFlowAI.Infrastructure.Ai`。基础设施层使用以下受控 adapter 边界：
+
+```csharp
+public sealed record DeepSeekAdapterOptions(
+  Uri Endpoint,
+  string Model,
+  decimal Temperature,
+  int MaxOutputTokens,
+  TimeSpan RequestTimeout,
+  int MaxAttempts,
+  int MaxRequestBytes,
+  int MaxImageBytes,
+  int MaxImagePixels,
+  string ImageDetail);
+
+public sealed record DeepSeekExtractionRequest(
+  string PromptVersion,
+  string SystemInstruction,
+  string UserText,
+  IReadOnlyList<DeepSeekImagePart> Images,
+  string ConfigurationFingerprint);
+
+public sealed record DeepSeekImagePart(
+  string MimeType,
+  string Base64Data,
+  int Width,
+  int Height);
+
+public sealed record DeepSeekExtractionResponse(
+  JsonElement Json,
+  string Model,
+  int? PromptTokens,
+  int? CompletionTokens,
+  string ResponseFingerprint);
+
+public interface IDeepSeekAdapter
+{
+  Task<DeepSeekExtractionResponse> CompleteStructuredAsync(
+    DeepSeekExtractionRequest request,
+    CancellationToken cancellationToken);
+}
+```
+
+adapter 构造时固定 `Endpoint=https://api.deepseek.com`、`Model=deepseek-flash` 的默认值，并从 `ISecretStore` 读取 `deepseek.api-key`；API Key 不进入 request DTO、日志、`ConfigurationFingerprint` 或 ZeroPipeline context。每次请求在发送前验证图片 MIME、宽高、单图大小和总请求大小，超过限制直接返回 `AI_REQUEST_TOO_LARGE`，不能依赖远端拒绝。`IDeepSeekAdapter` 只返回结构化 JSON 和脱敏 usage/fingerprint，响应文本不能绕过 `InvoiceResponseSchema` 和 `InvoiceNormalizer`。
+
+重试只允许连接失败、超时和明确的 429；使用 `Retry-After` 或指数退避并受 `MaxAttempts` 限制。401/403、无效 API Key、模型不存在、请求体过大、图片格式不支持和 schema 不兼容不重试。adapter 维护单个运行共享的认证失败门闩：首次确定的 401/403 立即阻止新的请求并向 `RunCoordinator` 发布一次 `AI_AUTHENTICATION_FAILED`，已经完成的 candidate 保留结果，未完成 candidate 由统一运行失败规则收束，不能为每个 candidate 重复尝试相同 Key。
+
+Track A/Track B 共用同一个 adapter，但 adapter 不决定业务路由；路由由 `IInvoiceFieldExtractor` 决定。fake `IChatClient` 测试必须覆盖文本 content、`image_url` content block、响应 fence 清理、嵌套 JSON 拒绝、超时、429、401/403、总请求大小和取消。真实 DeepSeek 兼容端点测试只验证脱敏的请求结构和 response schema，不记录或保存 API Key/票据内容。
 
 `ExtractionRoute` 和 `ExtractionTrace` 是不包含原文和图像的诊断 DTO：
 
@@ -2639,6 +2813,7 @@ DeepSeek 视觉配置固定为：
 | `ArchivedArtifacts` | `ArtifactId TEXT`、`RunId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`Role TEXT`、`RelativePath TEXT`、`FileName TEXT`、`ContentHash TEXT`、`State TEXT`、`AlreadyExisted INTEGER`、`CreatedAtUtc TEXT`、`CommittedAtUtc TEXT` | processing 复合外键；`ArtifactId` 主键；`(RunId, DocumentId, ProcessingRevision, Role, ContentHash)` 唯一；`RelativePath` 只保存相对输出路径。 |
 | `RunCheckpoints` | `RunId TEXT`、`NodeId TEXT`、`Stage TEXT`、`LastCommittedSequence INTEGER`、`InputCursorJson TEXT`、`OutputCount INTEGER`、`State TEXT`、`CheckpointRevision INTEGER`、`UpdatedAtUtc TEXT` | 复合主键 `(RunId, NodeId)`；`RunId` 外键；`(RunId, Stage, LastCommittedSequence)` 索引；cursor JSON 不得包含秘密或原始正文。 |
 | `MailboxCursors` | `AccountId TEXT`、`Mailbox TEXT`、`UidValidity INTEGER`、`LastCompletedUid INTEGER`、`CursorRevision INTEGER`、`UpdatedAtUtc TEXT` | 复合主键 `(AccountId, Mailbox)`；`UidValidity` 变化时必须重置 `LastCompletedUid`。 |
+| `MailboxAccounts` | `AccountId TEXT`、`EmailAddress TEXT`、`ImapHost TEXT`、`ImapPort INTEGER`、`UseTls INTEGER`、`CredentialName TEXT`、`DisplayName TEXT`、`Revision INTEGER`、`CreatedAtUtc TEXT`、`UpdatedAtUtc TEXT` | `AccountId` 主键；`Revision` 用于乐观并发；`CredentialName` 只能引用受控 secret 名称；不保存授权码。 |
 | `AuditEvents` | `AuditEventId TEXT`、`RunId TEXT`、`EventSequence INTEGER`、`EventType TEXT`、`Stage TEXT`、`NodeId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`ReasonCode TEXT`、`PayloadJson TEXT`、`PayloadHash TEXT`、`OccurredAtUtc TEXT` | `AuditEventId` 主键；`RunId` 外键；`(RunId, EventSequence)` 唯一；`(DocumentId, ProcessingRevision, EventType)` 索引；append-only，不允许 update/delete。 |
 | `RunEvents` | `RunId TEXT`、`EventSequence INTEGER`、`EventType TEXT`、`PayloadJson TEXT`、`EmittedAtUtc TEXT`、`ExpiresAtUtc TEXT` | 复合主键 `(RunId, EventSequence)`；`RunId` 外键；`(RunId, ExpiresAtUtc)` 索引；允许按保留策略 compact，但不得改变既有 sequence。 |
 | `RuleSets` | `RuleSetId TEXT`、`Version INTEGER`、`SchemaVersion TEXT`、`ParentVersion INTEGER`、`RollbackFromVersion INTEGER`、`RollbackTargetVersion INTEGER`、`SourceJson TEXT`、`NormalizedAstJson TEXT`、`SourceFingerprint TEXT`、`AstFingerprint TEXT`、`IsCurrent INTEGER`、`CreatedBy TEXT`、`CreatedAtUtc TEXT` | 复合主键 `(RuleSetId, Version)`；`RuleSetId` 当前版本 partial unique index；`SourceFingerprint`、`AstFingerprint` 索引；历史行 append-only，不允许 update/delete；`SourceJson`/AST 禁止秘密、原始邮件、图片和动态代码。 |
@@ -2814,6 +2989,44 @@ public sealed record MailboxAccount(
   string CredentialName = "mail.imap.auth-code",
   string DisplayName = "");
 
+public sealed record MailboxAccountDraft(
+  string AccountId,
+  string EmailAddress,
+  string ImapHost,
+  int ImapPort,
+  bool UseTls,
+  string CredentialName,
+  string DisplayName = "");
+
+public sealed record MailboxAccountSnapshot(
+  MailboxAccount Account,
+  int Revision,
+  bool CredentialConfigured,
+  string MaskedEmailAddress,
+  DateTimeOffset UpdatedAtUtc);
+
+public interface IMailboxAccountStore
+{
+  Task<IReadOnlyList<MailboxAccountSnapshot>> ListAsync(
+    CancellationToken cancellationToken);
+
+  Task<MailboxAccountSnapshot?> GetAsync(
+    string accountId,
+    CancellationToken cancellationToken);
+
+  Task<MailboxAccountSnapshot> SaveAsync(
+    MailboxAccountDraft draft,
+    int expectedRevision,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+
+  Task DeleteAsync(
+    string accountId,
+    int expectedRevision,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+}
+
 public sealed record MailboxFilterRules(
   IReadOnlySet<string>? AllowedSenderAddresses = null,
   IReadOnlySet<string>? AllowedSenderDomains = null,
@@ -2863,6 +3076,10 @@ public interface IMailboxScanner
     CancellationToken cancellationToken);
 }
 ```
+
+`IMailboxAccountStore` 只保存非秘密账户配置；授权码永远只通过 `CredentialName` 引用 `ISecretStore`。`AccountId` 是本地生成的 opaque ID，不能使用邮箱地址作为主键；保存账户时必须规范化邮箱、host、mailbox 和 TLS 选项，校验 QQ/163 的 host 白名单或用户明确配置的受支持 host。删除账户前必须没有非终态运行引用它；账户 revision 冲突返回 `MAILBOX_ACCOUNT_REVISION_CONFLICT`。账户保存、删除和 secret 引用变更分别写入审计事件，但审计 payload 不含授权码。
+
+SQLite 增加 `MailboxAccounts` 表：`AccountId` 主键、`EmailAddress`、`ImapHost`、`ImapPort`、`UseTls`、`CredentialName`、`DisplayName`、`Revision`、`CreatedAtUtc`、`UpdatedAtUtc`；`EmailAddress` 不做全局唯一约束，`CredentialName` 只能匹配受控 secret 名称。`settings.get` 返回账户摘要和 `CredentialConfigured`，不返回授权码；`settings.update` 只能更新已有账户的非秘密字段，首次建账户使用独立的账户保存 command，避免空 `AccountId` 被隐式创建。
 
 默认 `AllowedExtensions` 为 `.pdf`、`.ofd`、`.xml`、`.jpg`、`.jpeg`、`.png` 和 `.zip`，比较时统一转为小写并以文件魔数复核，不能只信任扩展名。单个直接附件或 ZIP 成员超过 5 MiB 时不解包为正常 candidate；在 `KeepFilteredOuterArchive=true` 时保留外层文件并产生 `ATTACHMENT_OVER_SIZE` 或 `ZIP_MEMBER_OVER_SIZE` 的候选结果。ZIP 超过深度、成员数或展开总量限制时停止继续展开，保留外层容器并产生 `ZIP_LIMIT_EXCEEDED`，禁止 Zip Slip、绝对路径、符号链接和重复展开。
 
