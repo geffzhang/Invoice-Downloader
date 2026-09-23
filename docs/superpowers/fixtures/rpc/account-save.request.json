@@ -1,0 +1,17 @@
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-account-save-1",
+  "method": "account.save",
+  "params": {
+    "expectedRevision": 0,
+    "account": {
+      "accountId": "mail-account-1",
+      "emailAddress": "user@example.com",
+      "imapHost": "imap.example.com",
+      "imapPort": 993,
+      "useTls": true,
+      "credentialName": "mail.imap.auth-code",
+      "displayName": "Primary mailbox"
+    }
+  }
+}

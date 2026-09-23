@@ -185,6 +185,39 @@ build/
 
 CI 顺序固定为：`verify-toolchain.ps1`、`dotnet restore --locked-mode`、Release build/test、`dotnet publish -r win-x64 --self-contained true`、模型和 release manifest 校验、WiX x64 MSI 构建。WiX 阶段只消费 publish 输出和已校验的 Fixed WebView2/OCR/Chromium/许可证资产，不下载运行时文件。
 
+### DI 组合根与启动图
+
+`InvoiceFlowAI.App` 是唯一组合根。`InvoiceFlowAI.Infrastructure` 提供 `AddInvoiceFlowInfrastructure(IServiceCollection, AppPaths)`，`InvoiceFlowAI.Application` 提供 `AddInvoiceFlowApplication(IServiceCollection)`；页面桥接和 WinUI 生命周期不反向注册到 Domain。所有 singleton/scoped/transient 生命周期固定如下：
+
+| 生命周期 | 服务 |
+| --- | --- |
+| Singleton | `ISecretStore`、`IProviderRuleRegistry`、`IDocumentSpecialCaseParserRegistry`、`IUrlRecoveryProviderRegistry`、`IRecipeRegistry`、`IEventReplayStore`、`IProgressPublisher`、`IChatClient` factory、`Serilog ILogger` |
+| Scoped/run scoped | `InvoiceFlowDbContext`、`IUnitOfWorkFactory`、仓储、`IRuleSetStore`、`IMailboxAccountStore`、`IRunStateStore`、`IAuditStore`、`RunCoordinator`、`PipelineContext`、`IInvoiceFieldExtractor` |
+| Transient | `IRpcDispatcher` handlers、`IInvoiceParser` adapters、`IInvoiceOcr` request wrapper、`IUrlRecoveryService`、`IArchiveService`、`IReportExporter`、DTO validators |
+
+启动状态机固定为：
+
+```text
+ProcessStart
+  -> SingleInstanceLock
+  -> AppPathsResolved
+  -> SerilogStarted
+  -> ReleaseManifestVerified
+  -> FixedWebView2EnvironmentCreated
+  -> SQLiteOpenedAndIntegrityChecked
+  -> EFCoreMigrationsApplied
+  -> BuiltInRegistriesFrozen
+  -> BuiltInRecipeValidated
+  -> DependencyGraphBuilt
+  -> WebView2LocalAssetsLoaded
+  -> RpcBridgeReady
+  -> Ready
+```
+
+任一启动步骤失败都不得打开可运行的设置页：manifest/资源失败返回 `WEB_ASSET_INVALID`，WebView2 环境失败返回 `WEBVIEW_RUNTIME_UNAVAILABLE`，数据库迁移/完整性失败返回 `DB_MIGRATION_FAILED` 或 `DB_CORRUPTED`，Recipe/registry 失败返回 `RECIPE_*`。`bridge.hello` 只能在 `RpcBridgeReady` 后成功。启动期间不读取或解密 API Key/邮箱授权码；只有 `run.start` 或账户测试命令在服务边界内按 secret reference 读取。
+
+`RunCoordinator` 每次运行创建独立的 run-scoped service scope、`DbContext`、UoW factory、ZeroPipeline graph 和 `PipelineContext`；窗口关闭、WebView2 重启和页面重载不释放活动 run scope。运行终态提交后由 coordinator 释放 scope，启动恢复则根据数据库的 run snapshot 建立新的 scope，禁止复用上次进程的 service 实例。
+
 ## 4. WebView2 契约
 
 前端通过 `window.chrome.webview.postMessage` 向 `InvoiceFlowAI.App` 发送 JSON/RPC 请求，并通过 WebView2 `message` 事件接收响应和异步事件。协议固定为 `invoiceflow.rpc.v1`，JSON 属性使用 camelCase，时间使用 UTC ISO-8601，金额使用字符串或已明确精度的 JSON number，所有 ID 使用不透明字符串。页面不直接访问文件系统、DPAPI、数据库、MailKit、HTTP 或 ZeroPipeline。
@@ -279,6 +312,36 @@ WebView2 只承载随安装包发布的本地 UI，不被当作通用浏览器�
 
 桥接层还必须设置请求级取消和生命周期边界：窗口关闭时先拒绝新请求，再等待 bridge flush 的短超时；窗口最小化、WebView2 崩溃和页面导航失败不能触发 `run.cancel`。所有 WebView2 事件处理器在环境销毁时注销，防止旧页面继续向新运行发送消息。WebView2 安全设置、固定 runtime 版本和资源 manifest 版本参与启动诊断，但不参与业务 `ConfigurationFingerprint`。
 
+宿主实现拆分为三个只位于 `InvoiceFlowAI.App` 的组件：
+
+```csharp
+public interface IWebView2Host : IAsyncDisposable
+{
+  Task InitializeAsync(CancellationToken cancellationToken);
+  Task NavigateLocalAsync(CancellationToken cancellationToken);
+  Task PostJsonAsync(JsonDocument message, CancellationToken cancellationToken);
+  event EventHandler<JsonDocument>? MessageReceived;
+  event EventHandler<WebViewFailure>? Failed;
+}
+
+public interface IWebViewAssetVerifier
+{
+  Task VerifyAsync(string webRoot, string manifestPath, CancellationToken cancellationToken);
+}
+
+public interface IWebViewNavigationPolicy
+{
+  bool IsAllowedLocalUri(Uri uri);
+  bool IsAllowedExternalUri(Uri uri);
+}
+```
+
+`WebView2Host.InitializeAsync` 的固定顺序为：创建 `CoreWebView2Environment` -> 设置 Fixed Runtime user data folder -> 注册 `NavigationStarting`、`WebResourceRequested`、`WebMessageReceived`、`ProcessFailed` -> 注册本地资源 filter -> 应用 settings/CSP -> 完成 manifest 校验 -> `NavigateLocalAsync`。`WebMessageReceived` 只把 JSON 交给 `IRpcDispatcher`; dispatcher 在 UI synchronization context 外执行 handler，响应和事件回到 WebView2 UI thread。任何 handler 不得直接调用 WinUI 控件或持有 `CoreWebView2`。
+
+本地资源映射固定为 `https://app.local/Web/...` 的虚拟 host mapping，而不是 `file://`；mapping 只允许发布目录下的规范化相对路径。导航 policy 允许的唯一初始 URI 是 `https://app.local/Web/index.html`，外部 URI 只允许 `https/http` 且通过 `IWebViewNavigationPolicy` 交给系统 shell，不能在 WebView2 内打开。WebMessage 的原始 JSON 在进入 serializer 前检查字节上限和 UTF-8 合法性；请求取消 token 与 WebView2 page instance 绑定，旧 page 的 response 不得写入新 page。
+
+宿主测试必须使用 fake `IWebView2Host` 验证：初始化顺序、manifest hash 失败、非法导航、路径穿越、超大消息、重复 response、页面重载、`ProcessFailed` 重建、旧 page 消息丢弃和关闭时 pending request 清理。至少一个 Windows UI 集成测试使用真实 WebView2 Fixed Runtime 验证本地 `index.html`、CSS、JS、字体和第一条 `bridge.hello` 往返消息。
+
 ### 方法契约
 
 首版只公开以下方法，未知方法返回 `RPC_METHOD_NOT_FOUND`，未知参数返回 `RPC_INVALID_PARAMS`：
@@ -295,6 +358,10 @@ WebView2 只承载随安装包发布的本地 UI，不被当作通用浏览器�
 | `review.submit` | `reviewId`、修正字段、决定 | 更新后的候选终态 | 必须带 revision，重复 revision 不重复应用。 |
 | `settings.get` | 无或设置分组 | 非秘密设置 | API Key、邮箱授权码只返回 `configured` 和掩码状态。 |
 | `settings.update` | 非秘密设置 | 更新结果和配置指纹 | 不允许携带 API Key、邮箱授权码或其他秘密字段。 |
+| `account.list` | 无 | 非秘密邮箱账户摘要 | 只读；不返回授权码。 |
+| `account.save` | 非秘密账户 DTO、`expectedRevision` | 账户摘要和新 revision | 乐观并发；不保存 secret value。 |
+| `account.delete` | `accountId`、`expectedRevision` | 删除确认 | 活动运行引用时拒绝。 |
+| `account.test` | `accountId` 或临时非秘密连接参数 | 脱敏连接结果 | 不修改账户；授权码只从 DPAPI 按 `CredentialName` 读取。 |
 | `ruleset.list` | `ruleSetId` | 规则版本摘要分页/列表 | 只读；按 version 降序返回。 |
 | `ruleset.get` | `ruleSetId`、`version` 可选 | 脱敏规则 JSON、AST fingerprint 和版本元数据 | 只读。 |
 | `ruleset.save` | `ruleSetId`、`expectedVersion`、schema JSON | 新规则版本、fingerprint 和配置指纹 | 乐观并发；不覆盖历史版本。 |
@@ -410,6 +477,26 @@ public sealed record SettingsUpdateResult(
     string ConfigurationFingerprint,
     IReadOnlyList<string> ChangedSections);
 
+public sealed record AccountSaveRequest(
+  MailboxAccountDraft Account,
+  int ExpectedRevision);
+
+public sealed record AccountDeleteRequest(
+  string AccountId,
+  int ExpectedRevision);
+
+public sealed record AccountTestRequest(string AccountId);
+
+public sealed record AccountMutationResult(
+  MailboxAccountSnapshot Account,
+  string ConfigurationFingerprint);
+
+public sealed record AccountTestResult(
+  string AccountId,
+  bool Succeeded,
+  string? FailureCode = null,
+  string SafeMessage = "");
+
 public sealed record RuleSetListRequest(string RuleSetId);
 
 public sealed record RuleSetGetRequest(string RuleSetId, int? Version = null);
@@ -517,6 +604,16 @@ public sealed record RuleSetMutationResult(
 ```
 
 fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SETTINGS_REVISION_CONFLICT`、`RUN_RETRY_SELECTION_INVALID` 和未知字段的失败响应；所有 fixture 通过 Contracts serializer round-trip 测试，确保 camelCase、DateOnly、Decimal 和 enum 字符串表示稳定。
+
+当前已提交的 golden fixture 路径为：
+
+- `docs/superpowers/fixtures/recipe/invoiceflow.default.v1.json`：Recipe schema、节点注册、连接和执行策略；
+- `docs/superpowers/fixtures/rules/default.v1.json`：RuleSet schema、priority 和 action；
+- `docs/superpowers/fixtures/rpc/account-save.request.json`：账户保存 RPC request；
+- `docs/superpowers/fixtures/rpc/run-progress.event.json`：事件 reducer 的顺序与重放样本；
+- `docs/superpowers/fixtures/release/release-manifest.example.json`：发布 manifest 字段和资源条目示例。
+
+这些 fixture 是测试输入，不是用户数据，也不包含真实凭据。正式 .NET scaffold 后，测试项目必须将它们复制或链接到 `tests/*/Fixtures`，并为每个 fixture 增加 serializer round-trip、schema validation 和 fingerprint golden test。
 
 ### 事件契约
 
@@ -2851,6 +2948,21 @@ DeepSeek 视觉配置固定为：
 
 使用 EF Core migrations 管理结构。发布包只包含已审查的 migration，启动时在独占迁移锁内按顺序执行；禁止 `EnsureCreated`、自动删除数据库、降级 migration 或运行时生成未知 schema。EF 的 `__EFMigrationsHistory` 是唯一迁移版本来源，发布版本同时记录应用 schema compatibility range。
 
+首版 migration assembly 固定为 `InvoiceFlowAI.Infrastructure`，migration history 使用 EF 默认表 `__EFMigrationsHistory`，首个 migration ID 固定为 `20260923_InitialSchema`，包含本规格表格中的全部表、外键、partial unique index、`RuleSets` 当前版本约束和 `MailboxAccounts` revision 约束。首版不拆出运行时 seed migration；内置 Recipe、parser/provider registry 和默认 RuleSet 通过只读发布资源加载，不写入业务数据库。
+
+`20260923_InitialSchema` 的验收必须验证：
+
+- `PRAGMA foreign_keys=ON`、WAL、busy timeout 和 text/date/decimal 转换配置在 migration 后生效；
+- `(RuleSetId, Version)`、当前 RuleSet partial unique index、`MailboxAccounts.Revision`、`(AccountId, Mailbox)` cursor 主键和所有 processing 复合外键存在；
+- `AuditEvents` append-only 约束、`RunEvents` sequence 主键、open review partial unique index 和非终态 run partial unique index 存在；
+- migration 在空数据库可重复启动但不会重复执行，第二次启动只读取 `__EFMigrationsHistory`；
+- migration 中途注入 `SQLITE_BUSY`、`SQLITE_FULL` 或 schema mismatch 时事务回滚、保留备份并阻止新 run；
+- 从备份恢复后重新执行 migration 不产生重复规则版本、账户 revision、审计事件或 run event。
+
+实现禁止通过 `dotnet ef database update` 在发布机外生成未审查 migration；CI 必须运行 `dotnet ef migrations script --idempotent` 与空库/已有库 smoke test，并比较生成脚本的 migration ID 集合。`DbContext.Database.MigrateAsync` 只能由启动恢复阶段调用，业务服务和测试 fixture 不得自行迁移数据库。
+
+由于当前仓库尚未创建 .NET solution，`20260923_InitialSchema` 的实际 `Migration`/`ModelSnapshot` C# 文件、生成的 idempotent SQL 和 EF lock 文件属于 scaffold 阶段产物；本规格中的表格、索引和验收清单是其唯一实现依据。不得在设计阶段伪造 migration hash、`__EFMigrationsHistory` 内容或数据库文件。
+
 迁移前将 SQLite 主文件、`-wal` 和 `-shm` 在 checkpoint/关闭连接后复制到带版本的备份目录，并记录备份哈希。迁移失败时回滚当前事务、保留失败诊断、阻止新运行并返回 `DB_MIGRATION_FAILED`；只有用户明确确认且备份校验成功时才允许恢复上一版本。数据库损坏或 `integrity_check` 失败时返回 `DB_CORRUPTED`，先复制只读诊断副本，再尝试最近的完整备份；不能自动新建空数据库替代原库。
 
 检测到 `SQLITE_FULL`、日志目录或临时目录磁盘不足时，停止新的 packet，回滚当前事务，写入可用的启动/诊断日志并返回 `PERSISTENCE_DISK_FULL`。恢复足够空间后，依据最近 checkpoint 重试；已提交事务不回滚，未提交事务不产生业务结果。SQLite busy timeout、WAL、连接重试和批量大小均配置化，但不能通过无限重试掩盖锁死或磁盘故障。
@@ -2926,6 +3038,34 @@ InvoiceFlowAI/
 ```
 
 `release-manifest.json` 固定应用版本、Git revision、RID、每个 native 文件的 SHA-256、WebView2 Fixed Runtime 版本、OCR 模型版本/哈希、Playwright Chromium revision 和许可证清单版本。启动诊断只记录 manifest 校验结果，不记录密钥或发票内容。
+
+manifest schema 固定为：
+
+```json
+{
+  "schemaVersion": 1,
+  "applicationVersion": "2026.09.23.0",
+  "gitRevision": "<ci-generated>",
+  "runtimeIdentifier": "win-x64",
+  "configuration": "Release",
+  "signed": true,
+  "webView2": { "packageVersion": "1.0.4255-prerelease", "fixedRuntimeVersion": "<asset-generated>" },
+  "playwright": { "packageVersion": "1.62.0", "chromiumRevision": "<asset-generated>" },
+  "assets": [
+    { "relativePath": "InvoiceFlowAI.exe", "length": 0, "sha256": "<generated-at-publish>" },
+    { "relativePath": "web/index.html", "length": 0, "sha256": "<generated-at-publish>" },
+    { "relativePath": "runtimes/win-x64/native/pdfium/pdfium.dll", "length": 0, "sha256": "<generated-at-publish>" }
+  ],
+  "modelManifestPath": "models/paddle/chinese-v6-tiny/model-manifest.json",
+  "browserManifestPath": "browsers/playwright/chromium/browser-manifest.json",
+  "licenseManifestPath": "licenses/THIRD-PARTY-NOTICES.txt",
+  "manifestSha256": "<generated-last>"
+}
+```
+
+`release-manifest.json` 是发布流水线最后生成的文件，不提交带占位符的生产 manifest。构建顺序固定为：publish -> 复制 Fixed Runtime/native/model/browser/license 资产 -> 计算每个文件长度和 SHA-256 -> 生成 model/browser manifest -> 生成 release manifest -> 对 manifest 自身计算 hash -> 签名 exe/DLL/MSI -> 重新验证签名和全部 hash。`<generated-at-publish>`、`<asset-generated>` 和 `0` 只能出现在 schema/example fixture，不能出现在 `publish/` 或 MSI 输入目录。
+
+发布资产验证器必须检查相对路径规范化、文件存在、长度、SHA-256、PE x64 架构、签名状态、manifest schema、WebView2 Fixed Runtime 版本、Chromium revision、OCR model manifest 和许可证清单。验证失败阻止 WiX 构建；安装后启动再次验证，但只报告脱敏的 asset path/hash 前缀。当前仓库缺少真实 native/runtime/model/browser 二进制，因此只能先提交 manifest schema 和 fixture，真实 hash 必须由 CI 首次下载并锁定资产后生成。
 
 资源加载规则：
 

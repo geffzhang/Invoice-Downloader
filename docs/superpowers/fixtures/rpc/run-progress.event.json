@@ -1,0 +1,13 @@
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "event": "run.progress",
+  "runId": "run-1",
+  "eventSequence": 12,
+  "emittedAtUtc": "2026-09-23T10:00:00Z",
+  "payload": {
+    "stage": "extracting",
+    "completed": 4,
+    "total": 10,
+    "percent": 40
+  }
+}
