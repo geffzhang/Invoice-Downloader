@@ -26,6 +26,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "InvoiceFlowAI.Infrastructur
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "InvoiceFlowAI.App.Tests", "tests\InvoiceFlowAI.App.Tests\InvoiceFlowAI.App.Tests.csproj", "{A0000000-0000-0000-0000-000000000023}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "InvoiceFlowAI.Contracts.Tests", "tests\InvoiceFlowAI.Contracts.Tests\InvoiceFlowAI.Contracts.Tests.csproj", "{A0000000-0000-0000-0000-000000000024}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -110,6 +112,14 @@ Global
 		{A0000000-0000-0000-0000-000000000023}.Release|x64.Build.0 = Release|x64
 		{A0000000-0000-0000-0000-000000000023}.Release|Any CPU.ActiveCfg = Release|x64
 		{A0000000-0000-0000-0000-000000000023}.Release|Any CPU.Build.0 = Release|x64
+		{A0000000-0000-0000-0000-000000000024}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000024}.Debug|x64.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000024}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000024}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000024}.Release|x64.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000024}.Release|x64.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000024}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000024}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
