@@ -118,6 +118,7 @@ WebView2 使用指定的预览版本：
 ```xml
 <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4255-prerelease" />
 <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.250916001" />
+<PackageReference Include="Microsoft.Playwright" Version="1.62.0" />
 ```
 
 DeepSeek 的统一 AI 适配器固定使用：
@@ -1828,7 +1829,7 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 ## 9. 外部集成
 
 - IMAP：使用 MailKit 适配器，支持供应商设置和受限邮箱扫描；
-- 链接恢复：使用 .NET 版 Playwright 和供应商专用下载适配器；
+- 链接恢复：使用 `Microsoft.Playwright` `1.62.0` 和供应商专用下载适配器；
 - 报表：使用 ClosedXML 生成发票汇总、明细和人工复核工作簿；
 - PDF：使用 `PdfPig` `0.1.17-alpha-202609192350-df33d` 进行文本提取和页面判断，使用 `PDFiumCore` `155.0.8057` 将扫描页面渲染为 OCR 图像；
 - OFD：本文档规定的专用 ZIP/XML 发票解析器；
