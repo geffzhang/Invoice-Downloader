@@ -1,0 +1,105 @@
+# Windows x64 .NET 10 build pipeline (Task 11).
+#
+# - Self-hosted or windows-latest runner with .NET SDK 10.0.100 + WiX 5.0.2.
+# - Runs the toolchain check, locked-mode restore, full test suite,
+#   then publish + manifest emission + WiX packaging.
+#
+# The publish + manifest + WiX steps are gated on the test suite passing;
+# they emit two immutable artifacts: the signed MSI and the
+# release manifest (the model manifest is bundled into the MSI as a
+# heat-harvested component, not separately uploaded).
+
+name: Windows x64 .NET 10 build
+
+on:
+  push:
+    branches: [dotnet, main]
+  pull_request:
+    branches: [dotnet, main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Toolchain + tests + publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install .NET SDK 10.0.100
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.100'
+
+      - name: Verify pinned toolchain
+        shell: pwsh
+        run: pwsh -File build/verify-toolchain.ps1
+
+      - name: Restore with locked-mode
+        shell: pwsh
+        run: dotnet restore --locked-mode
+
+      - name: Build (zero warnings, warnings-as-errors)
+        shell: pwsh
+        run: dotnet build -c Release --no-restore
+
+      - name: Run full test suite
+        shell: pwsh
+        run: dotnet test -c Release --no-build --nologo
+
+      - name: Publish self-contained win-x64
+        shell: pwsh
+        run: dotnet publish src/InvoiceFlowAI.App -c Release -r win-x64 --self-contained true -o publish/win-x64 --no-build
+
+      - name: Generate model manifest
+        shell: pwsh
+        run: pwsh -File build/model-manifest.ps1 -PublishRoot publish/win-x64 -Output publish/win-x64/manifests/model.json
+
+      - name: Generate release manifest
+        shell: pwsh
+        run: pwsh -File build/release-manifest.ps1 -PublishRoot publish/win-x64 -Output publish/win-x64/manifests/release.json
+
+      - name: Upload publish + manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-publish
+          if-no-files-found: error
+          path: publish/win-x64/
+          retention-days: 7
+
+  package:
+    name: WiX x64 MSI
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-publish
+          path: publish/win-x64
+
+      - name: Install .NET SDK 10.0.100
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.100'
+
+      - name: Install WiX Toolset 5.0.2
+        shell: pwsh
+        run: dotnet tool install --global wix --version 5.0.2
+
+      - name: Build signed MSI
+        shell: pwsh
+        run: |
+          $env:WIX_PATH = "$env:USERPROFILE\.dotnet\tools"
+          wix build src/InvoiceFlowAI.Installer/Product.wxs -arch x64 -out dist/InvoiceFlowAI-setup.msi
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-msi
+          if-no-files-found: error
+          path: dist/InvoiceFlowAI-setup.msi
+          retention-days: 7

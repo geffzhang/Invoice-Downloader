@@ -17,6 +17,9 @@
 TestResults/
 [Dd]ebug/
 [Rr]elease/
+# Source-tree folders named "Release" are not build output — keep them tracked.
+!src/**/[Rr]elease/
+!tests/**/[Rr]elease/
 [Bb]uild[Ll]og.*
 *.[Pp]ublish.xml
 artifacts/

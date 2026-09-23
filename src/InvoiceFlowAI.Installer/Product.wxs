@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  InvoiceFlowAI x64 MSI installer (Task 11).
+
+  The WiX build *consumes* the publish output and the manifest
+  emitted by build/release-manifest.ps1. It does NOT download
+  anything at build time and never invokes the .NET toolchain.
+  All native and runtime binaries must already exist in
+  ../publish/win-x64 before `wix build` runs.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+
+  <Package Name="InvoiceFlowAI"
+           Version="1.0.0"
+           Manufacturer="InvoiceFlowAI"
+           UpgradeCode="B7A1F2E4-9C4D-4F2E-9C42-7A1234567890"
+           Scope="perMachine"
+           Platform="x64">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of InvoiceFlowAI is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <Feature Id="ProductFeature"
+             Title="InvoiceFlowAI"
+             Description="InvoiceFlowAI desk companion for Windows 11 x64."
+             Level="1"
+             ConfigurableDirectory="INSTALLFOLDER">
+      <ComponentGroupRef Id="PublishedFiles" />
+      <ComponentGroupRef Id="ManifestFiles" />
+      <ComponentGroupRef Id="LicenseFiles" />
+    </Feature>
+
+    <StandardDirectory Id="INSTALLFOLDER">
+      <Directory Id="INSTALLFOLDER.Manifests" Name="manifests" />
+      <Directory Id="INSTALLFOLDER.Licenses" Name="licenses" />
+    </StandardDirectory>
+
+  </Package>
+
+  <!--
+    PublishedFiles: every binary the publish pipeline emitted,
+    harvested from the manifest. The manifest is the source of
+    truth — if a file isn't in the manifest, it's not in the MSI.
+  -->
+  <Fragment>
+    <ComponentGroup Id="PublishedFiles" Directory="INSTALLFOLDER">
+      <Files Include="..\publish\win-x64\**">
+        <SourceDir>..\publish\win-x64</SourceDir>
+        <Exclude Files="manifests\**" />
+        <Exclude Files="licenses\**" />
+      </Files>
+    </ComponentGroup>
+  </Fragment>
+
+  <!--
+    ManifestFiles: the model + release manifests. These are the
+    machine-readable provenance that downstream tools and the
+    end-to-end acceptance test (Task 12) rely on.
+  -->
+  <Fragment>
+    <ComponentGroup Id="ManifestFiles" Directory="INSTALLFOLDER.Manifests">
+      <File Id="ModelManifestFile"
+            Name="model.json"
+            Source="..\publish\win-x64\manifests\model.json"
+            KeyPath="yes" />
+      <File Id="ReleaseManifestFile"
+            Name="release.json"
+            Source="..\publish\win-x64\manifests\release.json"
+            KeyPath="yes" />
+    </ComponentGroup>
+  </Fragment>
+
+  <!--
+    LicenseFiles: third-party notices required by Avalonia,
+    WiX, and the .NET runtime redistribution.
+  -->
+  <Fragment>
+    <ComponentGroup Id="LicenseFiles" Directory="INSTALLFOLDER.Licenses">
+      <File Id="ThirdPartyNotices"
+            Name="THIRD-PARTY-NOTICES.txt"
+            Source="..\..\licenses\THIRD-PARTY-NOTICES.txt"
+            KeyPath="yes" />
+    </ComponentGroup>
+  </Fragment>
+
+</Wix>
