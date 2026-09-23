@@ -1685,6 +1685,44 @@ PDF 文字提取成功时不渲染图像。进入 OCR/视觉 fallback 后，`IPd
 
 `PaddleOcrAll` 在应用生命周期内只加载一次并复用。模型 manifest 固定模型包版本、文件相对路径、SHA-256 和引擎配置；启动时先校验 manifest，模型缺失或 hash 不匹配返回运行级 `OCR_MODEL_LOAD_FAILED`，禁止运行时静默下载未知模型。OCR 在受限的后台 worker 中运行，通过 `OcrPageConcurrency=2`、`OcrLineWorkerCount=2`、页面尺寸和 `MaxInFlightCandidates` 限制内存峰值。
 
+模型 manifest 的格式固定为：
+
+```json
+{
+  "schemaVersion": 1,
+  "engine": "Sdcb.SimdPaddleOCR",
+  "engineVersion": "1.4.2",
+  "modelId": "ChineseV6Tiny",
+  "modelPackageVersion": "1.4.2",
+  "runtime": "win-x64",
+  "files": [
+    {
+      "relativePath": "models/paddle/chinese-v6-tiny/model.pdmodel",
+      "length": 0,
+      "sha256": "<generated-at-build>"
+    },
+    {
+      "relativePath": "models/paddle/chinese-v6-tiny/model.pdiparams",
+      "length": 0,
+      "sha256": "<generated-at-build>"
+    }
+  ],
+  "preprocess": {
+    "colorFormat": "RGBA8",
+    "premultipliedAlpha": false,
+    "defaultDpi": 200,
+    "maxWidth": 4096,
+    "maxHeight": 8192,
+    "normalizeUnicode": "NFKC"
+  },
+  "manifestSha256": "<generated-last>"
+}
+```
+
+实际发布时不允许保留 `<generated-at-build>` 或 `0`：构建脚本从 NuGet/模型资产缓存复制经过版本锁定的模型文件，按字节流计算大小和 SHA-256，使用规范化 JSON 计算 `manifestSha256`，再将 manifest 和模型一起复制到发布目录。CI 必须在干净 `win-x64` 构建中重新计算并比对 manifest，禁止从工作机已有模型目录“借用”文件。当前仓库没有这些模型二进制文件，因此真实哈希只能在模型资产下载并纳入 release 输入后生成；设计阶段不伪造哈希值。
+
+发布验收必须验证：模型 package/version 与 `Microsoft.NET.Sdk` lock 文件一致；每个 manifest 文件存在、长度相等、SHA-256 相等；manifest 自身哈希稳定；`PaddleOcrAll` 加载的是 manifest 指定目录；任一缺失、替换、截断或版本不匹配都返回 `OCR_MODEL_LOAD_FAILED`，且不会联网下载替代模型。
+
 `DocumentImage` 的生命周期由 `DocumentImageLease` 管理：渲染阶段在 `%LocalAppData%/InvoiceFlowAI/runs/{runId}/temp/{documentId}/{processingRevision}/pages/` 创建临时目录，文件使用随机临时名写入、flush 后原子改名；OCR、Track A 和必要的 Track B 完成且相关审计/处理结果提交后释放内存并删除临时文件。进程崩溃时启动恢复依据 checkpoint 和 processing 状态清理已完成 revision 的临时目录；未完成 revision 保留到恢复或诊断结束，不能把临时绝对路径写入领域 DTO、RPC 或日志。
 
 首个版本使用普通的自包含 `win-x64` JIT/ReadyToRun 发布，暂不采用 Native AOT。损坏图像、像素格式不支持、渲染超时和单页读取失败转为候选级 `OCR_IMAGE_INVALID`/`PDF_RENDER_FAILED`；模型加载、原生库加载和统一内存分配失败属于运行级故障。
