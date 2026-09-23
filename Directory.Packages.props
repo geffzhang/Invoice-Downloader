@@ -1,0 +1,61 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ZeroPipeline fixed versions per design spec §3 -->
+    <PackageVersion Include="ZeroPipeline.Core" Version="1.2.0" />
+    <PackageVersion Include="ZeroPipeline.Recipe" Version="1.2.0" />
+
+    <!-- EF Core SQLite -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12" />
+
+    <!-- IMAP -->
+    <PackageVersion Include="MailKit" Version="4.18.0" />
+
+    <!-- PDF / OCR -->
+    <PackageVersion Include="PDFiumCore" Version="155.0.8057" />
+    <PackageVersion Include="PdfPig" Version="0.1.17-alpha-202609192350-df33d" />
+    <PackageVersion Include="SkiaSharp" Version="4.154.0-preview.1.26454.9" />
+    <PackageVersion Include="Sdcb.SimdPaddleOCR" Version="1.4.2" />
+
+    <!-- Avalonia UI 12 -->
+    <PackageVersion Include="Avalonia" Version="12.1.0" />
+    <PackageVersion Include="Avalonia.Desktop" Version="12.1.0" />
+    <PackageVersion Include="Avalonia.Controls.WebView" Version="12.1.0" />
+    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.1.0" />
+    <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.1.0" />
+    <PackageVersion Include="Avalonia.Headless" Version="12.1.0" />
+    <PackageVersion Include="Microsoft.Playwright" Version="1.62.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.10.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.0" />
+
+    <!-- Reports -->
+    <PackageVersion Include="ClosedXML" Version="0.105.1" />
+
+    <!-- DI / Hosting / Logging -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.12" />
+    <PackageVersion Include="Serilog" Version="4.0.0" />
+    <PackageVersion Include="Serilog.Extensions.Hosting" Version="8.0.0" />
+    <PackageVersion Include="Serilog.Sinks.File" Version="5.0.0" />
+
+    <!-- JSON -->
+    <PackageVersion Include="System.Text.Json" Version="10.0.12" />
+
+    <!-- Testing -->
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageVersion Include="xunit" Version="2.9.0" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.2" />
+    <PackageVersion Include="FluentAssertions" Version="6.12.0" />
+  </ItemGroup>
+</Project>
