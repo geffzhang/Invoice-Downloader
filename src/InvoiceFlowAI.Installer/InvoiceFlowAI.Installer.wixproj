@@ -1,0 +1,16 @@
+<Project Sdk="WixToolset.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <WixToolPath>$(NuGetPackageRoot)wixtoolset.wix\5.0.2\tools</WixToolPath>
+    <WixSchemaVersion>http://wixtoolset.org/schemas/v4/wxs</WixSchemaVersion>
+    <OutputName>InvoiceFlowAI</OutputName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Product.wxs" />
+  </ItemGroup>
+
+</Project>

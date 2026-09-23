@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>InvoiceFlowAI.Domain</RootNamespace>
+    <AssemblyName>InvoiceFlowAI.Domain</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- Domain references ZERO infrastructure. No EF Core, no MailKit, no WebView2.
+       Per design spec §3 responsibility boundaries. -->
+
+</Project>

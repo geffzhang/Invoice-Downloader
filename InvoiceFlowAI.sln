@@ -1,0 +1,117 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.32505.173
+MinimumVisualStudioVersion = 10.0.40217
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{A0000000-0000-0000-0000-000000000001}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{A0000000-0000-0000-0000-000000000002}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "InvoiceFlowAI.Domain", "src\InvoiceFlowAI.Domain\InvoiceFlowAI.Domain.csproj", "{A0000000-0000-0000-0000-000000000010}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "InvoiceFlowAI.Contracts", "src\InvoiceFlowAI.Contracts\InvoiceFlowAI.Contracts.csproj", "{A0000000-0000-0000-0000-000000000011}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "InvoiceFlowAI.Application", "src\InvoiceFlowAI.Application\InvoiceFlowAI.Application.csproj", "{A0000000-0000-0000-0000-000000000012}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "InvoiceFlowAI.Infrastructure", "src\InvoiceFlowAI.Infrastructure\InvoiceFlowAI.Infrastructure.csproj", "{A0000000-0000-0000-0000-000000000013}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "InvoiceFlowAI.App", "src\InvoiceFlowAI.App\InvoiceFlowAI.App.csproj", "{A0000000-0000-0000-0000-000000000014}"
+EndProject
+Project("{CAA2C24F-D7B1-49C6-A94E-39A8B5E5E1E5}") = "InvoiceFlowAI.Installer", "src\InvoiceFlowAI.Installer\InvoiceFlowAI.Installer.wixproj", "{A0000000-0000-0000-0000-000000000015}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "InvoiceFlowAI.Domain.Tests", "tests\InvoiceFlowAI.Domain.Tests\InvoiceFlowAI.Domain.Tests.csproj", "{A0000000-0000-0000-0000-000000000020}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "InvoiceFlowAI.Application.Tests", "tests\InvoiceFlowAI.Application.Tests\InvoiceFlowAI.Application.Tests.csproj", "{A0000000-0000-0000-0000-000000000021}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "InvoiceFlowAI.Infrastructure.Tests", "tests\InvoiceFlowAI.Infrastructure.Tests\InvoiceFlowAI.Infrastructure.Tests.csproj", "{A0000000-0000-0000-0000-000000000022}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "InvoiceFlowAI.App.Tests", "tests\InvoiceFlowAI.App.Tests\InvoiceFlowAI.App.Tests.csproj", "{A0000000-0000-0000-0000-000000000023}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Debug|Any CPU = Debug|Any CPU
+		Release|x64 = Release|x64
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A0000000-0000-0000-0000-000000000010}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000010}.Debug|x64.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000010}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000010}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000010}.Release|x64.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000010}.Release|x64.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000010}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000010}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000011}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000011}.Debug|x64.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000011}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000011}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000011}.Release|x64.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000011}.Release|x64.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000011}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000011}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000012}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000012}.Debug|x64.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000012}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000012}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000012}.Release|x64.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000012}.Release|x64.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000012}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000012}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000013}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000013}.Debug|x64.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000013}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000013}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000013}.Release|x64.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000013}.Release|x64.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000013}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000013}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000014}.Debug|x64.ActiveCfg = Debug|x64
+		{A0000000-0000-0000-0000-000000000014}.Debug|x64.Build.0 = Debug|x64
+		{A0000000-0000-0000-0000-000000000014}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{A0000000-0000-0000-0000-000000000014}.Debug|Any CPU.Build.0 = Debug|x64
+		{A0000000-0000-0000-0000-000000000014}.Release|x64.ActiveCfg = Release|x64
+		{A0000000-0000-0000-0000-000000000014}.Release|x64.Build.0 = Release|x64
+		{A0000000-0000-0000-0000-000000000014}.Release|Any CPU.ActiveCfg = Release|x64
+		{A0000000-0000-0000-0000-000000000014}.Release|Any CPU.Build.0 = Release|x64
+		{A0000000-0000-0000-0000-000000000015}.Debug|x64.ActiveCfg = Debug|x64
+		{A0000000-0000-0000-0000-000000000015}.Debug|x64.Build.0 = Debug|x64
+		{A0000000-0000-0000-0000-000000000015}.Release|x64.ActiveCfg = Release|x64
+		{A0000000-0000-0000-0000-000000000015}.Release|x64.Build.0 = Release|x64
+		{A0000000-0000-0000-0000-000000000020}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000020}.Debug|x64.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000020}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000020}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000020}.Release|x64.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000020}.Release|x64.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000020}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000020}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000021}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000021}.Debug|x64.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000021}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000021}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000021}.Release|x64.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000021}.Release|x64.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000021}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000021}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000022}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000022}.Debug|x64.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000022}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000022}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A0000000-0000-0000-0000-000000000022}.Release|x64.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000022}.Release|x64.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000022}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000022}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A0000000-0000-0000-0000-000000000023}.Debug|x64.ActiveCfg = Debug|x64
+		{A0000000-0000-0000-0000-000000000023}.Debug|x64.Build.0 = Debug|x64
+		{A0000000-0000-0000-0000-000000000023}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{A0000000-0000-0000-0000-000000000023}.Debug|Any CPU.Build.0 = Debug|x64
+		{A0000000-0000-0000-0000-000000000023}.Release|x64.ActiveCfg = Release|x64
+		{A0000000-0000-0000-0000-000000000023}.Release|x64.Build.0 = Release|x64
+		{A0000000-0000-0000-0000-000000000023}.Release|Any CPU.ActiveCfg = Release|x64
+		{A0000000-0000-0000-0000-000000000023}.Release|Any CPU.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
