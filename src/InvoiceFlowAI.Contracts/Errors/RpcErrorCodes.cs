@@ -47,4 +47,8 @@ public static class RpcErrorCodes
 
     public const string MailboxAccountRevisionConflict = "MAILBOX_ACCOUNT_REVISION_CONFLICT";
     public const string ReportExportFailed = "REPORT_EXPORT_FAILED";
+    public const string ReplayGap = "REPLAY_GAP";
+    public const string RunBarrierNotReached = "RUN_BARRIER_NOT_REACHED";
+    public const string RunAlreadyTerminal = "RUN_ALREADY_TERMINAL";
+    public const string FinalizerFailed = "RUN_FINALIZER_FAILED";
 }
