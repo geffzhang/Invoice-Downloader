@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1.0",
+  "registryFingerprint": "fixture-provider-registry-fingerprint",
+  "rules": [
+    { "providerId": "baiwang-email", "providerFamily": "baiwang_invoice", "priority": 300, "evidenceCode": "BAIWANG_HOST_OR_MESSAGE_MARKER", "specialParserId": "provider-special-layout" },
+    { "providerId": "chinatax-direct", "providerFamily": "chinatax_direct_invoice", "priority": 250, "evidenceCode": "DIRECT_URL_CHINATAX_HOST_PATH", "specialParserId": "provider-special-layout" },
+    { "providerId": "bwjf-signed", "providerFamily": "bwjf_signed_invoice", "priority": 250, "evidenceCode": "DIRECT_URL_BWJF_HOST_PATH", "specialParserId": "provider-special-layout" },
+    { "providerId": "fpyun-direct", "providerFamily": "fpyun_direct_invoice", "priority": 250, "evidenceCode": "DIRECT_URL_FPYUN_HOST_PATH", "specialParserId": "provider-special-layout" },
+    { "providerId": "nuonuo-scan", "providerFamily": "nuonuo_scan_invoice", "priority": 250, "evidenceCode": "DIRECT_URL_NUONUO_HOST_PATH", "specialParserId": "provider-special-layout" },
+    { "providerId": "pdd-direct", "providerFamily": "pdd_direct_invoice", "priority": 250, "evidenceCode": "DIRECT_URL_PDD_HOST_PATH", "specialParserId": "provider-special-layout" },
+    { "providerId": "jdcloud-direct", "providerFamily": "jdcloud_direct_invoice", "priority": 250, "evidenceCode": "DIRECT_URL_JDCLOUD_HOST_PATH", "specialParserId": "provider-special-layout" },
+    { "providerId": "kpbyd-direct", "providerFamily": "kpbyd_direct_invoice", "priority": 250, "evidenceCode": "DIRECT_URL_KPBYD_HOST_PATH", "specialParserId": "provider-special-layout" }
+  ]
+}

@@ -627,6 +627,8 @@ fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SET
 - `docs/superpowers/fixtures/rpc/account-save.response.json`：账户保存成功 response；
 - `docs/superpowers/fixtures/rpc/account-revision-conflict.response.json`：账户 revision 冲突 response；
 - `docs/superpowers/fixtures/rpc/run-progress.event.json`：事件 reducer 的顺序与重放样本；
+- `docs/superpowers/fixtures/providers/registry.v1.json`：首版内置供应商规则注册表和 parser 绑定；
+- `docs/superpowers/fixtures/providers/conflict.response.json`：`PROVIDER_RULE_CONFLICT` 字段级 details；
 - `docs/superpowers/fixtures/url/provider-registry.v1.json`：首版 URL provider 注册表；
 - `docs/superpowers/fixtures/release/release-manifest.example.json`：发布 manifest 字段和资源条目示例。
 
@@ -2425,7 +2427,9 @@ public sealed record ParserContext(
     string ProviderId,
     string ProviderFamily,
     int Priority,
-    string EvidenceCode);
+    string EvidenceCode,
+    string? SpecialParserId = null,
+    string EvidenceFingerprint = "");
 
   public interface IInvoiceProviderRule
   {
@@ -2446,7 +2450,41 @@ public sealed record ParserContext(
   }
   ```
 
-  供应商规则按 `Priority` 降序、`ProviderId` 升序确定性执行；多个规则匹配但给出不同 provider family 时进入 `PROVIDER_RULE_CONFLICT` 人工复核。供应商规则可以提供预期字段、配对 family 和归档目录建议，但不能直接写数据库、归档文件或覆盖人工修正。
+  首版内置 provider rule 注册表固定为：
+
+  | ProviderId | ProviderFamily | Priority | EvidenceCode | SpecialParserId |
+  | --- | --- | ---: | --- | --- |
+  | `baiwang-email` | `baiwang_invoice` | 300 | `BAIWANG_HOST_OR_MESSAGE_MARKER` | `provider-special-layout` |
+  | `chinatax-direct` | `chinatax_direct_invoice` | 250 | `DIRECT_URL_CHINATAX_HOST_PATH` | `provider-special-layout` |
+  | `bwjf-signed` | `bwjf_signed_invoice` | 250 | `DIRECT_URL_BWJF_HOST_PATH` | `provider-special-layout` |
+  | `fpyun-direct` | `fpyun_direct_invoice` | 250 | `DIRECT_URL_FPYUN_HOST_PATH` | `provider-special-layout` |
+  | `nuonuo-scan` | `nuonuo_scan_invoice` | 250 | `DIRECT_URL_NUONUO_HOST_PATH` | `provider-special-layout` |
+  | `pdd-direct` | `pdd_direct_invoice` | 250 | `DIRECT_URL_PDD_HOST_PATH` | `provider-special-layout` |
+  | `jdcloud-direct` | `jdcloud_direct_invoice` | 250 | `DIRECT_URL_JDCLOUD_HOST_PATH` | `provider-special-layout` |
+  | `kpbyd-direct` | `kpbyd_direct_invoice` | 250 | `DIRECT_URL_KPBYD_HOST_PATH` | `provider-special-layout` |
+
+  这些 ID 与当前 Python provider 的 family 标识一一对应；首版不注册未在代码或样本中出现的供应商。供应商规则按 `Priority` 降序、`ProviderId` 升序确定性执行；多个规则匹配但给出不同 provider family 时进入 `PROVIDER_RULE_CONFLICT` 人工复核。供应商规则可以提供预期字段、配对 family 和归档目录建议，但不能直接写数据库、归档文件或覆盖人工修正。`SpecialParserId` 非空时，dispatcher 只能在该 provider rule 已成功匹配后尝试对应 parser；parser 返回 `CanParse=false` 时不得静默改用另一个 provider-special parser。
+
+  `PROVIDER_RULE_CONFLICT` 的 field-level details 固定为以下 DTO，不包含原始 URL、邮件正文或完整模型响应：
+
+  ```csharp
+  public sealed record ProviderRuleConflictCandidate(
+    string ProviderId,
+    string ProviderFamily,
+    int Priority,
+    string EvidenceCode,
+    string EvidenceFingerprint,
+    string? SpecialParserId);
+
+  public sealed record ProviderRuleConflictDetails(
+    string Field,
+    string DocumentId,
+    IReadOnlyList<ProviderRuleConflictCandidate> Candidates,
+    string Resolution,
+    bool RequiresManualReview);
+  ```
+
+  `Field` 固定为 `providerFamily`；`Candidates` 按 `Priority DESC, ProviderId ASC` 排序；`Resolution` 固定为 `manual_review`；`RequiresManualReview=true`。每个 evidence fingerprint 是脱敏证据集合的短 SHA-256，输入只允许 host hash、path template ID、sender domain hash、subject marker ID 和 source kind。RPC `error.details` 使用 `{ "field": "providerFamily", "candidates": [...], "resolution": "manual_review", "requiresManualReview": true }`，不得把 `ProviderRuleConflictDetails` 序列化成自由格式字符串。
 
   特殊票据 parser 使用同样的显式注册机制：
 
