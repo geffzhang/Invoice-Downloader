@@ -74,4 +74,36 @@ public sealed class RuleSetBootstrapperTests
         act.Should().Throw<RuleSetValidationException>()
             .Which.ReasonCode.Should().Be(RpcErrorCodes.RecipeSchemaUnsupported);
     }
+
+    [Fact]
+    public void Validator_rejects_rule_with_no_match_criteria()
+    {
+        var validator = new RuleSetValidator();
+        var doc = new RuleSetDocument("1.0", "default", new[]
+        {
+            new RuleRule("r", 1, true,
+                new RuleRuleWhen(DocumentType: null, SellerContains: "   "),
+                new RuleRuleThen("folder", "category", false, true)),
+        });
+
+        var act = () => validator.Validate(doc);
+        act.Should().Throw<RuleSetValidationException>()
+            .Which.ReasonCode.Should().Be(RpcErrorCodes.RulesetInvalid);
+    }
+
+    [Fact]
+    public void Validator_rejects_rule_without_effective_action_or_category()
+    {
+        var validator = new RuleSetValidator();
+        var doc = new RuleSetDocument("1.0", "default", new[]
+        {
+            new RuleRule("r", 1, true,
+                new RuleRuleWhen(DocumentType: "FlightInvoice", SellerContains: "air"),
+                new RuleRuleThen("folder", "  ", false, false)),
+        });
+
+        var act = () => validator.Validate(doc);
+        act.Should().Throw<RuleSetValidationException>()
+            .Which.ReasonCode.Should().Be(RpcErrorCodes.RulesetInvalid);
+    }
 }

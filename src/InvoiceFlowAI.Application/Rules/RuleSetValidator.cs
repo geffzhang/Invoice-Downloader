@@ -37,6 +37,13 @@ public sealed class RuleSetValidator
         var seenRuleIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var rule in document.Rules)
         {
+            if (string.IsNullOrWhiteSpace(rule.RuleId))
+            {
+                throw new RuleSetValidationException(
+                    RpcErrorCodes.RulesetInvalid,
+                    "Every rule requires a non-empty identifier.");
+            }
+
             if (!seenRuleIds.Add(rule.RuleId))
             {
                 throw new RuleSetValidationException(
@@ -51,12 +58,31 @@ public sealed class RuleSetValidator
                     $"Rule '{rule.RuleId}' priority {rule.Priority} is out of range [0..1000000].");
             }
 
-            if (string.IsNullOrWhiteSpace(rule.Then.ArchiveFolder))
+            if (!HasEffectiveMatchCriteria(rule.When))
             {
                 throw new RuleSetValidationException(
                     RpcErrorCodes.RulesetInvalid,
-                    $"Rule '{rule.RuleId}' archive folder is required.");
+                    $"Rule '{rule.RuleId}' must define at least one effective match criterion.");
+            }
+
+            if (!HasEffectiveAction(rule.Then))
+            {
+                throw new RuleSetValidationException(
+                    RpcErrorCodes.RulesetInvalid,
+                    $"Rule '{rule.RuleId}' must define an effective archive destination and category.");
             }
         }
+    }
+
+    private static bool HasEffectiveMatchCriteria(RuleRuleWhen when)
+    {
+        return !string.IsNullOrWhiteSpace(when.DocumentType)
+            || !string.IsNullOrWhiteSpace(when.SellerContains);
+    }
+
+    private static bool HasEffectiveAction(RuleRuleThen then)
+    {
+        return !string.IsNullOrWhiteSpace(then.ArchiveFolder)
+            && !string.IsNullOrWhiteSpace(then.Category);
     }
 }
