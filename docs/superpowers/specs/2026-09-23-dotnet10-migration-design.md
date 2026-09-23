@@ -244,6 +244,183 @@ ZeroPipeline 只位于应用编排层。领域层不依赖 ZeroPipeline；节点
 
 `run.start` 的参数映射为 `RunInput`：`dateFrom`、`dateTo` 使用 `yyyy-MM-dd`；`savePath` 必须是用户可访问的目录；`accountId` 必须引用已保存的邮箱配置；`customRules` 有长度上限；`runMode` 只能取 `interactive` 或首版明确支持的枚举值。后端重新校验所有字段，不能信任前端校验。
 
+### 方法 DTO、分页和 JSON fixtures
+
+所有方法的 `params` 和 `result` 在 `InvoiceFlowAI.Contracts.Rpc` 中使用显式 record；禁止用 `Dictionary<string, object>` 作为业务 DTO。未知字段默认拒绝，缺失必填字段返回 `RPC_INVALID_PARAMS`，`error.details` 使用统一的 field error 数组：
+
+```csharp
+public sealed record RpcFieldError(
+    string Path,
+    string Code,
+    string Message);
+
+public sealed record ReviewListRequest(
+    string RunId,
+    ManualReviewState? State = null,
+    int Offset = 0,
+    int Limit = 50);
+
+public sealed record ReviewSummary(
+    string ReviewId,
+    string DocumentId,
+    string ReasonCode,
+    ManualReviewState State,
+    int Revision,
+    DateTimeOffset CreatedAtUtc);
+
+public sealed record ReviewListResult(
+    IReadOnlyList<ReviewSummary> Items,
+    int Offset,
+    int Limit,
+    int Total,
+    bool HasMore,
+    int? NextOffset);
+
+public sealed record ReviewGetRequest(string ReviewId);
+
+public sealed record ReviewDetail(
+    ManualReviewItem Item,
+    IReadOnlyList<string> EditableFields,
+    IReadOnlyList<string> AvailableDecisions,
+    string SourceFileName,
+    string SourceKind);
+
+public sealed record ReviewSubmitRequest(
+    string ReviewId,
+    int ExpectedRevision,
+    ManualReviewDecision Decision,
+    InvoiceCorrectionPatch? Correction = null,
+    string Comment = "");
+
+public sealed record InvoiceCorrectionPatch(
+    DateOnly? InvoiceDate = null,
+    string? Purchaser = null,
+    string? Seller = null,
+    decimal? Amount = null,
+    decimal? TaxAmount = null,
+    decimal? TotalAmount = null,
+    string? InvoiceCode = null,
+    string? InvoiceNumber = null,
+    InvoiceDocumentType? DocumentType = null,
+    string? Category = null,
+    InvoiceRoute? Route = null,
+    IReadOnlyList<InvoiceItem>? Items = null);
+
+public sealed record ReviewSubmitResult(
+    string ReviewId,
+    string DocumentId,
+    int NewProcessingRevision,
+    CandidateStatus Status,
+    string ReasonCode,
+    bool RearchiveQueued,
+    bool ReportRefreshQueued);
+
+public sealed record RunRetryRequest(
+    string RunId,
+    IReadOnlyList<string>? DocumentIds = null,
+    bool RetryAllEligible = false,
+    int MaxDocuments = 100);
+
+public sealed record RunRetryResult(
+    string RetryRunId,
+    IReadOnlyList<string> AcceptedDocumentIds,
+    IReadOnlyList<string> RejectedDocumentIds,
+    string State);
+
+public sealed record PipelineOptionsPatch(
+  int? MailboxScanConcurrency = null,
+  int? OcrPageConcurrency = null,
+  int? AiRequestConcurrency = null,
+  int? BrowserConcurrency = null,
+  int? MaxInFlightCandidates = null,
+  int? MaxRetryAttempts = null);
+
+public sealed record SettingsUpdateRequest(
+    int ExpectedRevision,
+    string? AccountId = null,
+    string? Mailbox = null,
+    MailboxFilterRules? MailboxFilters = null,
+    PipelineOptionsPatch? Pipeline = null,
+    string? CustomRuleSetJson = null,
+    bool? AllowVisionFallback = null);
+
+public sealed record SettingsUpdateResult(
+    int Revision,
+    string ConfigurationFingerprint,
+    IReadOnlyList<string> ChangedSections);
+```
+
+分页规则固定为 offset/limit：`Offset >= 0`、`1 <= Limit <= 100`，排序为 `CreatedAtUtc ASC, ReviewId ASC`，返回 `Total`、`HasMore` 和 `NextOffset`。`review.get` 不返回 OCR 原文、图片、完整邮件正文、秘密或本地绝对路径；`EditableFields` 是后端白名单，不由前端决定。`review.submit` 的 `Decision` 与 `Correction` 组合必须满足：`CorrectAndAccept` 必须有 correction，其他决定不能携带 correction；`ExpectedRevision` 必须等于当前 review revision。
+
+`run.retry` 的 `DocumentIds` 与 `RetryAllEligible` 互斥；单次最多 100 个 document，只有 `Retryable=true` 且未超过最大次数的候选进入 `AcceptedDocumentIds`，其余进入 `RejectedDocumentIds` 并带稳定原因详情。`settings.update` 只允许非秘密配置，修改后由后端规范化 JSON、规则 AST 和 pipeline options 生成新的 `ConfigurationFingerprint`；`ExpectedRevision` 冲突返回 `SETTINGS_REVISION_CONFLICT`。
+
+首版 JSON fixtures 固定覆盖以下请求/响应：
+
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-review-list-1",
+  "method": "review.list",
+  "params": {
+    "runId": "run-1",
+    "state": "open",
+    "offset": 0,
+    "limit": 50
+  }
+}
+```
+
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-review-submit-1",
+  "method": "review.submit",
+  "params": {
+    "reviewId": "review-1",
+    "expectedRevision": 2,
+    "decision": "CorrectAndAccept",
+    "correction": {
+      "invoiceDate": "2026-09-22",
+      "amount": "100.00",
+      "seller": "Example Seller"
+    },
+    "comment": "日期和金额已人工确认"
+  }
+}
+```
+
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-retry-1",
+  "method": "run.retry",
+  "params": {
+    "runId": "run-1",
+    "documentIds": ["document-1", "document-2"],
+    "retryAllEligible": false,
+    "maxDocuments": 100
+  }
+}
+```
+
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-settings-update-1",
+  "method": "settings.update",
+  "params": {
+    "expectedRevision": 4,
+    "mailbox": "INBOX",
+    "allowVisionFallback": true,
+    "pipeline": {
+      "aiRequestConcurrency": 1
+    }
+  }
+}
+```
+
+fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SETTINGS_REVISION_CONFLICT`、`RUN_RETRY_SELECTION_INVALID` 和未知字段的失败响应；所有 fixture 通过 Contracts serializer round-trip 测试，确保 camelCase、DateOnly、Decimal 和 enum 字符串表示稳定。
+
 ### 事件契约
 
 事件只由后端发送，前端不能伪造运行事件。所有事件都包含 `protocol`、`event`、`runId`、`eventSequence`、`emittedAtUtc` 和 `payload`。同一 `eventSequence` 只能发送一次；前端发现序号跳跃时调用 `run.get`，使用 `afterEventSequence` 请求缺失事件。
@@ -263,7 +440,7 @@ ZeroPipeline 只位于应用编排层。领域层不依赖 ZeroPipeline；节点
 
 `run.cancel` 只设置运行取消信号，不强制终止线程或删除已提交结果。节点在下一个安全检查点停止读取新输入，候选结果按 `Cancelled` 终态写入，最终发送且只发送一次 `run.cancelled`。取消一个不存在的 run 返回 `RUN_NOT_FOUND`，取消已完成 run 返回 `accepted=false` 和当前状态。
 
-错误 envelope 只使用稳定的 `code`、`scope`、`retryable`、`userMessage`、`detailsAvailable` 和可选的脱敏 `details`。原始异常类型、堆栈、完整 URL、邮件内容、OCR 内容和秘密不能进入 RPC。错误码至少覆盖：`RPC_INVALID_JSON`、`RPC_PROTOCOL_UNSUPPORTED`、`RPC_METHOD_NOT_FOUND`、`RPC_INVALID_PARAMS`、`RUN_ALREADY_ACTIVE`、`RUN_NOT_FOUND`、`RUN_NOT_CANCELLABLE`、`CREDENTIALS_NOT_CONFIGURED`、`RUN_FAILED`、`PERSISTENCE_UNAVAILABLE` 和 `WEBVIEW_BRIDGE_NOT_READY`。
+错误 envelope 只使用稳定的 `code`、`scope`、`retryable`、`userMessage`、`detailsAvailable` 和可选的脱敏 `details`。原始异常类型、堆栈、完整 URL、邮件内容、OCR 内容和秘密不能进入 RPC。错误码至少覆盖：`RPC_INVALID_JSON`、`RPC_PROTOCOL_UNSUPPORTED`、`RPC_METHOD_NOT_FOUND`、`RPC_INVALID_PARAMS`、`RUN_ALREADY_ACTIVE`、`RUN_NOT_FOUND`、`RUN_NOT_CANCELLABLE`、`REVIEW_REVISION_CONFLICT`、`SETTINGS_REVISION_CONFLICT`、`RUN_RETRY_SELECTION_INVALID`、`CREDENTIALS_NOT_CONFIGURED`、`RUN_FAILED`、`PERSISTENCE_UNAVAILABLE` 和 `WEBVIEW_BRIDGE_NOT_READY`。
 
 桥接层负责传输、请求关联、序列化和事件转发，不负责邮箱扫描或发票解析。
 
@@ -1359,6 +1536,67 @@ public sealed record CandidateStatusCounts(
 
 上述 DTO 的不变量统一由构造函数或 `DomainValidation` 校验：ID 和 sequence 非空且合法，金额为有限 decimal，日期为有效 `DateOnly`，置信度在 `[0,1]`，负数金额只有在红字/贷项标记或明确业务规则允许时才接受，结果中的 candidate identity 与 invoice identity 必须相同。跨层映射失败必须返回稳定 `DOMAIN_CONTRACT_INVALID`，不能静默丢字段。
 
+### InvoiceAcceptanceService
+
+`InvoiceAcceptanceService` 是 parser、DeepSeek adapter、人工复核和归档之间唯一的字段准入门。它不负责解析文件、不调用网络、不写数据库，只对已归一化的 `InvoiceDocument` 做确定性校验：
+
+```csharp
+public sealed record InvoiceAcceptancePolicy(
+  decimal AmountTolerance = 0.01m,
+  decimal TaxTotalTolerance = 0.01m,
+  decimal MinimumConfidence = 0.60m,
+  bool RequireSeller = true,
+  bool RequirePurchaserForNonExemptTypes = true,
+  bool AllowNegativeAmountOnlyWithCreditFlag = true);
+
+public sealed record InvoiceAcceptanceRequest(
+  DocumentCandidate Candidate,
+  InvoiceDocument Document,
+  InvoiceAcceptancePolicy Policy,
+  string CompanyName,
+  bool IsVisionFallback,
+  string SourceParser);
+
+public enum AcceptanceDisposition
+{
+  Accepted,
+  ManualReview,
+  Rejected
+}
+
+public sealed record InvoiceAcceptanceFailure(
+  string ReasonCode,
+  FailureCategory Category,
+  bool Retryable,
+  string SafeMessage,
+  string Field = "");
+
+public sealed record InvoiceAcceptanceResult(
+  AcceptanceDisposition Disposition,
+  InvoiceDocument? Document,
+  IReadOnlyList<InvoiceAcceptanceFailure> Failures,
+  IReadOnlyList<string> Warnings,
+  string ReasonCode);
+
+public interface IInvoiceAcceptanceService
+{
+  InvoiceAcceptanceResult Evaluate(
+    InvoiceAcceptanceRequest request);
+}
+```
+
+校验顺序固定为：
+
+1. `Identity` 必须与 candidate 完全一致，`IsInvoice` 不能为 false；
+2. 日期必须是有效 `DateOnly`，火车票优先使用 `Route.DepartureDate`；
+3. 金额必须是有限 Decimal；负数只有在 `CreditNote`/`Cancellation` 标记存在时允许；
+4. `TaxAmount`、`TotalAmount` 存在时检查 `Amount + TaxAmount`，误差不得超过 `TaxTotalTolerance`；
+5. `Seller`、`InvoiceNumber`、`DocumentType` 按票据类型检查，类型必须存在于注册白名单；
+6. 非豁免类型执行公司购买方关系：`target` 接受，`non_target` 转为 `NonTargetCompanyInvoice/Retained`，`unknown` 进入人工复核；
+7. `Confidence < MinimumConfidence`、模型结果与确定性字段冲突、视觉 fallback 无法解释字段来源时进入人工复核，不直接接受。
+
+失败映射固定为：`INVOICE_DATE_INVALID`、`INVOICE_AMOUNT_INVALID`、`TAX_TOTAL_MISMATCH`、`INVOICE_SELLER_MISSING`、`INVOICE_NUMBER_MISSING`、`DOCUMENT_TYPE_UNKNOWN`、`PURCHASER_NOT_TARGET`、`PURCHASER_UNKNOWN`、`DOCUMENT_NOT_INVOICE`、`ACCEPTANCE_LOW_CONFIDENCE` 和 `IDENTITY_MISMATCH`。字段格式、金额和身份错误为 `Rejected`/不可重试；低置信度、模型冲突和未知购买方为 `ManualReview`；临时依赖错误不由本服务产生，而由上游 adapter 返回 retryable candidate failure。`InvoiceAcceptanceResult` 被映射为唯一的 `CandidateProcessResult`，不抛候选级异常。
+
 ## 6. 文档处理与 OFD 解析
 
 文档层参考当前仓库与 `E:/GitHub/qingpiao/src/QingPiao/Parsers` 的实现，采用“统一入口 + 格式专用 parser + 领域归一化”的结构。QingPiao 的 `Invoice`、`InvoiceItem`、`ParseResult` 作为 C# 迁移的直接行为参考；当前 Python 的 `DocumentIdentity`、`InvoiceRecord`、金额/日期归一化和文档类型标记作为领域层约束参考。
@@ -1518,7 +1756,16 @@ XML 是最确定的路径，成功后不再调用 OCR 或 DeepSeek，除非本�
 1. `Doc_0/Attachs/original_invoice.xml`：纸电票专用 XML；
 2. `Doc_0/Tags/Tag.xml` 或 `Doc_0/Tags/CustomTag.xml`：数电票标签；
 3. `Doc_0/Pages/Page_*/Content.xml`：建立 `TextObject ID -> TextCode` 映射并解析 `ObjectRef`；
-4. 结构化 XML 无法得到有效发票号码时，返回 `OFD_INVOICE_XML_NOT_FOUND`，再由上层策略决定是否渲染页面进入 OCR/DeepSeek。
+4. 结构化 XML 无法得到有效发票号码时，返回 `OFD_INVOICE_XML_NOT_FOUND`；若 `ParserContext.AllowOcrFallback=true`，必须进入页面渲染和 OCR，最多渲染前两页，再按统一 Track A/Track B 规则处理；若关闭 fallback，则直接生成 `ManualReview/OFD_INVOICE_XML_NOT_FOUND`。
+
+OFD fallback 策略固定为：
+
+- `original_invoice.xml`、Tag 或 Content XML 完整解析并通过 `InvoiceAcceptanceService` 时，禁止 OCR 和 DeepSeek；
+- XML 缺失、XML 无有效发票号码、页面文本无法建立有效字段时，允许最多两页 PDFium/SkiaSharp 渲染，先 SimdPaddleOCR Track A，再 DeepSeek Track B；
+- XML 字段存在互相冲突时，优先保留冲突证据并进入 `ManualReview/OFD_XML_FIELD_CONFLICT`；只有冲突字段可由同一页面 OCR 确定性解决，且 `AllowVisionFallback=true` 时才允许 DeepSeek，模型不能直接覆盖未解决的 XML 冲突；
+- ZIP/XML 损坏、外部实体、路径越界、页数/文件大小超限、模型加载失败或渲染资源不可用，直接人工复核或运行级失败，不能通过 DeepSeek 绕过安全/资源错误；
+- OCR/DeepSeek 结果必须再次通过 `InvoiceAcceptanceService`，失败进入人工复核，不再无限回退；
+- fallback 使用与 candidate 相同的 `ProcessingRevision` 临时目录和 manifest 约束，页面超过两页不上传、不持久化、不静默截断。
 
 OFD parser 只负责 ZIP/XML 结构和发票字段，不负责页面渲染。多页遍历不能只固定 `Page_0`；需要遍历所有 `Page_*`，并对同一 Object ID 的文本定义稳定合并规则。`original_invoice.xml` 与 Tag/Content 两条路径分别测试。
 
