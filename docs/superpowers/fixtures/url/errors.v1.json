@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "1.0",
+  "errors": [
+    { "code": "URL_AUTH_REQUIRED", "retryable": false, "allowBrowserFallback": true, "candidateScope": "candidate" },
+    { "code": "URL_JS_CHALLENGE", "retryable": false, "allowBrowserFallback": true, "candidateScope": "candidate" },
+    { "code": "URL_HTTP_FAILED", "retryable": true, "allowBrowserFallback": false, "candidateScope": "candidate" },
+    { "code": "URL_REDIRECT_BLOCKED", "retryable": false, "allowBrowserFallback": false, "candidateScope": "candidate" },
+    { "code": "URL_CONTENT_INVALID", "retryable": false, "allowBrowserFallback": false, "candidateScope": "candidate" },
+    { "code": "URL_BROWSER_FAILED", "retryable": true, "allowBrowserFallback": false, "candidateScope": "candidate" },
+    { "code": "URL_BROWSER_TIMEOUT", "retryable": true, "allowBrowserFallback": false, "candidateScope": "candidate" },
+    { "code": "URL_DOWNLOAD_BLOCKED", "retryable": false, "allowBrowserFallback": false, "candidateScope": "candidate" }
+  ]
+}
