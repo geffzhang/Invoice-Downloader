@@ -2,7 +2,7 @@
 
 ## 1. 目标与范围
 
-将 InvoiceFlowAI 重写为面向 Windows 11 的 .NET 10 桌面应用。新应用使用 WinUI 3 作为原生窗口外壳，使用 WebView2 承载现有 HTML/JavaScript 用户界面。所有运行时业务逻辑均使用 C# 实现，发布后的应用不依赖 Python。
+将 InvoiceFlowAI 重写为面向 Windows 11 的 .NET 10 桌面应用。新应用使用 Avalonia 12 作为原生窗口外壳，通过 `NativeControlHost` 嵌入 WebView2 Win32 宿主，继续承载现有 HTML/JavaScript 用户界面。所有运行时业务逻辑均使用 C# 实现，发布后的应用不依赖 Python。
 
 迁移目标是完整功能对等，包括：
 
@@ -25,7 +25,7 @@
 
 迁移顺序如下：
 
-1. WinUI 3/WebView2 外壳和 JSON/RPC 桥接层；
+1. Avalonia 12/WebView2 Win32 外壳和 JSON/RPC 桥接层；
 2. ZeroPipeline DAG、领域契约、运行生命周期、取消、进度和诊断；
 3. XML、OFD、PDF、本地 OCR、字段提取、校验和归档的本地文件节点；
 4. IMAP 扫描和候选筛选节点；
@@ -40,8 +40,8 @@
 ```text
 src/
   InvoiceFlowAI.App/
-    App.xaml
-    MainWindow.xaml
+    App.axaml
+    MainWindow.axaml
     WebView/
     Rpc/
   InvoiceFlowAI.Application/
@@ -113,11 +113,13 @@ PDF 页面渲染固定使用 PDFiumCore：
 <PackageReference Include="Sdcb.SimdPaddleOCR" Version="1.4.2" />
 ```
 
-WebView2 使用指定的预览版本：
+WebView2 使用指定的预览版本，Avalonia 使用精确锁定的 12.x 版本：
 
 ```xml
 <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4255-prerelease" />
-<PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.250916001" />
+<PackageReference Include="Avalonia" Version="12.1.3" />
+<PackageReference Include="Avalonia.Desktop" Version="12.1.3" />
+<PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.3" />
 <PackageReference Include="Microsoft.Playwright" Version="1.62.0" />
 <PackageReference Include="ClosedXML" Version="0.105.1" />
 ```
@@ -131,17 +133,17 @@ DeepSeek 的统一 AI 适配器固定使用：
 其传递依赖的 `Microsoft.Extensions.AI`、OpenAI 客户端和相关 `10.x` 包必须通过锁文件固定，避免预览版或浮动依赖改变多模态消息序列化结果。
 
 ZeroPipeline 参考仓库：<https://github.com/kzxl/ZeroPipeline/tree/master>。
-其 `1.2.0` 核心包支持 `net8.0` 和 `netstandard2.0`，可由 .NET 10 应用引用。暂不使用 `ZeroPipeline.UI`，因为本项目的界面由 WinUI 3 + WebView2 承载，不能把 WinForms 画布控件作为 UI 基础。
+其 `1.2.0` 核心包支持 `net8.0` 和 `netstandard2.0`，可由 .NET 10 应用引用。暂不使用 `ZeroPipeline.UI`，因为本项目的界面由 Avalonia 12 + WebView2 承载，不需要把 ZeroPipeline 画布控件作为 UI 基础。
 
 ### 职责边界
 
-- `InvoiceFlowAI.App`：WinUI 窗口、WebView2 初始化、生命周期、DPI、打包和桥接接线。不包含发票业务规则。
+- `InvoiceFlowAI.App`：Avalonia 窗口、WebView2 Win32 初始化、NativeControlHost 生命周期、DPI、打包和桥接接线。不包含发票业务规则。
 - `InvoiceFlowAI.Contracts`：可 JSON 序列化的命令、事件、DTO、稳定错误码和前端契约。
 - `InvoiceFlowAI.Application`：使用 ZeroPipeline 构建运行 DAG，负责准入校验、取消、重试策略、阶段转换、并发限制和进度发送。
 - `InvoiceFlowAI.Domain`：发票实体、解析结果、分类规则、配对规则、校验和真值契约。该层不依赖 WebView2、HTTP、数据库或供应商 SDK。
 - `InvoiceFlowAI.Infrastructure`：IMAP、文档、OCR、AI、浏览器、归档、报表、持久化、凭据和日志等具体实现。
 
-`Microsoft.Web.WebView2` 只由 `InvoiceFlowAI.App` 引用。WebView2 负责加载随应用发布的 HTML/JavaScript 资源，并通过宿主桥接接入 JSON/RPC；页面脚本不能直接访问文件系统、DPAPI、数据库或外部 API。
+`Avalonia`、`Avalonia.Desktop`、`Avalonia.Themes.Fluent` 和 `Microsoft.Web.WebView2` 只由 `InvoiceFlowAI.App` 引用。Avalonia 负责窗口和原生宿主，WebView2 负责加载随应用发布的 HTML/JavaScript 资源，并通过宿主桥接接入 JSON/RPC；页面脚本不能直接访问文件系统、DPAPI、数据库或外部 API。
 
 整体分层借鉴 `E:/GitHub/qingpiao/src/QingPiao` 中 `Services/Parsers/Exporters` 的职责拆分，同时使用接口替代具体依赖，以适配桌面端编排和自动化测试。
 
@@ -149,7 +151,7 @@ ZeroPipeline 只位于应用编排层。领域层不依赖 ZeroPipeline；节点
 
 ### 构建工具链与工程结构
 
-首版固定使用 `.NET SDK 10.0.100`、`net10.0-windows`、`win-x64`、Windows App SDK `1.8.250916001`、WiX Toolset `5.0.2`、Windows SDK `10.0.26100.1`、MSVC v143 `14.44.35207` 和 VC++ Runtime `14.44.35211` x64。CI 使用 Windows Server 2025 x64 runner，并在构建前校验这些精确版本；不接受“使用已安装的最近版本”。
+首版固定使用 `.NET SDK 10.0.100`、`net10.0-windows`、`win-x64`、Avalonia `12.1.3`、WiX Toolset `5.0.2`、Windows SDK `10.0.26100.1`、MSVC v143 `14.44.35207` 和 VC++ Runtime `14.44.35211` x64。CI 使用 Windows Server 2025 x64 runner，并在构建前校验这些精确版本；不接受“使用已安装的最近版本”。
 
 目标工程结构为：
 
@@ -179,7 +181,7 @@ build/
   licenses/
 ```
 
-`Domain` 不引用基础设施或 ZeroPipeline；`Contracts` 只承载跨层 DTO；`Application` 引用 Domain、Contracts、ZeroPipeline；`Infrastructure` 实现应用接口；只有 `App` 引用 WebView2/Windows App SDK；只有 `Installer` 引用 WiX。
+`Domain` 不引用基础设施或 ZeroPipeline；`Contracts` 只承载跨层 DTO；`Application` 引用 Domain、Contracts、ZeroPipeline；`Infrastructure` 实现应用接口；只有 `App` 引用 Avalonia、WebView2 和 Win32 interop；只有 `Installer` 引用 WiX。
 
 `global.json` 固定 `10.0.100`、`rollForward=disable`、`allowPrerelease=false`。`Directory.Build.props` 固定 nullable、deterministic build、CI build 和 warnings-as-errors。`Directory.Packages.props` 集中维护所有精确 NuGet 版本；每个项目生成 `packages.lock.json`，CI 使用 `dotnet restore --locked-mode`。`NuGet.Config` 只允许审查过的 package sources。
 
@@ -189,7 +191,7 @@ CI 每一步的输入/输出也固定：`verify-toolchain.ps1` 只读 SDK/Window
 
 ### DI 组合根与启动图
 
-`InvoiceFlowAI.App` 是唯一组合根。`InvoiceFlowAI.Infrastructure` 提供 `AddInvoiceFlowInfrastructure(IServiceCollection, AppPaths)`，`InvoiceFlowAI.Application` 提供 `AddInvoiceFlowApplication(IServiceCollection)`；页面桥接和 WinUI 生命周期不反向注册到 Domain。所有 singleton/scoped/transient 生命周期固定如下：
+`InvoiceFlowAI.App` 是唯一组合根。`InvoiceFlowAI.Infrastructure` 提供 `AddInvoiceFlowInfrastructure(IServiceCollection, AppPaths)`，`InvoiceFlowAI.Application` 提供 `AddInvoiceFlowApplication(IServiceCollection)`；页面桥接和 Avalonia/Win32 生命周期不反向注册到 Domain。所有 singleton/scoped/transient 生命周期固定如下：
 
 | 生命周期 | 服务 |
 | --- | --- |
@@ -205,7 +207,10 @@ ProcessStart
   -> AppPathsResolved
   -> SerilogStarted
   -> ReleaseManifestVerified
+  -> AvaloniaApplicationCreated
+  -> MainWindowCreated
   -> FixedWebView2EnvironmentCreated
+  -> WebView2NativeHostAttached
   -> SQLiteOpenedAndIntegrityChecked
   -> EFCoreMigrationsApplied
   -> BuiltInRegistriesFrozen
@@ -218,7 +223,7 @@ ProcessStart
 
 任一启动步骤失败都不得打开可运行的设置页：manifest/资源失败返回 `WEB_ASSET_INVALID`，WebView2 环境失败返回 `WEBVIEW_RUNTIME_UNAVAILABLE`，数据库迁移/完整性失败返回 `DB_MIGRATION_FAILED` 或 `DB_CORRUPTED`，Recipe/registry 失败返回 `RECIPE_*`。`bridge.hello` 只能在 `RpcBridgeReady` 后成功。启动期间不读取或解密 API Key/邮箱授权码；只有 `run.start` 或账户测试命令在服务边界内按 secret reference 读取。
 
-`RunCoordinator` 每次运行创建独立的 run-scoped service scope、`DbContext`、UoW factory、ZeroPipeline graph 和 `PipelineContext`；窗口关闭、WebView2 重启和页面重载不释放活动 run scope。运行终态提交后由 coordinator 释放 scope，启动恢复则根据数据库的 run snapshot 建立新的 scope，禁止复用上次进程的 service 实例。
+`RunCoordinator` 每次运行创建独立的 run-scoped service scope、`DbContext`、UoW factory、ZeroPipeline graph 和 `PipelineContext`；窗口关闭、WebView2 重启、Avalonia 窗口重建和页面重载不释放活动 run scope。运行终态提交后由 coordinator 释放 scope，启动恢复则根据数据库的 run snapshot 建立新的 scope，禁止复用上次进程的 service 实例。
 
 ## 4. WebView2 契约
 
@@ -296,9 +301,9 @@ ProcessStart
 
 `id` 只用于一次 RPC 请求关联，前端必须保证同一活动请求中唯一；`runId` 标识长任务；`eventSequence` 在单个 run 内严格递增，事件不能依赖 WebView2 传输顺序来重排。后端对重复的幂等请求返回相同语义的响应，不重复创建运行或重复取消。
 
-### WebView2 安全边界
+### Avalonia + WebView2 安全边界
 
-WebView2 只承载随安装包发布的本地 UI，不被当作通用浏览器或本地文件管理器使用。`CoreWebView2Environment` 必须使用固定 WebView2 Runtime 路径、独立 user data folder 和禁用自动下载的配置；启动时校验 `Web/index.html` 及 `Web/static/**` 的 release manifest hash，校验失败不得导航。
+Avalonia 只负责 Windows 窗口、DPI、焦点和原生宿主；WebView2 只承载随安装包发布的本地 UI，不被当作通用浏览器或本地文件管理器使用。`CoreWebView2Environment` 必须使用固定 WebView2 Runtime 路径、独立 user data folder 和禁用自动下载的配置；启动时校验 `Web/index.html` 及 `Web/static/**` 的 release manifest hash，校验失败不得导航。
 
 安全策略固定为：
 
@@ -338,11 +343,11 @@ public interface IWebViewNavigationPolicy
 }
 ```
 
-`WebView2Host.InitializeAsync` 的固定顺序为：创建 `CoreWebView2Environment` -> 设置 Fixed Runtime user data folder -> 注册 `NavigationStarting`、`WebResourceRequested`、`WebMessageReceived`、`ProcessFailed` -> 注册本地资源 filter -> 应用 settings/CSP -> 完成 manifest 校验 -> `NavigateLocalAsync`。`WebMessageReceived` 只把 JSON 交给 `IRpcDispatcher`; dispatcher 在 UI synchronization context 外执行 handler，响应和事件回到 WebView2 UI thread。任何 handler 不得直接调用 WinUI 控件或持有 `CoreWebView2`。
+`WebView2Host.InitializeAsync` 的固定顺序为：Avalonia `MainWindow` 创建并取得 HWND -> `NativeControlHost` 挂载 -> 创建 `CoreWebView2Environment` -> 设置 Fixed Runtime user data folder -> 注册 `NavigationStarting`、`WebResourceRequested`、`WebMessageReceived`、`ProcessFailed` -> 注册本地资源 filter -> 应用 settings/CSP -> 完成 manifest 校验 -> 同步 WebView2 子窗口 bounds -> `NavigateLocalAsync`。`WebMessageReceived` 只把 JSON 交给 `IRpcDispatcher`; dispatcher 在 UI synchronization context 外执行 handler，响应和事件回到 Avalonia UI thread。任何 handler 不得直接调用 Avalonia 控件或持有 `CoreWebView2`。
 
 本地资源映射固定为 `https://app.local/Web/...` 的虚拟 host mapping，而不是 `file://`；mapping 只允许发布目录下的规范化相对路径。导航 policy 允许的唯一初始 URI 是 `https://app.local/Web/index.html`，外部 URI 只允许 `https/http` 且通过 `IWebViewNavigationPolicy` 交给系统 shell，不能在 WebView2 内打开。WebMessage 的原始 JSON 在进入 serializer 前检查字节上限和 UTF-8 合法性；请求取消 token 与 WebView2 page instance 绑定，旧 page 的 response 不得写入新 page。
 
-宿主测试必须使用 fake `IWebView2Host` 验证：初始化顺序、manifest hash 失败、非法导航、路径穿越、超大消息、重复 response、页面重载、`ProcessFailed` 重建、旧 page 消息丢弃和关闭时 pending request 清理。至少一个 Windows UI 集成测试使用真实 WebView2 Fixed Runtime 验证本地 `index.html`、CSS、JS、字体和第一条 `bridge.hello` 往返消息。
+宿主测试必须使用 fake `IWebView2Host` 验证：Avalonia HWND attach/detach、NativeControlHost bounds/DPI 同步、初始化顺序、manifest hash 失败、非法导航、路径穿越、超大消息、重复 response、页面重载、`ProcessFailed` 重建、旧 page 消息丢弃和关闭时 pending request 清理。至少一个 Windows UI 集成测试使用真实 WebView2 Fixed Runtime 验证本地 `index.html`、CSS、JS、字体和第一条 `bridge.hello` 往返消息。
 
 ### 方法契约
 
@@ -692,7 +697,7 @@ fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SET
 
 ### 现有 HTML/JavaScript 前端接入映射
 
-首版继续使用仓库中的 `templates/index.html`、`templates/index_app.js` 和 `templates/static/**`，但 Python `window.pywebview.api` 不进入 .NET 运行时。WinUI 3 通过 WebView2 本地加载 `Web/index.html`，页面使用一个显式 `RpcClient` 和一个单一 `AppStore`；页面组件不直接调用 `window.chrome.webview`，也不直接持有运行级状态。
+首版继续使用仓库中的 `templates/index.html`、`templates/index_app.js` 和 `templates/static/**`，但 Python `window.pywebview.api` 不进入 .NET 运行时。Avalonia 12 通过 `NativeControlHost` 嵌入 WebView2 Win32 子窗口并加载本地 `Web/index.html`，页面使用一个显式 `RpcClient` 和一个单一 `AppStore`；页面组件不直接调用 `window.chrome.webview`，也不直接持有运行级状态。
 
 现有页面到 .NET 模块的映射固定如下：
 
@@ -3257,7 +3262,7 @@ URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件�
 
 ### Windows 11 x64 发布工程
 
-首版采用 Windows App SDK `1.8.250916001`、`net10.0-windows`、`win-x64`、self-contained、unpackaged 应用。应用本身不使用 MSIX；安装、升级和卸载由同一 ProductCode 的 WiX MSI 完成。发布产物分为签名安装器和可诊断的安装目录 manifest，不允许从开发机全局路径加载 native DLL、浏览器或 OCR 模型。
+首版采用 Avalonia 12、`net10.0-windows`、`win-x64`、self-contained、unpackaged 应用。应用本身不使用 MSIX；安装、升级和卸载由同一 ProductCode 的 WiX MSI 完成。发布产物分为签名安装器和可诊断的安装目录 manifest，不允许从开发机全局路径加载 native DLL、浏览器或 OCR 模型。
 
 发布目录固定为：
 
@@ -3327,9 +3332,9 @@ manifest schema 固定为：
 - WiX MSI 使用稳定 ProductCode，升级通过递增 ProductVersion/PackageCode 原地升级，不允许同一版本并行安装；
 - 升级前保留数据库、secrets、日志和用户输出，升级失败自动回滚应用文件但不覆盖用户数据；
 - 卸载移除程序文件、快捷方式和 Fixed Runtime，但默认保留 `%LocalAppData%/InvoiceFlowAI` 数据；提供显式“同时删除用户数据”选项并二次确认；
-- 安装器必须校验 Windows 11 x64、VC++/Windows App SDK 运行时依赖、Fixed Runtime 和发布 manifest，失败时不注册半成品安装。
+- 安装器必须校验 Windows 11 x64、VC++ 运行时依赖、Avalonia self-contained 发布文件、Fixed Runtime 和发布 manifest，失败时不注册半成品安装。
 
-第三方许可证清单至少包含：Windows App SDK、WebView2 Fixed Runtime、ZeroPipeline、MailKit/MimeKit、EF Core、PDFiumCore/PDFium、PdfPig、SkiaSharp、SimdPaddleOCR 及 `ChineseV6Tiny` 模型、Microsoft.Playwright/Chromium、ClosedXML 和所有传递依赖。清单由 lock file、native manifest 和模型 manifest 生成，并随安装器发布。
+第三方许可证清单至少包含：Avalonia、WebView2 Fixed Runtime、ZeroPipeline、MailKit/MimeKit、EF Core、PDFiumCore/PDFium、PdfPig、SkiaSharp、SimdPaddleOCR 及 `ChineseV6Tiny` 模型、Microsoft.Playwright/Chromium、ClosedXML 和所有传递依赖。清单由 lock file、native manifest 和模型 manifest 生成，并随安装器发布。
 
 ### PDF 渲染适配边界
 
