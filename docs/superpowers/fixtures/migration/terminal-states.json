@@ -1,0 +1,36 @@
+{
+  "$comment": "Task 12 step 1 — the five canonical run terminal states the migration preserves byte-for-byte from the Python reference. Each entry lists the trigger, observable side effects, and the priority that overrides other states when co-present.",
+  "schema_version": 1,
+  "states": [
+    {
+      "name": "Completed",
+      "priority": 5,
+      "triggers": ["all_candidates_resolved", "report_exported", "no_failures"],
+      "observable": ["run.completed", "report.export ok", "report.open token issued"]
+    },
+    {
+      "name": "PartialSuccess",
+      "priority": 4,
+      "triggers": [">=1_candidate_resolved", ">=1_candidate_unresolved_but_not_failed"],
+      "observable": ["run.partial-success", "report.export ok with mixed sheet"]
+    },
+    {
+      "name": "NeedsManualReview",
+      "priority": 3,
+      "triggers": ["SPECIAL_PARSER_CONFLICT", "pairing_ambiguity", "low_confidence_invoice"],
+      "observable": ["run.needs-review", "manual_review row appended"]
+    },
+    {
+      "name": "Cancelled",
+      "priority": 2,
+      "triggers": ["user_cancel_during_active_run", "shutdown_signal_during_active_run"],
+      "observable": ["run.cancelled", "checkpoint snapshot frozen"]
+    },
+    {
+      "name": "Failed",
+      "priority": 1,
+      "triggers": ["persistence_failure", "audit_failure", "graph_failure", "authentication_failure"],
+      "observable": ["run.failed", "FailureReason persisted"]
+    }
+  ]
+}
