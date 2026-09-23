@@ -549,6 +549,147 @@ ZeroPipeline 节点在执行开始、成功、失败、重试和取消时写入�
 
 ZeroPipeline 的 DAG 调度负责节点依赖、队列和执行顺序；业务重试、错误码、审计写入和人工复核规则仍由应用层控制，避免把业务语义隐藏在通用编排器中。
 
+#### Recipe 运行契约
+
+首版 Recipe 的业务 schema 独立于 `ZeroPipeline.Recipe` NuGet 版本。NuGet 包版本固定为 `1.2.0`；Recipe schema 固定为 `1.0`。二者都必须写入诊断信息，但不能互相替代。首版只接受 `schemaVersion == "1.0"`，未知 schema 版本在构建 `PipelineGraph` 前以 `RECIPE_SCHEMA_UNSUPPORTED` 拒绝；同一 schema 的未知字段默认拒绝，避免拼写错误静默改变运行行为。
+
+Recipe 是不可变的、可诊断的 DAG 描述。它只包含节点类型、稳定节点 ID、参数、端口连接、执行策略和版本元数据，不包含 API Key、邮箱授权码、解密后的秘密、原始邮件、OCR 原文、图片、临时路径或未脱敏 URL。秘密参数只能使用 `secretRef` 逻辑引用，实际值由运行时从 `ISecretStore` 获取。
+
+首版 Recipe 的根对象契约如下：
+
+```csharp
+public sealed record PipelineRecipe(
+    string SchemaVersion,
+    string RecipeId,
+    string RecipeVersion,
+    string ZeroPipelineRecipeVersion,
+    IReadOnlyList<RecipeNode> Nodes,
+    IReadOnlyList<RecipeConnection> Connections,
+    RecipeExecutionPolicy Execution,
+    IReadOnlyDictionary<string, string>? Metadata = null);
+
+public sealed record RecipeNode(
+    string NodeId,
+    string Type,
+    string TypeVersion,
+    IReadOnlyDictionary<string, object?> Parameters,
+    IReadOnlyDictionary<string, RecipePortBinding>? Ports = null);
+
+public sealed record RecipePortBinding(
+  string Name,
+  string Direction,
+  string PacketType);
+
+public sealed record RecipeConnection(
+    string FromNodeId,
+    string FromPort,
+    string ToNodeId,
+    string ToPort);
+
+public sealed record RecipeExecutionPolicy(
+    int ControlCapacity,
+    int MailboxBatchCapacity,
+    int CandidateBatchCapacity,
+    int ExtractionCapacity,
+    int ResultCapacity,
+    int EventCapacity,
+    int ImapConcurrency,
+    int OcrPageConcurrency,
+    int OcrLineWorkers,
+    int DeepSeekConcurrency,
+    int BrowserConcurrency,
+    int ArchiveConcurrency,
+    int SqliteWriterConcurrency,
+    int MaxInFlightCandidates,
+    int MaxReorderItems,
+    int MaxRetryAttempts,
+    int NodeTimeoutSeconds,
+    int RetryGapTimeoutSeconds);
+```
+
+`RecipeVersion` 是应用维护的可诊断版本，不采用 SemVer 兼容判断；首版值为 `2026-09-23-v1`。`ZeroPipelineRecipeVersion` 固定为 `1.2.0`。`RecipeId` 固定为 `invoiceflow.default`，未来允许多个内置流程但每个 ID 必须拥有独立的注册和 fixture。`Metadata` 只能保存非敏感的人类可读信息，不能参与业务参数解析。
+
+首版节点类型注册表固定如下。注册表是代码内的唯一来源；Recipe 中的 `Type`、`TypeVersion`、端口类型和参数名称必须逐项命中注册表，不能由 JSON 反射任意加载 CLR 类型。
+
+| Type | TypeVersion | 输入端口 | 输出端口 | 参数 |
+| --- | --- | --- | --- | --- |
+| `validate-request` | `1.0` | `Input<RunInput>` | `Valid<ValidatedRunInput>`, `Failure<RunFailure>` | `stagingDirectory:string`, `requireCredentials:boolean` |
+| `scan-mailbox` | `1.0` | `Input<ValidatedRunInput>` | `Messages<PipelineItem<MailboxMessageBatch>>`, `Failure<RunFailure>` | `headerBatchSize:int=200`, `messageBatchSize:int=25`, `maxAttempts:int=2` |
+| `collect-candidates` | `1.0` | `Messages<PipelineItem<MailboxMessageBatch>>` | `Candidates<PipelineItem<CandidateBatch>>`, `Failure<RunFailure>` | `maxAttachmentBytes:int64=5242880`, `allowNestedZip:boolean=true` |
+| `recover-urls` | `1.0` | `Candidates<PipelineItem<CandidateBatch>>` | `Results<PipelineItem<CandidateProcessResult>>`, `Failure<RunFailure>` | `maxAttempts:int=2`, `requestTimeoutSeconds:int=60`, `maxDownloadBytes:int64=5242880`, `allowBrowserFallback:boolean=true` |
+| `extract-documents` | `1.0` | `Results<PipelineItem<CandidateProcessResult>>` | `Results<PipelineItem<CandidateProcessResult>>`, `Failure<RunFailure>` | `allowOcrFallback:boolean=true`, `allowVisionFallback:boolean=true`, `minimumConfidence:number=0.85` |
+| `pair-artifacts` | `1.0` | `Results<PipelineItem<CandidateProcessResult>>` | `Results<PipelineItem<CandidateProcessResult>>`, `Failure<RunFailure>` | `autoAcceptScore:number=180`, `manualReviewScore:number=100`, `allowCrossMessagePairing:boolean=true` |
+| `archive-documents` | `1.0` | `Results<PipelineItem<CandidateProcessResult>>` | `Results<PipelineItem<CandidateProcessResult>>`, `Failure<RunFailure>` | `overwriteExisting:boolean=false`, `preserveOriginal:boolean=true`, `namingPolicyVersion:string="2026-09-23-v1"` |
+| `export-report` | `1.0` | `Results<PipelineItem<CandidateProcessResult>>` | `Completed<RunSummary>`, `Failure<RunFailure>` | `templateVersion:string="2026-09-23-v1"` |
+
+注册项还必须声明每个参数的 JSON 类型、是否必需、默认值、允许范围、是否参与指纹和是否敏感。首版允许的参数类型只有 `string`、`boolean`、`integer`、`number`、`string[]` 和受限的对象；`number` 使用 invariant culture 和固定小数序列化，禁止 NaN、Infinity 和本地化小数格式。参数校验发生在图构建之前，失败分别使用 `RECIPE_NODE_UNKNOWN`、`RECIPE_NODE_VERSION_UNSUPPORTED`、`RECIPE_PARAMETER_UNKNOWN`、`RECIPE_PARAMETER_TYPE_INVALID`、`RECIPE_PARAMETER_RANGE_INVALID` 和 `RECIPE_PORT_INVALID`。
+
+首版完整 fixture 为 `invoiceflow.default` 的最小可运行 DAG。它同时是序列化、反序列化、注册表校验、拓扑构建和指纹稳定性测试的黄金样本：
+
+```json
+{
+  "schemaVersion": "1.0",
+  "recipeId": "invoiceflow.default",
+  "recipeVersion": "2026-09-23-v1",
+  "zeroPipelineRecipeVersion": "1.2.0",
+  "nodes": [
+    { "nodeId": "validate", "type": "validate-request", "typeVersion": "1.0", "parameters": { "stagingDirectory": "%LOCALAPPDATA%/InvoiceFlowAI/staging", "requireCredentials": true } },
+    { "nodeId": "scan", "type": "scan-mailbox", "typeVersion": "1.0", "parameters": { "headerBatchSize": 200, "messageBatchSize": 25, "maxAttempts": 2 } },
+    { "nodeId": "candidates", "type": "collect-candidates", "typeVersion": "1.0", "parameters": { "maxAttachmentBytes": 5242880, "allowNestedZip": true } },
+    { "nodeId": "recover", "type": "recover-urls", "typeVersion": "1.0", "parameters": { "maxAttempts": 2, "requestTimeoutSeconds": 60, "maxDownloadBytes": 5242880, "allowBrowserFallback": true } },
+    { "nodeId": "extract", "type": "extract-documents", "typeVersion": "1.0", "parameters": { "allowOcrFallback": true, "allowVisionFallback": true, "minimumConfidence": 0.85 } },
+    { "nodeId": "pair", "type": "pair-artifacts", "typeVersion": "1.0", "parameters": { "autoAcceptScore": 180, "manualReviewScore": 100, "allowCrossMessagePairing": true } },
+    { "nodeId": "archive", "type": "archive-documents", "typeVersion": "1.0", "parameters": { "overwriteExisting": false, "preserveOriginal": true, "namingPolicyVersion": "2026-09-23-v1" } },
+    { "nodeId": "report", "type": "export-report", "typeVersion": "1.0", "parameters": { "templateVersion": "2026-09-23-v1" } }
+  ],
+  "connections": [
+    { "fromNodeId": "validate", "fromPort": "Valid", "toNodeId": "scan", "toPort": "Input" },
+    { "fromNodeId": "scan", "fromPort": "Messages", "toNodeId": "candidates", "toPort": "Messages" },
+    { "fromNodeId": "candidates", "fromPort": "Candidates", "toNodeId": "recover", "toPort": "Candidates" },
+    { "fromNodeId": "recover", "fromPort": "Results", "toNodeId": "extract", "toPort": "Results" },
+    { "fromNodeId": "extract", "fromPort": "Results", "toNodeId": "pair", "toPort": "Results" },
+    { "fromNodeId": "pair", "fromPort": "Results", "toNodeId": "archive", "toPort": "Results" },
+    { "fromNodeId": "archive", "fromPort": "Results", "toNodeId": "report", "toPort": "Results" }
+  ],
+  "execution": {
+    "controlCapacity": 1,
+    "mailboxBatchCapacity": 4,
+    "candidateBatchCapacity": 8,
+    "extractionCapacity": 4,
+    "resultCapacity": 8,
+    "eventCapacity": 64,
+    "imapConcurrency": 1,
+    "ocrPageConcurrency": 2,
+    "ocrLineWorkers": 2,
+    "deepSeekConcurrency": 2,
+    "browserConcurrency": 1,
+    "archiveConcurrency": 2,
+    "sqliteWriterConcurrency": 1,
+    "maxInFlightCandidates": 32,
+    "maxReorderItems": 32,
+    "maxRetryAttempts": 2,
+    "nodeTimeoutSeconds": 300,
+    "retryGapTimeoutSeconds": 600
+  },
+  "metadata": { "displayName": "InvoiceFlowAI default pipeline" }
+}
+```
+
+fixture 中的 `%LOCALAPPDATA%` 只允许作为受限路径 token 出现在 `stagingDirectory`，加载后必须解析为应用目录并重新以规范化绝对路径参与指纹；Recipe 文件本身不得写入用户机器的具体绝对路径。所有节点必须最终连接到一个入口路径和一个报告/终态路径；孤立节点、重复端口连接、环或缺少 EOF 汇聚都属于 `RECIPE_GRAPH_INVALID`。每个节点的 `Failure<RunFailure>` 是由 `RunCoordinator` 隐式绑定的控制面输出，不作为业务 DAG 边写入 Recipe；未绑定失败端口或无法汇总运行级失败仍属于 `RECIPE_GRAPH_INVALID`。
+
+#### Recipe 指纹与 ConfigurationFingerprint
+
+系统同时保存两个不同层次的指纹：
+
+- `RecipeFingerprint`：只覆盖规范化后的 Recipe schema、节点注册表版本、节点类型和版本、业务参数、端口连接以及 `RecipeExecutionPolicy`。它回答“编排图和节点运行策略是否相同”。
+- `ConfigurationFingerprint`：覆盖 `RecipeFingerprint`、规范化后的非秘密用户设置、规则 AST 的 `SourceFingerprint`、供应商/邮箱账户的非秘密标识、模型和 OCR manifest 版本、应用兼容版本以及实际生效的 `PipelineOptions`。它回答“本次运行的完整行为配置是否相同”。
+
+两者都使用确定性 JSON 序列化后计算 SHA-256，结果使用小写十六进制字符串。规范化规则固定为：对象属性按 ordinal 字典序排序；数组保持业务顺序，节点按 `NodeId` 排序，连接按 `FromNodeId, FromPort, ToNodeId, ToPort` 排序；省略未参与指纹的字段；所有路径先转为规范化应用相对 token；浮点和 Decimal 使用 invariant culture；禁止时间戳、随机 ID、机器名和运行 ID 进入指纹。`RecipeFingerprint` 计算不能读取或解密秘密；`secretRef` 的名称可以参与指纹，秘密值本身不能参与。
+
+`ConfigurationFingerprint` 的生成顺序固定为：加载内置 Recipe -> 注册表校验 -> 解析非秘密设置 -> 解析规则 AST -> 合并 `PipelineOptions` -> 生成 `RecipeFingerprint` -> 生成 `ConfigurationFingerprint`。`settings.update`、Recipe 更新或模型 manifest 更新都会生成新的完整指纹；运行开始后不允许修改该运行使用的快照。`ValidatedRunInput.ConfigurationFingerprint`、`ParserContext.ConfigurationFingerprint`、`PairingContext.ConfigurationFingerprint` 和 `Runs.ConfigurationFingerprint` 必须使用同一值。
+
+`Runs` 另外保存 `RecipeVersion` 和 `RecipeFingerprint`。恢复、重试和人工复核必须使用原运行快照，而不是当前默认 Recipe；若原 `RecipeFingerprint` 或 `ConfigurationFingerprint` 不可用，返回 `RUN_CONFIGURATION_SNAPSHOT_MISSING`，禁止静默使用新配置。应用启动时只加载内置 fixture；用户修改配置不会直接修改已运行 Recipe，必须创建新的规范化快照并在下一次运行生效。
+
 ### ZeroPipeline 节点输入输出契约
 
 ZeroPipeline `1.2.0` 的执行模型是：`IPipelineNode.ExecuteAsync` 每次执行一个 cycle；节点从 `InputPort<T>` 取出一个 `DataPacket<T>`，处理后通过 `OutputPort<T>` 发布；`DataPacket<T>` 携带 `SequenceNumber`、时间戳和 `IsEndOfStream`。输入端口是有界队列，首版业务端口统一使用 `BackpressurePolicy.Block`，禁止使用 `DropOldest` 或 `DropNewest` 丢失发票数据。
