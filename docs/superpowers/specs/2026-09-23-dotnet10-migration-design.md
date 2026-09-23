@@ -527,6 +527,13 @@ public sealed record ReportExportRpcResult(
   string TemplateVersion,
   bool AlreadyExisted);
 
+public sealed record LegacyReportProjection(
+  string LegacySheetName,
+  string NewSheetName,
+  IReadOnlyList<string> LegacyColumns,
+  IReadOnlyList<string> NewColumns,
+  string CandidateStatusMappingVersion);
+
 public sealed record RuleSetListRequest(string RuleSetId);
 
 public sealed record RuleSetGetRequest(string RuleSetId, int? Version = null);
@@ -1444,6 +1451,8 @@ public interface IArchiveCommitCoordinator
 
 归档操作的幂等键固定为 `RunId + DocumentId + ProcessingRevision + Role + ContentHash`；`PreparationId` 是该键的稳定 SHA-256 前缀，不是随机重试 ID。`PrepareAsync` 重复调用返回同一 preparation；`MarkPreparedAsync`、文件移动和 `MarkCommittedAsync` 对同一 preparation 重复调用必须返回已有状态，不重复复制或追加审计事件。目标文件存在且 hash 相同返回 `AlreadyExisted=true/Committed`；目标文件存在但 hash 不同按 `_01` 至 `_99` 选择下一个确定性名称，超过 99 返回 `ARCHIVE_NAME_CONFLICT`。
 
+`ArchiveCommitCoordinator` 的数据库状态机固定为 `Absent -> Prepared -> Committed`，失败分支只能为 `Prepared/RecoveryRequired`，禁止直接写 `Committed`。文件移动使用临时文件同目录原子 rename，成功后立即 fsync 文件和目录；SQLite 事务 B 只提交已验证最终 hash。进程在任意步骤终止后，启动恢复只处理 `RecoveryRequired`/`Prepared`，并按决策矩阵重新验证，不依赖进程内 `_archived_ids` 或 `_archive_keys`。
+
 崩溃恢复决策矩阵固定为：
 
 | DB Prepared | Temporary file | Final file | 恢复动作 |
@@ -1522,6 +1531,8 @@ public interface IReportExporter
 `report.open` 只返回一次性 `ReportOpenToken`：token 随机生成、只保存短 hash，默认有效期 60 秒、成功消费一次后立即失效，最多允许同一 `runId` 并发 3 个未消费 token。token 只绑定已提交的相对报告路径和 content hash，过期、重复消费、hash 不一致或 run 不存在分别返回 `REPORT_TOKEN_EXPIRED`、`REPORT_TOKEN_ALREADY_USED`、`REPORT_HASH_MISMATCH` 和 `RUN_NOT_FOUND`。报表生成失败统一返回 `REPORT_EXPORT_FAILED`，`error.details` 只能是 `ReportExportFailureDetails[]`，`Field` 只允许 `OutputRoot`、`ReportName`、`Workbook`、`TemplateVersion`、`Persistence`，不得放异常文本或绝对路径。
 
 旧 Python 报表的 `分类汇总`、`成功明细`、`异常记录` 不直接作为新 workbook schema；迁移测试必须把同一候选输入同时投影到旧 workbook matrix 和新三 sheet matrix，核对候选数量、状态、金额、reason code 和人工复核数量。旧绝对 `output_path` 只作为本地测试输入，目标 `ReportExportResult.ReportPath` 和 `report.open` 永远只保存相对路径、content hash 和一次性 token。
+
+旧 `export_run_summary` 的新命令映射固定为：用户点击导出 -> `report.export` -> 使用已提交 `RunSummary`/candidate results 生成 ClosedXML workbook -> 保存相对报告路径和 hash -> 返回 `ReportExportRpcResult` -> 用户需要打开时再调用 `report.open`。旧 `get_results`、`export_run_summary`、`open_folder`、`view_invoice` 不注册到新 dispatcher；迁移 fixture 中的绝对路径只用于验证被拒绝。
 
 报表 golden fixture 使用 JSON 而不是比较二进制 xlsx：
 
@@ -2028,6 +2039,8 @@ Python 的进程内 `RunStateStore`、进度 snapshot 和轮询状态不是持�
 
 旧生命周期状态映射固定为：旧 `running`/`processing` -> 新 `Running`；旧 `completed` 且无错误候选 -> `Completed`；旧 `completed` 且存在未解决、超时或 quota 候选 -> `PartialSuccess`；旧 `completed` 且存在人工复核候选 -> `NeedsManualReview`；旧 `failed` -> `Failed`；旧 `stop_requested=true` 且没有运行级失败 -> `Cancelled`。无法从旧 snapshot 判断的状态不得猜测为 `Completed`，统一标记 `RUN_STATE_MIGRATION_UNRESOLVED` 并要求新运行。
 
+终态决策顺序固定为 `Failed > Cancelled > NeedsManualReview > PartialSuccess > Completed`。候选级 `Unresolved`、`Timeout`、`QuotaExhausted` 和候选级 `AuthFailed` 不得抛运行级异常，统一计入 `PartialSuccess`；只有凭据不可用、数据库/审计提交失败、报表生成失败、不可恢复节点故障和图校验失败进入 `Failed`。取消信号已被接受且没有先发生运行级失败时进入 `Cancelled`。非关键 finalizer 失败只追加到 `FinalizerFailures`，不得覆盖已决定的终态；只有审计、数据库和必需报表提交失败才可升级为 `Failed`。
+
 ### 核心领域 DTO
 
 以下类型位于 `InvoiceFlowAI.Domain`，是 parser、候选流水线、配对、归档、审计和持久化之间的唯一业务数据契约。它们使用不可变 `record`，不引用 MailKit、PdfPig、PDFiumCore、SkiaSharp、WebView2、EF Core 或 ZeroPipeline 类型；JSON/RPC 和数据库分别使用 Contracts/Infrastructure 的映射 DTO，不能反向污染领域模型。
@@ -2416,6 +2429,21 @@ public sealed record ParserContext(
     bool IsCurrent,
     string CreatedBy,
     DateTimeOffset CreatedAtUtc);
+
+  public enum RunTerminalStatus
+  {
+    Completed,
+    PartialSuccess,
+    NeedsManualReview,
+    Cancelled,
+    Failed
+  }
+
+  public sealed record RunTerminalDecision(
+    RunTerminalStatus Status,
+    string ReasonCode,
+    IReadOnlyDictionary<string, int> CandidateStatusCounts,
+    IReadOnlyList<string> FinalizerFailures);
 
   public sealed record RuleSetSummary(
     string RuleSetId,
@@ -3210,6 +3238,8 @@ public interface ISecretStore
 邮箱授权码沿用同一 `ISecretStore` 抽象和 DPAPI 保护策略。DeepSeek 与邮箱凭据使用不同的逻辑名称，例如 `deepseek.api-key` 和 `mail.imap.auth-code`，但共享相同的用户绑定和文件权限策略。
 
 旧 Python 设置中的 `api_key` 和 `auth_code` 不做明文迁移：首次启动只读取旧设置文件中的非秘密字段；检测到旧 secret 字段时写入一次性迁移诊断 `LEGACY_SECRET_REQUIRES_REENTRY`，不复制到数据库、WebView2 sessionStorage 或日志。用户必须通过 `secret.set` 重新输入，成功后旧字段所在设置文件使用原子重写删除；删除失败阻止旧文件继续被读取并返回 `LEGACY_SECRET_CLEANUP_FAILED`。旧 `email` 映射为新 `MailboxAccountDraft.EmailAddress`，新建账户由后端生成 `AccountId`，旧 `save_path/company/date` 映射为 `UserSettings` 非秘密字段。
+
+`LegacySettingsImporter` 是一次性启动组件，不是 `ISecretStore` 的 fallback provider：它读取旧设置文件的非秘密字段，检测 secret 字段存在性但不得调用旧 DPAPI 解密函数；成功导入后写入 `LegacyImportState(importVersion, sourceFingerprint, importedAtUtc, secretReentryRequired)`，重复启动只读取该状态，不再次读取旧文件。旧文件清理必须在新设置和账户事务提交、secret re-entry 完成后执行；清理失败保持 `LEGACY_SECRET_CLEANUP_FAILED`，禁止回退读取旧文件。此规则明确“无旧格式运行时兼容”与“一次性迁移导入”不矛盾。
 
 URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件和发票图片默认保存在本地，只有在用户配置的 AI 策略允许时才上传给 DeepSeek。
 
