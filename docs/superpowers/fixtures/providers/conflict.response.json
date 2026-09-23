@@ -1,0 +1,36 @@
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-run-start-provider-conflict-1",
+  "ok": false,
+  "error": {
+    "code": "PROVIDER_RULE_CONFLICT",
+    "scope": "candidate",
+    "retryable": false,
+    "userMessage": "检测到多个供应商规则冲突，需要人工复核。",
+    "detailsAvailable": true,
+    "details": {
+      "field": "providerFamily",
+      "documentId": "document-1",
+      "candidates": [
+        {
+          "providerId": "baiwang-email",
+          "providerFamily": "baiwang_invoice",
+          "priority": 300,
+          "evidenceCode": "BAIWANG_HOST_OR_MESSAGE_MARKER",
+          "evidenceFingerprint": "aaaaaaaaaaaaaaaa",
+          "specialParserId": "provider-special-layout"
+        },
+        {
+          "providerId": "chinatax-direct",
+          "providerFamily": "chinatax_direct_invoice",
+          "priority": 250,
+          "evidenceCode": "DIRECT_URL_CHINATAX_HOST_PATH",
+          "evidenceFingerprint": "bbbbbbbbbbbbbbbb",
+          "specialParserId": "provider-special-layout"
+        }
+      ],
+      "resolution": "manual_review",
+      "requiresManualReview": true
+    }
+  }
+}
