@@ -8,7 +8,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace InvoiceFlowAI.Infrastructure.Persistence.Stores;
 
-public sealed class EfEventReplayStore
+public sealed class EfEventReplayStore : IEventReplayStore
 {
     private readonly InvoiceFlowDbContext _context;
 
@@ -51,8 +51,3 @@ public sealed class EfEventReplayStore
         return new EventReplayResultRecord(events, LatestSequence: latest, RequiresFullRefresh: false);
     }
 }
-
-public sealed record EventReplayResultRecord(
-    IReadOnlyList<StoredRunEventRecord> Events,
-    long LatestSequence,
-    bool RequiresFullRefresh);

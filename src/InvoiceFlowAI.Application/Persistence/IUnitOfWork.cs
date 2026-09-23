@@ -24,6 +24,9 @@ public enum TransactionPurpose
     RulesetBootstrap,
     MailboxUpsert,
     SettingsUpdate,
+    PacketCommit,
+    CheckpointWrite,
+    TerminalCommit,
 }
 
 /// <summary>

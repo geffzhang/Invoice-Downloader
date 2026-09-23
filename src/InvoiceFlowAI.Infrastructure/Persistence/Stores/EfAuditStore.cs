@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace InvoiceFlowAI.Infrastructure.Persistence.Stores;
 
-public sealed class EfAuditStore
+public sealed class EfAuditStore : IAuditEventStore
 {
     private readonly InvoiceFlowDbContext _context;
 
