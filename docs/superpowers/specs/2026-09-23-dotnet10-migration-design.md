@@ -17,7 +17,7 @@
 - 运行生命周期、真值/审计证据、诊断、重试、取消和进度事件；
 - 现有 HTML/JavaScript 交互模型，并将其接入 C# JSON/RPC 后端。
 
-首个版本只支持 Windows 11 x64。不要求兼容旧配置格式和旧运行状态格式。输出行为可以重新设计，但功能结果必须保持等价。
+首个版本只支持 Windows 11 x64。不提供旧配置格式或旧运行状态格式的运行时兼容；但首次启动必须执行一次性 legacy importer，将可安全迁移的非秘密字段导入新账户/设置，并将旧 secret 标记为必须重新录入。输出行为可以重新设计，但功能结果必须保持等价。
 
 ## 2. 迁移策略
 
@@ -364,6 +364,7 @@ public interface IWebViewNavigationPolicy
 | `account.save` | 非秘密账户 DTO、`expectedRevision` | 账户摘要和新 revision | 乐观并发；不保存 secret value。 |
 | `account.delete` | `accountId`、`expectedRevision` | 删除确认 | 活动运行引用时拒绝。 |
 | `account.test` | `accountId`、可选 `mailbox` | 脱敏连接结果 | 不修改账户；省略 mailbox 时使用 `UserSettings.DefaultMailbox`；授权码只从 DPAPI 按 `CredentialName` 读取。 |
+| `report.export` | `runId`、可选 `reportName` | `ReportExportResult` | 幂等；同一 run 和 template 返回同一 content hash。 |
 | `ruleset.list` | `ruleSetId` | 规则版本摘要分页/列表 | 只读；按 version 降序返回。 |
 | `ruleset.get` | `ruleSetId`、`version` 可选 | 脱敏规则 JSON、AST fingerprint 和版本元数据 | 只读。 |
 | `ruleset.save` | `ruleSetId`、`expectedVersion`、schema JSON | 新规则版本、fingerprint 和配置指纹 | 乐观并发；不覆盖历史版本。 |
@@ -512,6 +513,19 @@ public sealed record AccountTestResult(
   bool Succeeded,
   string? FailureCode = null,
   string SafeMessage = "");
+
+public sealed record ReportExportRequest(
+  string RunId,
+  string? ReportName = null);
+
+public sealed record ReportExportRpcResult(
+  string RunId,
+  string ReportPath,
+  string ContentHash,
+  int InvoiceRowCount,
+  int ManualReviewRowCount,
+  string TemplateVersion,
+  bool AlreadyExisted);
 
 public sealed record RuleSetListRequest(string RuleSetId);
 
@@ -2012,6 +2026,8 @@ Python 的进程内 `RunStateStore`、进度 snapshot 和轮询状态不是持�
 
 每个 ZeroPipeline packet 的提交顺序固定为：业务结果 + `AuditEvents` + `RunCheckpoints` + `RunEvents` + `Runs.LastEventSequence` 同一 UoW 提交；提交成功后才向 WebView2 推送事件。页面断线时事件仍写入 `RunEvents`，重连通过 `ReadSinceAsync` 补发；超过保留窗口则先返回完整 snapshot，再从当前 sequence 开始接收新事件。旧 `get_progress` 轮询结果只作为迁移测试输入，不能写入 `RunEvents`。
 
+旧生命周期状态映射固定为：旧 `running`/`processing` -> 新 `Running`；旧 `completed` 且无错误候选 -> `Completed`；旧 `completed` 且存在未解决、超时或 quota 候选 -> `PartialSuccess`；旧 `completed` 且存在人工复核候选 -> `NeedsManualReview`；旧 `failed` -> `Failed`；旧 `stop_requested=true` 且没有运行级失败 -> `Cancelled`。无法从旧 snapshot 判断的状态不得猜测为 `Completed`，统一标记 `RUN_STATE_MIGRATION_UNRESOLVED` 并要求新运行。
+
 ### 核心领域 DTO
 
 以下类型位于 `InvoiceFlowAI.Domain`，是 parser、候选流水线、配对、归档、审计和持久化之间的唯一业务数据契约。它们使用不可变 `record`，不引用 MailKit、PdfPig、PDFiumCore、SkiaSharp、WebView2、EF Core 或 ZeroPipeline 类型；JSON/RPC 和数据库分别使用 Contracts/Infrastructure 的映射 DTO，不能反向污染领域模型。
@@ -3466,7 +3482,9 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 
 ### 集成测试
 
-验证 WebView2 RPC 分发、完整本地文件链路、真实 OFD 样本、假的 `IChatClient` 响应、重试/取消、EF Core SQLite 持久化、迁移、IUnitOfWork commit/rollback、业务数据与审计原子性、RunEvents 序号并发、Prepared/Committed 归档恢复、并发写入和 Excel 生成。三类 parser 还必须用当前 Python 样本和 QingPiao 样本做行为对照：字段等价、人工复核原因稳定、PDF 多发票切分一致、XML/OFD 优先级一致。
+验证 WebView2 RPC 分发、完整本地文件链路、真实 OFD 样本、假的 `IChatClient` 响应、重试/取消、EF Core SQLite 持久化、迁移、IUnitOfWork commit/rollback、业务数据与审计原子性、RunEvents 序号并发、Prepared/Committed 归档恢复、并发写入和 Excel 生成。四类特殊 parser 和四类 email-body parser 还必须用当前 Python 样本和 QingPiao 样本做行为对照：字段等价、人工复核原因稳定、PDF 多发票切分一致、XML/OFD 优先级一致。
+
+上述集成测试必须额外包含以下故障注入场景：事务提交前进程终止、业务结果已提交但 RunEvent 未提交、checkpoint 已提交但下游输出未提交、`Prepared` 临时文件存在而最终文件不存在、最终文件 hash 相同/不同、report.export 重复请求、report.open token 重复消费、旧路径 API 被拒绝、旧 GLM 配置触发 secret re-entry，以及四类 email-body receipt parser 的成功/缺字段/冲突样本。每个场景都必须验证不会产生重复归档、重复审计事件、重复 event sequence 或伪造 `Completed` 终态。
 
 ### Windows 端到端测试
 
