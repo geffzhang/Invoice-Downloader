@@ -30,6 +30,12 @@ public static class RpcErrorCodes
     public const string WebAssetInvalid = "WEB_ASSET_INVALID";
     public const string RecipeSchemaUnsupported = "RECIPE_SCHEMA_UNSUPPORTED";
     public const string RecipeGraphInvalid = "RECIPE_GRAPH_INVALID";
+    public const string RecipeNodeUnknown = "RECIPE_NODE_UNKNOWN";
+    public const string RecipeNodeVersionUnsupported = "RECIPE_NODE_VERSION_UNSUPPORTED";
+    public const string RecipeParameterUnknown = "RECIPE_PARAMETER_UNKNOWN";
+    public const string RecipeParameterTypeInvalid = "RECIPE_PARAMETER_TYPE_INVALID";
+    public const string RecipeParameterRangeInvalid = "RECIPE_PARAMETER_RANGE_INVALID";
+    public const string RecipePortInvalid = "RECIPE_PORT_INVALID";
     public const string DbMigrationFailed = "DB_MIGRATION_FAILED";
     public const string DbCorrupted = "DB_CORRUPTED";
 
