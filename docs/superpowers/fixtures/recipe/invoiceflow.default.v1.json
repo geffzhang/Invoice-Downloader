@@ -17,10 +17,10 @@
     { "fromNodeId": "validate", "fromPort": "Valid", "toNodeId": "scan", "toPort": "Input" },
     { "fromNodeId": "scan", "fromPort": "Messages", "toNodeId": "candidates", "toPort": "Messages" },
     { "fromNodeId": "candidates", "fromPort": "Candidates", "toNodeId": "recover", "toPort": "Candidates" },
-    { "fromNodeId": "recover", "fromPort": "Results", "toNodeId": "extract", "toPort": "Results" },
+    { "fromNodeId": "recover", "fromPort": "Candidates", "toNodeId": "extract", "toPort": "Candidates" },
     { "fromNodeId": "extract", "fromPort": "Results", "toNodeId": "pair", "toPort": "Results" },
-    { "fromNodeId": "pair", "fromPort": "Results", "toNodeId": "archive", "toPort": "Results" },
-    { "fromNodeId": "archive", "fromPort": "Results", "toNodeId": "report", "toPort": "Results" }
+    { "fromNodeId": "pair", "fromPort": "Pairs", "toNodeId": "archive", "toPort": "Pairs" },
+    { "fromNodeId": "archive", "fromPort": "Archived", "toNodeId": "report", "toPort": "Archived" }
   ],
   "execution": {
     "controlCapacity": 1,

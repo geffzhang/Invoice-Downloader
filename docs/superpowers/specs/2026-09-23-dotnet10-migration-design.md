@@ -901,11 +901,11 @@ public sealed record RecipeExecutionPolicy(
 | `validate-request` | `1.0` | `Input<RunInput>` | `Valid<ValidatedRunInput>`, `Failure<RunFailure>` | `stagingDirectory:string`, `requireCredentials:boolean` |
 | `scan-mailbox` | `1.0` | `Input<ValidatedRunInput>` | `Messages<PipelineItem<MailboxMessageBatch>>`, `Failure<RunFailure>` | `headerBatchSize:int=200`, `messageBatchSize:int=25`, `maxAttempts:int=2` |
 | `collect-candidates` | `1.0` | `Messages<PipelineItem<MailboxMessageBatch>>` | `Candidates<PipelineItem<CandidateBatch>>`, `Failure<RunFailure>` | `maxAttachmentBytes:int64=5242880`, `allowNestedZip:boolean=true` |
-| `recover-urls` | `1.0` | `Candidates<PipelineItem<CandidateBatch>>` | `Results<PipelineItem<CandidateProcessResult>>`, `Failure<RunFailure>` | `maxAttempts:int=2`, `requestTimeoutSeconds:int=60`, `maxDownloadBytes:int64=5242880`, `allowBrowserFallback:boolean=true` |
-| `extract-documents` | `1.0` | `Results<PipelineItem<CandidateProcessResult>>` | `Results<PipelineItem<CandidateProcessResult>>`, `Failure<RunFailure>` | `allowOcrFallback:boolean=true`, `allowVisionFallback:boolean=true`, `minimumConfidence:number=0.85` |
-| `pair-artifacts` | `1.0` | `Results<PipelineItem<CandidateProcessResult>>` | `Results<PipelineItem<CandidateProcessResult>>`, `Failure<RunFailure>` | `autoAcceptScore:number=180`, `manualReviewScore:number=100`, `allowCrossMessagePairing:boolean=true` |
-| `archive-documents` | `1.0` | `Results<PipelineItem<CandidateProcessResult>>` | `Results<PipelineItem<CandidateProcessResult>>`, `Failure<RunFailure>` | `overwriteExisting:boolean=false`, `preserveOriginal:boolean=true`, `namingPolicyVersion:string="2026-09-23-v1"` |
-| `export-report` | `1.0` | `Results<PipelineItem<CandidateProcessResult>>` | `Completed<RunSummary>`, `Failure<RunFailure>` | `templateVersion:string="2026-09-23-v1"` |
+| `recover-urls` | `1.0` | `Candidates<PipelineItem<CandidateBatch>>` | `Candidates<PipelineItem<CandidateBatch>>`, `Failure<RunFailure>` | `maxAttempts:int=2`, `requestTimeoutSeconds:int=60`, `maxDownloadBytes:int64=5242880`, `allowBrowserFallback:boolean=true` |
+| `extract-documents` | `1.0` | `Candidates<PipelineItem<CandidateBatch>>` | `Results<PipelineItem<ExtractionBatch>>`, `Failure<RunFailure>` | `allowOcrFallback:boolean=true`, `allowVisionFallback:boolean=true`, `minimumConfidence:number=0.85` |
+| `pair-artifacts` | `1.0` | `Results<PipelineItem<ExtractionBatch>>` | `Pairs<PipelineItem<PairingBatch>>`, `Failure<RunFailure>` | `autoAcceptScore:number=180`, `manualReviewScore:number=100`, `allowCrossMessagePairing:boolean=true` |
+| `archive-documents` | `1.0` | `Pairs<PipelineItem<PairingBatch>>` | `Archived<PipelineItem<ArchiveBatch>>`, `Failure<RunFailure>` | `overwriteExisting:boolean=false`, `preserveOriginal:boolean=true`, `namingPolicyVersion:string="2026-09-23-v1"` |
+| `export-report` | `1.0` | `Archived<PipelineItem<ArchiveBatch>>` | `Completed<RunSummary>`, `Failure<RunFailure>` | `templateVersion:string="2026-09-23-v1"` |
 
 注册项还必须声明每个参数的 JSON 类型、是否必需、默认值、允许范围、是否参与指纹和是否敏感。首版允许的参数类型只有 `string`、`boolean`、`integer`、`number`、`string[]` 和受限的对象；`number` 使用 invariant culture 和固定小数序列化，禁止 NaN、Infinity 和本地化小数格式。参数校验发生在图构建之前，失败分别使用 `RECIPE_NODE_UNKNOWN`、`RECIPE_NODE_VERSION_UNSUPPORTED`、`RECIPE_PARAMETER_UNKNOWN`、`RECIPE_PARAMETER_TYPE_INVALID`、`RECIPE_PARAMETER_RANGE_INVALID` 和 `RECIPE_PORT_INVALID`。
 
@@ -931,7 +931,7 @@ public sealed record RecipeExecutionPolicy(
     { "fromNodeId": "validate", "fromPort": "Valid", "toNodeId": "scan", "toPort": "Input" },
     { "fromNodeId": "scan", "fromPort": "Messages", "toNodeId": "candidates", "toPort": "Messages" },
     { "fromNodeId": "candidates", "fromPort": "Candidates", "toNodeId": "recover", "toPort": "Candidates" },
-    { "fromNodeId": "recover", "fromPort": "Results", "toNodeId": "extract", "toPort": "Results" },
+    { "fromNodeId": "recover", "fromPort": "Candidates", "toNodeId": "extract", "toPort": "Candidates" },
     { "fromNodeId": "extract", "fromPort": "Results", "toNodeId": "pair", "toPort": "Results" },
     { "fromNodeId": "pair", "fromPort": "Results", "toNodeId": "archive", "toPort": "Results" },
     { "fromNodeId": "archive", "fromPort": "Results", "toNodeId": "report", "toPort": "Results" }
