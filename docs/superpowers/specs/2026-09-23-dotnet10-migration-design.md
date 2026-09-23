@@ -372,7 +372,7 @@ public interface IWebViewNavigationPolicy
 | `secret.delete` | `name` | `name`、`configured=false` | 幂等删除；不返回旧值。 |
 | `report.open` | `runId`、报告类型 | 受控临时打开 token | 后端验证路径，不接受前端任意路径。 |
 
-`run.start` 的参数映射为 `RunInput`：`dateFrom`、`dateTo` 使用 `yyyy-MM-dd`；`savePath` 必须是用户可访问的目录；`accountId` 必须引用已保存的邮箱配置；`customRules` 有长度上限；`runMode` 只能取 `interactive` 或首版明确支持的枚举值。后端重新校验所有字段，不能信任前端校验。
+`run.start` 的参数映射为 `RunInput`：`dateFrom`、`dateTo` 使用 `yyyy-MM-dd`；`savePath` 必须是用户可访问的目录；`accountId` 必须引用已保存的邮箱配置；`mailbox` 是本次运行的有效 mailbox，显式传入时覆盖 `UserSettingsSnapshot.DefaultMailbox`，省略时由后端补齐；`customRules` 有长度上限但首版非空值必须拒绝，规则只能通过 `ruleset.save/rollback` 修改；`runMode` 只能取 `interactive` 或首版明确支持的枚举值。后端重新校验所有字段，不能信任前端校验。
 
 ### 方法 DTO、分页和 JSON fixtures
 
@@ -479,6 +479,18 @@ public sealed record SettingsUpdateResult(
     string ConfigurationFingerprint,
     IReadOnlyList<string> ChangedSections);
 
+public sealed record UserSettingsSnapshot(
+  int Revision,
+  string? CurrentAccountId,
+  string DefaultMailbox,
+  MailboxFilterRules MailboxFilters,
+  PipelineOptions Pipeline,
+  bool AllowVisionFallback,
+  string RuleSetId,
+  int RuleSetVersion,
+  string ConfigurationFingerprint,
+  DateTimeOffset UpdatedAtUtc);
+
 public sealed record AccountSaveRequest(
   MailboxAccountDraft Account,
   int ExpectedRevision);
@@ -536,9 +548,9 @@ public sealed record RuleSetMutationResult(
 
 分页规则固定为 offset/limit：`Offset >= 0`、`1 <= Limit <= 100`，排序为 `CreatedAtUtc ASC, ReviewId ASC`，返回 `Total`、`HasMore` 和 `NextOffset`。`review.get` 不返回 OCR 原文、图片、完整邮件正文、秘密或本地绝对路径；`EditableFields` 是后端白名单，不由前端决定。`review.submit` 的 `Decision` 与 `Correction` 组合必须满足：`CorrectAndAccept` 必须有 correction，其他决定不能携带 correction；`ExpectedRevision` 必须等于当前 review revision。
 
-`run.retry` 的 `DocumentIds` 与 `RetryAllEligible` 互斥；单次最多 100 个 document，只有 `Retryable=true` 且未超过最大次数的候选进入 `AcceptedDocumentIds`，其余进入 `RejectedDocumentIds` 并带稳定原因详情。`settings.update` 只允许非秘密配置，修改后由后端规范化 JSON、规则 AST 和 pipeline options 生成新的 `ConfigurationFingerprint`；`ExpectedRevision` 冲突返回 `SETTINGS_REVISION_CONFLICT`。
+`run.retry` 的 `DocumentIds` 与 `RetryAllEligible` 互斥；单次最多 100 个 document，只有 `Retryable=true` 且未超过最大次数的候选进入 `AcceptedDocumentIds`，其余进入 `RejectedDocumentIds` 并带稳定原因详情。`settings.update` 只允许非秘密用户设置；修改 `CurrentAccountId`、`DefaultMailbox`、筛选器、pipeline 或视觉 fallback 时递增 `UserSettings.Revision`，`ExpectedRevision` 冲突返回 `SETTINGS_REVISION_CONFLICT`。`settings.update` 不直接写入规则 JSON，`CustomRuleSetJson` 非空时返回 `RPC_INVALID_PARAMS`。
 
-`ruleset.save` 的 `RuleSetJson` 只能由后端按 `schemaVersion`、字段白名单、目录白名单、priority 范围和冲突规则解析；前端不得发送已解析 AST 作为权威输入。`ruleset.rollback` 只接受存在的历史版本，结果总是新的 version；规则保存/回滚和 `settings.update` 都返回新的 `ConfigurationFingerprint`，但不改变已运行任务的配置快照。规则 RPC 的未知字段、版本冲突、未知目标版本和无权限目录分别映射为 `RPC_INVALID_PARAMS`、`RULESET_REVISION_CONFLICT`、`RULESET_VERSION_NOT_FOUND` 和 `RULESET_INVALID`。
+`ruleset.save` 的 `RuleSetJson` 只能由后端按 `schemaVersion`、字段白名单、目录白名单、priority 范围和冲突规则解析；前端不得发送已解析 AST 作为权威输入。`ruleset.rollback` 只接受存在的历史版本，结果总是新的 version；规则保存/回滚只递增 `RuleSet.Version`，不递增 `UserSettings.Revision`，但立即基于新的规则版本计算并返回新的 `ConfigurationFingerprint`，已运行任务仍使用原配置快照。规则 RPC 的未知字段、版本冲突、未知目标版本和无权限目录分别映射为 `RPC_INVALID_PARAMS`、`RULESET_REVISION_CONFLICT`、`RULESET_VERSION_NOT_FOUND` 和 `RULESET_INVALID`。
 
 首版 JSON fixtures 固定覆盖以下请求/响应：
 
@@ -907,9 +919,9 @@ fixture 中的 `%LOCALAPPDATA%` 只允许作为受限路径 token 出现在 `sta
 
 两者都使用确定性 JSON 序列化后计算 SHA-256，结果使用小写十六进制字符串。规范化规则固定为：对象属性按 ordinal 字典序排序；数组保持业务顺序，节点按 `NodeId` 排序，连接按 `FromNodeId, FromPort, ToNodeId, ToPort` 排序；省略未参与指纹的字段；所有路径先转为规范化应用相对 token；浮点和 Decimal 使用 invariant culture；禁止时间戳、随机 ID、机器名和运行 ID 进入指纹。`RecipeFingerprint` 计算不能读取或解密秘密；`secretRef` 的名称可以参与指纹，秘密值本身不能参与。
 
-`ConfigurationFingerprint` 的生成顺序固定为：加载内置 Recipe -> 注册表校验 -> 解析非秘密设置 -> 解析规则 AST -> 合并 `PipelineOptions` -> 生成 `RecipeFingerprint` -> 生成 `ConfigurationFingerprint`。`settings.update`、Recipe 更新或模型 manifest 更新都会生成新的完整指纹；运行开始后不允许修改该运行使用的快照。`ValidatedRunInput.ConfigurationFingerprint`、`ParserContext.ConfigurationFingerprint`、`PairingContext.ConfigurationFingerprint` 和 `Runs.ConfigurationFingerprint` 必须使用同一值。
+`ConfigurationFingerprint` 的生成顺序固定为：加载内置 Recipe -> 注册表校验 -> 读取 `UserSettings` revision -> 读取 `MailboxAccount` 当前 revision 和非秘密连接身份 -> 读取 `DefaultMailbox`/本次有效 mailbox -> 读取 `RuleSetId + RuleSetVersion` -> 合并 `PipelineOptions` -> 生成 `RecipeFingerprint` -> 生成 `ConfigurationFingerprint`。账户保存、默认账户或默认 mailbox 变更、规则保存/回滚、非秘密设置变更、Recipe 或模型 manifest 更新都会生成新的完整指纹；账户 revision、settings revision 和 RuleSet version 各自独立递增。运行开始后不允许修改该运行使用的快照。`ValidatedRunInput.ConfigurationFingerprint`、`ParserContext.ConfigurationFingerprint`、`PairingContext.ConfigurationFingerprint` 和 `Runs.ConfigurationFingerprint` 必须使用同一值。
 
-`Runs` 另外保存 `RecipeVersion` 和 `RecipeFingerprint`。恢复、重试和人工复核必须使用原运行快照，而不是当前默认 Recipe；若原 `RecipeFingerprint` 或 `ConfigurationFingerprint` 不可用，返回 `RUN_CONFIGURATION_SNAPSHOT_MISSING`，禁止静默使用新配置。应用启动时只加载内置 fixture；用户修改配置不会直接修改已运行 Recipe，必须创建新的规范化快照并在下一次运行生效。
+`Runs` 另外保存 `SettingsRevision`、`AccountId + AccountRevision`、有效 `Mailbox`、`RuleSetId + RuleSetVersion`、`RecipeVersion` 和 `RecipeFingerprint`。恢复、重试和人工复核必须使用这些原运行快照，而不是当前默认设置、账户或规则；若任一快照记录或 `ConfigurationFingerprint` 不可用，返回 `RUN_CONFIGURATION_SNAPSHOT_MISSING`，禁止静默使用新配置。`MailboxAccount` 只表示连接主机、邮箱地址、TLS 和 secret reference；它不拥有默认 mailbox。默认 mailbox 属于单例 `UserSettings.DefaultMailbox`，本次运行的显式 mailbox 只写入 `Runs.Mailbox`，不回写默认设置。应用启动时只加载内置 fixture；用户修改配置不会直接修改已运行 Recipe 或已保存运行快照。
 
 ### ZeroPipeline 节点输入输出契约
 
@@ -2915,7 +2927,8 @@ DeepSeek 视觉配置固定为：
 
 | 表 | 主键和字段 | 外键、索引和约束 |
 | --- | --- | --- |
-| `Runs` | `RunId TEXT`、`State TEXT`、`Stage TEXT`、`TerminalReasonCode TEXT`、`DateFrom TEXT`、`DateToExclusive TEXT`、`AccountId TEXT`、`Mailbox TEXT`、`OutputRoot TEXT`、`ConfigurationFingerprint TEXT`、`RecipeVersion TEXT`、`StartedAtUtc TEXT`、`EndedAtUtc TEXT`、`CancellationRequestedAtUtc TEXT`、`LastEventSequence INTEGER`、`SummaryJson TEXT`、`PrimaryFailureJson TEXT`、`CreatedAtUtc TEXT` | `RunId` 主键；`ConfigurationFingerprint`、`State`、`Stage` 有普通索引；非终态运行建立 partial unique index，保证首版最多一个活动运行。 |
+| `UserSettings` | `SettingsId TEXT`、`Revision INTEGER`、`CurrentAccountId TEXT`、`DefaultMailbox TEXT`、`MailboxFiltersJson TEXT`、`PipelineOptionsJson TEXT`、`AllowVisionFallback INTEGER`、`RuleSetId TEXT`、`RuleSetVersion INTEGER`、`ConfigurationFingerprint TEXT`、`UpdatedAtUtc TEXT` | 单例主键 `SettingsId='default'`；`Revision` 用于 settings 乐观并发；`CurrentAccountId` 外键到 `MailboxAccounts`；`RuleSetId/RuleSetVersion` 外键到 `RuleSets`；不保存秘密。 |
+| `Runs` | `RunId TEXT`、`State TEXT`、`Stage TEXT`、`TerminalReasonCode TEXT`、`DateFrom TEXT`、`DateToExclusive TEXT`、`AccountId TEXT`、`AccountRevision INTEGER`、`Mailbox TEXT`、`OutputRoot TEXT`、`SettingsRevision INTEGER`、`RuleSetId TEXT`、`RuleSetVersion INTEGER`、`ConfigurationFingerprint TEXT`、`RecipeVersion TEXT`、`StartedAtUtc TEXT`、`EndedAtUtc TEXT`、`CancellationRequestedAtUtc TEXT`、`LastEventSequence INTEGER`、`SummaryJson TEXT`、`PrimaryFailureJson TEXT`、`CreatedAtUtc TEXT` | `RunId` 主键；`ConfigurationFingerprint`、`State`、`Stage` 有普通索引；`(AccountId, AccountRevision)`、`(RuleSetId, RuleSetVersion)` 保存运行快照；非终态运行建立 partial unique index，保证首版最多一个活动运行。 |
 | `Documents` | `DocumentId TEXT`、`SourceKind TEXT`、`SourceMessageUid TEXT`、`SourceFileName TEXT`、`SourceLocator TEXT`、`ProviderGroupKey TEXT`、`ContentHash TEXT`、`MimeType TEXT`、`CreatedAtUtc TEXT` | `DocumentId` 主键；`ContentHash` 可为空但非空时唯一；`(SourceKind, SourceLocator)` 非空时唯一；禁止保存原始授权 URL。 |
 | `DocumentProcessing` | `DocumentId TEXT`、`ProcessingRevision INTEGER`、`RunId TEXT`、`Sequence INTEGER`、`Stage TEXT`、`Status TEXT`、`ReasonCode TEXT`、`Retryable INTEGER`、`Attempt INTEGER`、`MaxAttempts INTEGER`、`ArtifactPath TEXT`、`ResultJson TEXT`、`TraceJson TEXT`、`StartedAtUtc TEXT`、`CompletedAtUtc TEXT`、`UpdatedAtUtc TEXT` | 复合主键 `(DocumentId, ProcessingRevision)`，即幂等键；`RunId` 外键；`(RunId, Sequence)` 唯一；`(RunId, DocumentId)` 当前 revision 索引；结果 JSON 禁止原文、图片和凭据。 |
 | `Invoices` | `InvoiceId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`InvoiceDate TEXT`、`Purchaser TEXT`、`Seller TEXT`、`Amount TEXT`、`TaxAmount TEXT`、`TotalAmount TEXT`、`InvoiceCode TEXT`、`InvoiceNumber TEXT`、`DocumentType TEXT`、`Category TEXT`、`Flags INTEGER`、`Confidence TEXT`、`DuplicateKey TEXT`、`ArchiveState TEXT`、`Revision INTEGER` | `(DocumentId, ProcessingRevision)` 外键；`InvoiceId` 主键；`DuplicateKey` 非空时普通索引；`(InvoiceNumber, Seller, InvoiceDate, TotalAmount)` 查询索引；不以发票号码单独做唯一约束。 |
