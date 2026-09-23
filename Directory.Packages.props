@@ -51,6 +51,9 @@
     <!-- JSON -->
     <PackageVersion Include="System.Text.Json" Version="10.0.12" />
 
+    <!-- DPAPI -->
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
+
     <!-- Testing -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageVersion Include="xunit" Version="2.9.0" />
