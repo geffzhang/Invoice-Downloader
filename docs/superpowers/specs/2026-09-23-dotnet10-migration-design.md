@@ -1170,6 +1170,69 @@ public interface IUnitOfWork : IAsyncDisposable
 
 `IAuditStore`、`IRunStateStore`、人工复核提交和 checkpoint 提交使用同一 UoW 时，业务记录和审计记录要么共同提交，要么共同回滚。应用服务负责创建 UoW、调用各接口、处理异常并在一个位置决定 commit/rollback。
 
+#### UoW 内的仓储组合
+
+仓储是 Application 层的持久化抽象；写方法必须使用调用方创建的 `IUnitOfWork`，读方法使用短生命周期查询上下文：
+
+```csharp
+public interface IRunRepository
+{
+  Task InsertAsync(RunInput request, string configurationFingerprint, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task<RunSnapshot?> GetAsync(string runId, CancellationToken cancellationToken);
+  Task UpdateTransitionAsync(RunTransition transition, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task UpdateCheckpointAsync(RunCheckpoint checkpoint, int expectedRevision, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task CompleteAsync(string runId, RunSummary summary, IUnitOfWork transaction, CancellationToken cancellationToken);
+}
+
+public sealed record DocumentProcessingRecord(
+  string DocumentId,
+  int ProcessingRevision,
+  string RunId,
+  long Sequence,
+  string Stage,
+  CandidateStatus Status,
+  string ReasonCode,
+  bool Retryable,
+  int Attempt,
+  string ResultJson,
+  string TraceJson);
+
+public interface IDocumentRepository
+{
+  Task UpsertSourceAsync(DocumentSource source, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task<DocumentSource?> GetSourceAsync(string documentId, CancellationToken cancellationToken);
+  Task<DocumentProcessingRecord?> GetProcessingAsync(string documentId, int processingRevision, CancellationToken cancellationToken);
+  Task UpsertProcessingAsync(DocumentProcessingRecord record, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task<IReadOnlyList<DocumentProcessingRecord>> ListRunResultsAsync(string runId, CancellationToken cancellationToken);
+}
+
+public interface IInvoiceRepository
+{
+  Task UpsertInvoiceAsync(InvoiceDocument invoice, int processingRevision, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task ReplaceItemsAsync(string invoiceId, IReadOnlyList<InvoiceItem> items, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task<InvoiceDocument?> GetAsync(string documentId, int processingRevision, CancellationToken cancellationToken);
+  Task<bool> ExistsByDuplicateKeyAsync(string duplicateKey, CancellationToken cancellationToken);
+}
+
+public interface IManualReviewRepository
+{
+  Task InsertAsync(ManualReviewItem item, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task<ManualReviewItem?> GetAsync(string reviewId, CancellationToken cancellationToken);
+  Task<IReadOnlyList<ManualReviewItem>> ListAsync(string runId, ManualReviewState? state, int offset, int limit, CancellationToken cancellationToken);
+  Task UpdateResolutionAsync(ManualReviewUpdate update, ManualReviewItem resolved, IUnitOfWork transaction, CancellationToken cancellationToken);
+}
+
+public interface IArchiveRepository
+{
+  Task InsertPreparedAsync(ArchivePreparation preparation, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task MarkCommittedAsync(string preparationId, IReadOnlyList<ArchivedArtifact> artifacts, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task<IReadOnlyList<ArchivePreparation>> ListPreparedAsync(string runId, CancellationToken cancellationToken);
+  Task<bool> ExistsCommittedAsync(string documentId, int processingRevision, string role, string contentHash, CancellationToken cancellationToken);
+}
+```
+
+`IRunStateStore`、`IRunRepository` 等上层接口可以由同一个 Infrastructure adapter 委托实现，但不能形成第二套状态语义。`IDocumentRepository` 负责来源和 processing revision，`IInvoiceRepository` 只负责归一化发票及明细，`IManualReviewRepository` 负责 revision 乐观并发，`IArchiveRepository` 只负责 `Prepared/Committed` 数据状态；文件系统移动由 `IArchiveCommitCoordinator` 负责。仓储不得写 Serilog，不得直接发布 WebView2 事件。
+
 #### 运行状态与 checkpoint
 
 ```csharp
@@ -1514,10 +1577,14 @@ public enum InvoiceDocumentType
   Taxi,
   AccommodationInvoice,
   AccommodationStatement,
+  AccommodationConfirmation,
   FlightTicket,
   Itinerary,
   TravelService,
-  NonTargetCompanyInvoice
+  Toll,
+  FixedInvoice,
+  NonTargetCompanyInvoice,
+  PersonalNonReimbursementInvoice
 }
 
 [Flags]
@@ -1692,6 +1759,27 @@ public interface IInvoiceAcceptanceService
     InvoiceAcceptanceRequest request);
 }
 ```
+
+首版字段准入矩阵固定如下：
+
+| 文档类型 | 日期字段 | Seller | Amount | InvoiceNumber | Purchaser | 税额 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `Catering`、`AccommodationInvoice`、`Other` | `InvoiceDate` 必填 | 必填 | 必须 `> 0` | 必填；`Other` 缺失时人工复核 | `target` 接受，`unknown` 人工复核，`non_target` 转 `Retained/NonTargetCompanyInvoice` | 可缺失，但 `TotalAmount` 存在时必须等于 `Amount + TaxAmount` |
+| `TrainTicket`、`Taxi`、`FlightTicket`、`Itinerary`、`TravelService` | 交通票优先 `Route.DepartureDate`，否则 `InvoiceDate` 必填 | 可缺失 | 必须 `> 0` | 可缺失 | 豁免购买方检查 | 通常可缺失，缺失时写 warning；存在则必须通过合计校验 |
+| `AccommodationStatement`、`AccommodationStatement` 的 folio 特例、`AccommodationConfirmation` | `InvoiceDate` 必填 | 必填 | 必须 `> 0` | 可缺失 | 豁免购买方检查 | 可缺失，`TotalAmount` 缺失时以 `Amount` 为总额候选并进入本地校验 |
+| `Toll`、`FixedInvoice` | `InvoiceDate` 必填 | 可缺失 | 必须 `> 0` | 按来源要求；缺失进入人工复核 | 豁免购买方检查 | 可缺失；存在时校验总额 |
+| `NonTargetCompanyInvoice`、`PersonalNonReimbursementInvoice` | 日期必填 | 可缺失 | 必须 `> 0` | 可缺失 | 不执行目标公司准入 | 可缺失 |
+
+`AccommodationStatement` 在领域枚举中的规范名称为 `AccommodationStatement`；上表中的重复文字表示 folio 特例，而不是新增枚举。`TravelService`、`Toll`、`FixedInvoice`、`AccommodationConfirmation` 和 `PersonalNonReimbursementInvoice` 均必须通过该 enum 白名单接受，不能靠字符串绕过枚举。
+
+税额和零金额规则固定为：
+
+- `TaxAmount` 缺失不自动失败；若 `TotalAmount` 存在，按 `TotalAmount == Amount + (TaxAmount ?? 0)` 校验，超出 `TaxTotalTolerance` 返回 `TAX_TOTAL_MISMATCH`；
+- `TaxAmount` 存在但无法解析为有限 Decimal，返回 `INVOICE_AMOUNT_INVALID`；
+- 普通正向票据 `Amount == 0` 返回 `INVOICE_AMOUNT_ZERO` 并为 `Rejected`；
+- `CreditNote`/`Cancellation` 允许非零负金额；零金额红字票仍为 `ManualReview/INVOICE_AMOUNT_ZERO`，不能自动接受；
+- unknown purchaser 对豁免购买方类型自动接受，对非豁免类型进入 `ManualReview/PURCHASER_UNKNOWN`；`NonTargetCompanyInvoice` 和 `PersonalNonReimbursementInvoice` 由明确分类结果直接 `Retained`，不重新执行 purchaser mismatch 检查；
+- 任何未知文档类型、身份不一致、日期非法或金额非法都不能通过用户自定义规则覆盖。
 
 校验顺序固定为：
 
