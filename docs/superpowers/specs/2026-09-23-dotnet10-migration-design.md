@@ -2,7 +2,7 @@
 
 ## 1. 目标与范围
 
-将 InvoiceFlowAI 重写为面向 Windows 11 的 .NET 10 桌面应用。新应用使用 Avalonia 12 作为原生窗口外壳，通过 `NativeControlHost` 嵌入 WebView2 Win32 宿主，继续承载现有 HTML/JavaScript 用户界面。所有运行时业务逻辑均使用 C# 实现，发布后的应用不依赖 Python。
+将 InvoiceFlowAI 重写为面向 Windows 11 的 .NET 10 桌面应用。新应用使用 Avalonia 12 作为原生窗口外壳，通过 `Avalonia.Controls.WebView` 承载现有 HTML/JavaScript 用户界面。所有运行时业务逻辑均使用 C# 实现，发布后的应用不依赖 Python。
 
 迁移目标是完整功能对等，包括：
 
@@ -25,7 +25,7 @@
 
 迁移顺序如下：
 
-1. Avalonia 12/WebView2 Win32 外壳和 JSON/RPC 桥接层；
+1. Avalonia 12/Avalonia.Controls.WebView 外壳和 JSON/RPC 桥接层；
 2. ZeroPipeline DAG、领域契约、运行生命周期、取消、进度和诊断；
 3. XML、OFD、PDF、本地 OCR、字段提取、校验和归档的本地文件节点；
 4. IMAP 扫描和候选筛选节点；
@@ -113,13 +113,13 @@ PDF 页面渲染固定使用 PDFiumCore：
 <PackageReference Include="Sdcb.SimdPaddleOCR" Version="1.4.2" />
 ```
 
-WebView2 使用指定的预览版本，Avalonia 使用精确锁定的 12.x 版本：
+Avalonia.Controls.WebView 使用精确锁定的 12.1.0 版本：
 
 ```xml
-<PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4255-prerelease" />
-<PackageReference Include="Avalonia" Version="12.1.3" />
-<PackageReference Include="Avalonia.Desktop" Version="12.1.3" />
-<PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.3" />
+<PackageReference Include="Avalonia" Version="12.1.0" />
+<PackageReference Include="Avalonia.Desktop" Version="12.1.0" />
+<PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.0" />
+<PackageReference Include="Avalonia.Controls.WebView" Version="12.1.0" />
 <PackageReference Include="Microsoft.Playwright" Version="1.62.0" />
 <PackageReference Include="ClosedXML" Version="0.105.1" />
 ```
@@ -133,17 +133,17 @@ DeepSeek 的统一 AI 适配器固定使用：
 其传递依赖的 `Microsoft.Extensions.AI`、OpenAI 客户端和相关 `10.x` 包必须通过锁文件固定，避免预览版或浮动依赖改变多模态消息序列化结果。
 
 ZeroPipeline 参考仓库：<https://github.com/kzxl/ZeroPipeline/tree/master>。
-其 `1.2.0` 核心包支持 `net8.0` 和 `netstandard2.0`，可由 .NET 10 应用引用。暂不使用 `ZeroPipeline.UI`，因为本项目的界面由 Avalonia 12 + WebView2 承载，不需要把 ZeroPipeline 画布控件作为 UI 基础。
+其 `1.2.0` 核心包支持 `net8.0` 和 `netstandard2.0`，可由 .NET 10 应用引用。暂不使用 `ZeroPipeline.UI`，因为本项目的界面由 Avalonia 12 + `Avalonia.Controls.WebView` 承载，不需要把 ZeroPipeline 画布控件作为 UI 基础。
 
 ### 职责边界
 
-- `InvoiceFlowAI.App`：Avalonia 窗口、WebView2 Win32 初始化、NativeControlHost 生命周期、DPI、打包和桥接接线。不包含发票业务规则。
+- `InvoiceFlowAI.App`：Avalonia 窗口、Avalonia.Controls.WebView 初始化、生命周期、DPI、打包和桥接接线。不包含发票业务规则。
 - `InvoiceFlowAI.Contracts`：可 JSON 序列化的命令、事件、DTO、稳定错误码和前端契约。
 - `InvoiceFlowAI.Application`：使用 ZeroPipeline 构建运行 DAG，负责准入校验、取消、重试策略、阶段转换、并发限制和进度发送。
-- `InvoiceFlowAI.Domain`：发票实体、解析结果、分类规则、配对规则、校验和真值契约。该层不依赖 WebView2、HTTP、数据库或供应商 SDK。
+- `InvoiceFlowAI.Domain`：发票实体、解析结果、分类规则、配对规则、校验和真值契约。该层不依赖 Avalonia.Controls.WebView、HTTP、数据库或供应商 SDK。
 - `InvoiceFlowAI.Infrastructure`：IMAP、文档、OCR、AI、浏览器、归档、报表、持久化、凭据和日志等具体实现。
 
-`Avalonia`、`Avalonia.Desktop`、`Avalonia.Themes.Fluent` 和 `Microsoft.Web.WebView2` 只由 `InvoiceFlowAI.App` 引用。Avalonia 负责窗口和原生宿主，WebView2 负责加载随应用发布的 HTML/JavaScript 资源，并通过宿主桥接接入 JSON/RPC；页面脚本不能直接访问文件系统、DPAPI、数据库或外部 API。
+`Avalonia`、`Avalonia.Desktop`、`Avalonia.Themes.Fluent` 和 `Avalonia.Controls.WebView` 只由 `InvoiceFlowAI.App` 引用。Avalonia 负责窗口和 WebView 控件宿主，WebView 控件负责加载随应用发布的 HTML/JavaScript 资源，并通过宿主桥接接入 JSON/RPC；页面脚本不能直接访问文件系统、DPAPI、数据库或外部 API。
 
 整体分层借鉴 `E:/GitHub/qingpiao/src/QingPiao` 中 `Services/Parsers/Exporters` 的职责拆分，同时使用接口替代具体依赖，以适配桌面端编排和自动化测试。
 
@@ -151,7 +151,7 @@ ZeroPipeline 只位于应用编排层。领域层不依赖 ZeroPipeline；节点
 
 ### 构建工具链与工程结构
 
-首版固定使用 `.NET SDK 10.0.100`、`net10.0-windows`、`win-x64`、Avalonia `12.1.3`、WiX Toolset `5.0.2`、Windows SDK `10.0.26100.1`、MSVC v143 `14.44.35207` 和 VC++ Runtime `14.44.35211` x64。CI 使用 Windows Server 2025 x64 runner，并在构建前校验这些精确版本；不接受“使用已安装的最近版本”。
+首版固定使用 `.NET SDK 10.0.100`、`net10.0-windows`、`win-x64`、Avalonia `12.1.0`、Avalonia.Controls.WebView `12.1.0`、WiX Toolset `5.0.2`、Windows SDK `10.0.26100.1`、MSVC v143 `14.44.35207` 和 VC++ Runtime `14.44.35211` x64。CI 使用 Windows Server 2025 x64 runner，并在构建前校验这些精确版本；不接受“使用已安装的最近版本”。
 
 目标工程结构为：
 
@@ -181,11 +181,11 @@ build/
   licenses/
 ```
 
-`Domain` 不引用基础设施或 ZeroPipeline；`Contracts` 只承载跨层 DTO；`Application` 引用 Domain、Contracts、ZeroPipeline；`Infrastructure` 实现应用接口；只有 `App` 引用 Avalonia、WebView2 和 Win32 interop；只有 `Installer` 引用 WiX。
+`Domain` 不引用基础设施或 ZeroPipeline；`Contracts` 只承载跨层 DTO；`Application` 引用 Domain、Contracts、ZeroPipeline；`Infrastructure` 实现应用接口；只有 `App` 引用 Avalonia、`Avalonia.Controls.WebView` 和 Windows host interop；只有 `Installer` 引用 WiX。
 
 `global.json` 固定 `10.0.100`、`rollForward=disable`、`allowPrerelease=false`。`Directory.Build.props` 固定 nullable、deterministic build、CI build 和 warnings-as-errors。`Directory.Packages.props` 集中维护所有精确 NuGet 版本；每个项目生成 `packages.lock.json`，CI 使用 `dotnet restore --locked-mode`。`NuGet.Config` 只允许审查过的 package sources。
 
-CI 顺序固定为：`verify-toolchain.ps1`、`dotnet restore --locked-mode`、Release build/test、`dotnet publish -r win-x64 --self-contained true`、模型和 release manifest 校验、WiX x64 MSI 构建。WiX 阶段只消费 publish 输出和已校验的 Fixed WebView2/OCR/Chromium/许可证资产，不下载运行时文件。
+CI 顺序固定为：`verify-toolchain.ps1`、`dotnet restore --locked-mode`、Release build/test、`dotnet publish -r win-x64 --self-contained true`、Avalonia WebView backend/模型和 release manifest 校验、WiX x64 MSI 构建。WiX 阶段只消费 publish 输出和已校验的 WebView backend/OCR/Chromium/许可证资产，不下载运行时文件。
 
 CI 每一步的输入/输出也固定：`verify-toolchain.ps1` 只读 SDK/Windows SDK/MSVC/WiX 版本并输出机器可读 `artifacts/toolchain.json`；restore 输出锁文件校验结果；test 输出 TRX 和 coverage summary；publish 输出 `artifacts/publish/win-x64/`；资产校验输出 `artifacts/manifests/*.json`；WiX 只读取 publish 目录并输出带版本的 x64 MSI。任何步骤不得从用户 profile、全局 NuGet cache 中复制未锁定的运行时资产；需要使用缓存时必须以 package/version/hash 清单验证后复制。
 
@@ -209,25 +209,25 @@ ProcessStart
   -> ReleaseManifestVerified
   -> AvaloniaApplicationCreated
   -> MainWindowCreated
-  -> FixedWebView2EnvironmentCreated
-  -> WebView2NativeHostAttached
+  -> AvaloniaWebViewControlCreated
+  -> WebViewBrowserBackendVerified
   -> SQLiteOpenedAndIntegrityChecked
   -> EFCoreMigrationsApplied
   -> BuiltInRegistriesFrozen
   -> BuiltInRecipeValidated
   -> DependencyGraphBuilt
-  -> WebView2LocalAssetsLoaded
+  -> AvaloniaWebViewLocalAssetsLoaded
   -> RpcBridgeReady
   -> Ready
 ```
 
-任一启动步骤失败都不得打开可运行的设置页：manifest/资源失败返回 `WEB_ASSET_INVALID`，WebView2 环境失败返回 `WEBVIEW_RUNTIME_UNAVAILABLE`，数据库迁移/完整性失败返回 `DB_MIGRATION_FAILED` 或 `DB_CORRUPTED`，Recipe/registry 失败返回 `RECIPE_*`。`bridge.hello` 只能在 `RpcBridgeReady` 后成功。启动期间不读取或解密 API Key/邮箱授权码；只有 `run.start` 或账户测试命令在服务边界内按 secret reference 读取。
+任一启动步骤失败都不得打开可运行的设置页：manifest/资源失败返回 `WEB_ASSET_INVALID`，WebView backend/runtime 验证失败返回 `WEBVIEW_RUNTIME_UNAVAILABLE`，数据库迁移/完整性失败返回 `DB_MIGRATION_FAILED` 或 `DB_CORRUPTED`，Recipe/registry 失败返回 `RECIPE_*`。`bridge.hello` 只能在 `RpcBridgeReady` 后成功。启动期间不读取或解密 API Key/邮箱授权码；只有 `run.start` 或账户测试命令在服务边界内按 secret reference 读取。
 
-`RunCoordinator` 每次运行创建独立的 run-scoped service scope、`DbContext`、UoW factory、ZeroPipeline graph 和 `PipelineContext`；窗口关闭、WebView2 重启、Avalonia 窗口重建和页面重载不释放活动 run scope。运行终态提交后由 coordinator 释放 scope，启动恢复则根据数据库的 run snapshot 建立新的 scope，禁止复用上次进程的 service 实例。
+`RunCoordinator` 每次运行创建独立的 run-scoped service scope、`DbContext`、UoW factory、ZeroPipeline graph 和 `PipelineContext`；窗口关闭、Avalonia WebView 控件重建、Avalonia 窗口重建和页面重载不释放活动 run scope。运行终态提交后由 coordinator 释放 scope，启动恢复则根据数据库的 run snapshot 建立新的 scope，禁止复用上次进程的 service 实例。
 
-## 4. WebView2 契约
+## 4. Avalonia.Controls.WebView 契约
 
-前端通过 `window.chrome.webview.postMessage` 向 `InvoiceFlowAI.App` 发送 JSON/RPC 请求，并通过 WebView2 `message` 事件接收响应和异步事件。协议固定为 `invoiceflow.rpc.v1`，JSON 属性使用 camelCase，时间使用 UTC ISO-8601，金额使用字符串或已明确精度的 JSON number，所有 ID 使用不透明字符串。页面不直接访问文件系统、DPAPI、数据库、MailKit、HTTP 或 ZeroPipeline。
+前端通过 `Avalonia.Controls.WebView` 的宿主消息桥接向 `InvoiceFlowAI.App` 发送 JSON/RPC 请求，并接收响应和异步事件。具体浏览器 backend 由控件在 Windows x64 上提供并在启动时验证；协议固定为 `invoiceflow.rpc.v1`，JSON 属性使用 camelCase，时间使用 UTC ISO-8601，金额使用字符串或已明确精度的 JSON number，所有 ID 使用不透明字符串。页面不直接访问文件系统、DPAPI、数据库、MailKit、HTTP 或 ZeroPipeline。
 
 ### 消息 envelope
 
@@ -299,30 +299,30 @@ ProcessStart
 }
 ```
 
-`id` 只用于一次 RPC 请求关联，前端必须保证同一活动请求中唯一；`runId` 标识长任务；`eventSequence` 在单个 run 内严格递增，事件不能依赖 WebView2 传输顺序来重排。后端对重复的幂等请求返回相同语义的响应，不重复创建运行或重复取消。
+`id` 只用于一次 RPC 请求关联，前端必须保证同一活动请求中唯一；`runId` 标识长任务；`eventSequence` 在单个 run 内严格递增，事件不能依赖 WebView 控件传输顺序来重排。后端对重复的幂等请求返回相同语义的响应，不重复创建运行或重复取消。
 
-### Avalonia + WebView2 安全边界
+### Avalonia.Controls.WebView 安全边界
 
-Avalonia 只负责 Windows 窗口、DPI、焦点和原生宿主；WebView2 只承载随安装包发布的本地 UI，不被当作通用浏览器或本地文件管理器使用。`CoreWebView2Environment` 必须使用固定 WebView2 Runtime 路径、独立 user data folder 和禁用自动下载的配置；启动时校验 `Web/index.html` 及 `Web/static/**` 的 release manifest hash，校验失败不得导航。
+Avalonia 只负责 Windows 窗口、DPI、焦点和 WebView 控件生命周期；`Avalonia.Controls.WebView` 只承载随安装包发布的本地 UI，不被当作通用浏览器或本地文件管理器使用。启动时必须验证控件在 Windows x64 下实际选择的 browser backend、runtime 目录、版本和资源 manifest；校验失败不得导航。
 
 安全策略固定为：
 
-- 只允许初始导航到应用生成的本地 `Web/index.html`；`NavigationStarting` 拒绝所有 `http`、`https`、`file`、`data` 和未知 scheme 导航，外部链接只能由后端校验后交给 `ProcessStartInfo.UseShellExecute=true`；
-- 只接受来自当前 WebView2 页面 source 的 `WebMessageReceived`，消息必须是 UTF-8 JSON，单条请求上限 1 MiB，单条事件上限 4 MiB，超过上限返回 `RPC_MESSAGE_TOO_LARGE` 并断开当前 pending request；
+- 只允许初始导航到应用生成的本地 `Web/index.html`；WebView 控件的导航回调拒绝所有 `http`、`https`、`file`、`data` 和未知 scheme 导航，外部链接只能由后端校验后交给 `ProcessStartInfo.UseShellExecute=true`；
+- 只接受当前 WebView 控件实例的消息，消息必须是 UTF-8 JSON，单条请求上限 1 MiB，单条事件上限 4 MiB，超过上限返回 `RPC_MESSAGE_TOO_LARGE` 并断开当前 pending request；
 - 初始化后注入固定 CSP：禁止 `connect-src` 外联、禁止对象和插件、禁止 inline script/eval；本地资源依赖必须来自 manifest 中的相对路径；
-- 不启用 `AddHostObjectToScript`、`AllowExternalDrop`、自动下载、摄像头、麦克风、地理位置、通知、剪贴板读取或持久化浏览器凭据；页面不得访问 `localStorage` 保存秘密；
-- `WebResourceRequested` 只允许 `Web/` 根目录下的 manifest 资源，拒绝路径穿越、绝对路径、UNC 路径和符号链接解析后的目录外路径；
-- `CoreWebView2.Settings` 默认关闭 `AreDevToolsEnabled`、`AreDefaultContextMenusEnabled`、`IsZoomControlEnabled` 和密码保存；Debug 构建也只能由显式环境变量开启 DevTools，Release 永久关闭；
-- native host 不向页面暴露 DPAPI、数据库连接、MailKit、HTTP client、ZeroPipeline 或任意文件系统对象；桥接层只暴露单一 JSON message channel；
-- 处理 `ProcessFailed`、`WebResourceResponseReceived` 和 `NavigationCompleted` 失败时记录脱敏诊断并显示 `WEBVIEW_BRIDGE_NOT_READY`/`WEB_ASSET_INVALID`，不得把异常文本或本地路径发送给页面；
-- WebView2 重启或页面重载不终止后端运行，重新建立 message channel 后必须重新 `bridge.hello`，再通过 `run.get` 恢复状态。
+- 不启用控件的 host object 注入、自动下载、摄像头、麦克风、地理位置、通知、剪贴板读取或持久化浏览器凭据；页面不得访问 `localStorage` 保存秘密；
+- WebView 控件的资源请求回调只允许 `Web/` 根目录下的 manifest 资源，拒绝路径穿越、绝对路径、UNC 路径和符号链接解析后的目录外路径；
+- 控件 backend 的 DevTools、默认上下文菜单、缩放控制和密码保存默认关闭；Debug 构建也只能由显式环境变量开启 DevTools，Release 永久关闭；
+- Avalonia host 不向页面暴露 DPAPI、数据库连接、MailKit、HTTP client、ZeroPipeline 或任意文件系统对象；桥接层只暴露单一 JSON message channel；
+- 处理控件导航、资源或 backend 失败时记录脱敏诊断并显示 `WEBVIEW_BRIDGE_NOT_READY`/`WEB_ASSET_INVALID`，不得把异常文本或本地路径发送给页面；
+- WebView 控件重建或页面重载不终止后端运行，重新建立 message channel 后必须重新 `bridge.hello`，再通过 `run.get` 恢复状态。
 
-桥接层还必须设置请求级取消和生命周期边界：窗口关闭时先拒绝新请求，再等待 bridge flush 的短超时；窗口最小化、WebView2 崩溃和页面导航失败不能触发 `run.cancel`。所有 WebView2 事件处理器在环境销毁时注销，防止旧页面继续向新运行发送消息。WebView2 安全设置、固定 runtime 版本和资源 manifest 版本参与启动诊断，但不参与业务 `ConfigurationFingerprint`。
+桥接层还必须设置请求级取消和生命周期边界：窗口关闭时先拒绝新请求，再等待 bridge flush 的短超时；窗口最小化、WebView backend 崩溃和页面导航失败不能触发 `run.cancel`。所有 WebView 控件事件处理器在控件销毁时注销，防止旧页面继续向新运行发送消息。控件安全设置、backend/runtime 版本和资源 manifest 版本参与启动诊断，但不参与业务 `ConfigurationFingerprint`。
 
 宿主实现拆分为三个只位于 `InvoiceFlowAI.App` 的组件：
 
 ```csharp
-public interface IWebView2Host : IAsyncDisposable
+public interface IAvaloniaWebViewHost : IAsyncDisposable
 {
   Task InitializeAsync(CancellationToken cancellationToken);
   Task NavigateLocalAsync(CancellationToken cancellationToken);
@@ -343,11 +343,11 @@ public interface IWebViewNavigationPolicy
 }
 ```
 
-`WebView2Host.InitializeAsync` 的固定顺序为：Avalonia `MainWindow` 创建并取得 HWND -> `NativeControlHost` 挂载 -> 创建 `CoreWebView2Environment` -> 设置 Fixed Runtime user data folder -> 注册 `NavigationStarting`、`WebResourceRequested`、`WebMessageReceived`、`ProcessFailed` -> 注册本地资源 filter -> 应用 settings/CSP -> 完成 manifest 校验 -> 同步 WebView2 子窗口 bounds -> `NavigateLocalAsync`。`WebMessageReceived` 只把 JSON 交给 `IRpcDispatcher`; dispatcher 在 UI synchronization context 外执行 handler，响应和事件回到 Avalonia UI thread。任何 handler 不得直接调用 Avalonia 控件或持有 `CoreWebView2`。
+`AvaloniaWebViewHost.InitializeAsync` 的固定顺序为：Avalonia `MainWindow` 创建 -> 创建 `Avalonia.Controls.WebView` -> 配置控件 backend 和安全策略 -> 注册导航、资源、消息和 backend 生命周期事件 -> 完成 manifest 校验 -> 设置本地 `Web/index.html` source -> `NavigateLocalAsync`。消息只把 JSON 交给 `IRpcDispatcher`; dispatcher 在 UI synchronization context 外执行 handler，响应和事件回到 Avalonia UI thread。任何 handler 不得直接调用 Avalonia 控件。
 
-本地资源映射固定为 `https://app.local/Web/...` 的虚拟 host mapping，而不是 `file://`；mapping 只允许发布目录下的规范化相对路径。导航 policy 允许的唯一初始 URI 是 `https://app.local/Web/index.html`，外部 URI 只允许 `https/http` 且通过 `IWebViewNavigationPolicy` 交给系统 shell，不能在 WebView2 内打开。WebMessage 的原始 JSON 在进入 serializer 前检查字节上限和 UTF-8 合法性；请求取消 token 与 WebView2 page instance 绑定，旧 page 的 response 不得写入新 page。
+本地资源映射固定为控件支持的本地 `Web/index.html` source；source 只允许发布目录下的规范化相对路径。导航 policy 允许的唯一初始页面是 `Web/index.html`，外部 URI 只允许 `http/https` 且通过 `IWebViewNavigationPolicy` 交给系统 shell，不能在控件内打开。消息原始 JSON 在进入 serializer 前检查字节上限和 UTF-8 合法性；请求取消 token 与 WebView 控件 page instance 绑定，旧 page 的 response 不得写入新 page。
 
-宿主测试必须使用 fake `IWebView2Host` 验证：Avalonia HWND attach/detach、NativeControlHost bounds/DPI 同步、初始化顺序、manifest hash 失败、非法导航、路径穿越、超大消息、重复 response、页面重载、`ProcessFailed` 重建、旧 page 消息丢弃和关闭时 pending request 清理。至少一个 Windows UI 集成测试使用真实 WebView2 Fixed Runtime 验证本地 `index.html`、CSS、JS、字体和第一条 `bridge.hello` 往返消息。
+宿主测试必须使用 fake `IAvaloniaWebViewHost` 验证：控件创建/销毁、bounds/DPI 同步、初始化顺序、backend/runtime 验证失败、manifest hash 失败、非法导航、路径穿越、超大消息、重复 response、页面重载、控件重建、旧 page 消息丢弃和关闭时 pending request 清理。至少一个 Windows UI 集成测试使用 Avalonia.Controls.WebView 的实际 Windows backend 验证本地 `index.html`、CSS、JS、字体和第一条 `bridge.hello` 往返消息。
 
 ### 方法契约
 
@@ -687,7 +687,7 @@ fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SET
 
 ### 连接、取消和错误规则
 
-页面加载后先执行 `bridge.hello`；在 hello 成功前，后端只接受 hello 和诊断级握手请求。WebView2 重新加载或暂时断开不会取消运行，页面重新连接后通过 `run.get` 恢复当前快照和事件；事件重放有固定上限，超出范围时返回完整快照并要求前端丢弃旧事件缓存。
+页面加载后先执行 `bridge.hello`；在 hello 成功前，后端只接受 hello 和诊断级握手请求。Avalonia WebView 控件重新加载或暂时断开不会取消运行，页面重新连接后通过 `run.get` 恢复当前快照和事件；事件重放有固定上限，超出范围时返回完整快照并要求前端丢弃旧事件缓存。
 
 `run.cancel` 只设置运行取消信号，不强制终止线程或删除已提交结果。节点在下一个安全检查点停止读取新输入，候选结果按 `Cancelled` 终态写入，最终发送且只发送一次 `run.cancelled`。取消一个不存在的 run 返回 `RUN_NOT_FOUND`，取消已完成 run 返回 `accepted=false` 和当前状态。
 
@@ -697,16 +697,16 @@ fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SET
 
 ### 现有 HTML/JavaScript 前端接入映射
 
-首版继续使用仓库中的 `templates/index.html`、`templates/index_app.js` 和 `templates/static/**`，但 Python `window.pywebview.api` 不进入 .NET 运行时。Avalonia 12 通过 `NativeControlHost` 嵌入 WebView2 Win32 子窗口并加载本地 `Web/index.html`，页面使用一个显式 `RpcClient` 和一个单一 `AppStore`；页面组件不直接调用 `window.chrome.webview`，也不直接持有运行级状态。
+首版继续使用仓库中的 `templates/index.html`、`templates/index_app.js` 和 `templates/static/**`，但 Python `window.pywebview.api` 不进入 .NET 运行时。Avalonia 12 通过 `Avalonia.Controls.WebView` 加载本地 `Web/index.html`，页面使用一个显式 `RpcClient` 和一个单一 `AppStore`；页面组件不直接调用控件宿主对象，也不直接持有运行级状态。
 
 现有页面到 .NET 模块的映射固定如下：
 
-| 现有前端表面 | .NET/WebView2 目标 | RPC/事件 |
+| 现有前端表面 | .NET/Avalonia.Controls.WebView 目标 | RPC/事件 |
 | --- | --- | --- |
 | `SettingsPage` 路由 `/` | `SettingsView` + `SettingsStore` | `bridge.hello`, `settings.get`, `settings.update`, `secret.set`, `secret.delete`, `run.start` |
 | `ProcessingPage` 路由 `/processing` | `ProcessingView` + `RunStore` | `run.get`, `run.cancel`, `run.retry`; 消费 `run.stageChanged`, `run.progress`, `run.documentResult`, `run.failed`, `run.completed`, `run.cancelled` |
 | `AnalysisPage` 路由 `/analysis` | `AnalysisView` + `ReviewStore` | `review.list`, `review.get`, `review.submit`, `report.open` |
-| `callApi()`/`waitForApi()` | `RpcClient` | request ID、超时、取消、错误 envelope、hello 状态和 WebView2 message transport |
+| `callApi()`/`waitForApi()` | `RpcClient` | request ID、超时、取消、错误 envelope、hello 状态和 WebView message transport |
 | 页面多个 `useState` | `AppStore` reducer | 所有页面通过 selector 读取状态，只能 dispatch action |
 | `load_user_settings` | `settings.get` | 非秘密设置、revision、fingerprint、秘密 configured/masked 状态 |
 | `save_user_settings` | `settings.update` | `ExpectedRevision`、规则集 revision、pipeline patch 和新的 fingerprint |
@@ -731,7 +731,7 @@ fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SET
 | `get_results` | 不返回旧结果字典 | 转换为 `run.get`、`review.list` 和 `report.open` |
 | `open_folder`/`view_invoice` | 旧绝对路径永不接受 | 通过 run/artifact 相对路径生成一次性 report token |
 
-旧方法名在迁移测试 fixture 中允许出现，但不注册到 `IRpcDispatcher`。页面完成 `bridge.hello` 前不得调用任何旧方法；WebView2 页面重载后必须丢弃旧 pending calls，并重新进行 RPC 握手。
+旧方法名在迁移测试 fixture 中允许出现，但不注册到 `IRpcDispatcher`。页面完成 `bridge.hello` 前不得调用任何旧方法；Avalonia WebView 页面重载后必须丢弃旧 pending calls，并重新进行 RPC 握手。
 
 `RpcClient` 的唯一传输入口是：
 
@@ -759,7 +759,7 @@ class RpcClient {
 
 reducer 只接受协议相关 action：`BRIDGE_READY`、`SETTINGS_LOADED`、`SETTINGS_UPDATED`、`RUN_STARTED`、`RUN_SNAPSHOT_REPLACED`、`RUN_EVENT_APPLIED`、`RUN_EVENT_GAP_DETECTED`、`RUN_CANCEL_REQUESTED`、`RUN_TERMINAL`、`REVIEW_PAGE_LOADED`、`REVIEW_SELECTED`、`REVIEW_UPDATED` 和 `RPC_FAILED`。事件 reducer 必须检查 `runId`、`eventSequence` 和终态幂等性：重复序号丢弃，序号跳跃触发 `run.get`，旧 run 的事件不能污染当前 run，终态事件只应用一次。React 组件不得自行合并后端事件或用本地计时器推断进度。
 
-页面启动顺序固定为：加载本地资源 -> `bridge.hello` -> `settings.get` 和当前 run 探测 -> 注册事件 listener -> 渲染设置页。WebView2 重新加载不会取消后端运行；重连后先用 `run.get(afterEventSequence)` 恢复，再开放取消、复核和导出操作。秘密永不写入 `sessionStorage`；sessionStorage 只允许保存当前路由、非秘密表单草稿和受控 QA token。
+页面启动顺序固定为：加载本地资源 -> `bridge.hello` -> `settings.get` 和当前 run 探测 -> 注册事件 listener -> 渲染设置页。Avalonia WebView 控件重新加载不会取消后端运行；重连后先用 `run.get(afterEventSequence)` 恢复，再开放取消、复核和导出操作。秘密永不写入 `sessionStorage`；sessionStorage 只允许保存当前路由、非秘密表单草稿和受控 QA token。
 
 资源复制和发布规则固定为：
 
@@ -768,7 +768,7 @@ reducer 只接受协议相关 action：`BRIDGE_READY`、`SETTINGS_LOADED`、`SET
 3. `templates/static/**` 原样复制为 `Web/static/**`，包括 React、ReactDOM、React Router、Tailwind、Material Symbols 字体；
 4. MSBuild `Content` 项目必须声明 `CopyToOutputDirectory=PreserveNewest` 和 `CopyToPublishDirectory=Always`，禁止运行时从 CDN 或网络补齐依赖；
 5. 每个 Web 资源进入 `release-manifest.json`，记录相对路径、长度、SHA-256 和资源版本；
-6. WebView2 固定导航到本地 `Web/index.html`，禁止导航到外部 URL，外部链接必须交给受控 shell command；
+6. Avalonia WebView 控件固定加载本地 `Web/index.html`，禁止导航到外部 URL，外部链接必须交给受控 shell command；
 7. 任一资源缺失、manifest hash 不匹配或本地导航失败都阻止进入可运行状态，并返回 `WEB_ASSET_INVALID`。
 
 迁移验收必须覆盖现有三页的路由进入、设置加载/更新、秘密 configured 状态、run.start、事件实时更新、断线重连、事件缺口重放、取消、复核 revision 冲突、报告打开和资源 hash 校验。旧的 Python 方法名只能出现在映射测试 fixture 中，不能作为 .NET RPC 的公开方法名。
@@ -823,7 +823,7 @@ Created
 - `EventType`、`ReasonCode`、`Retryable`、`DurationMs`；
 - `MachineName` 和脱敏后的外部服务域名。
 
-ZeroPipeline 节点在执行开始、成功、失败、重试和取消时写入结构化事件。WebView2 桥接记录 RPC 方法名、请求 ID、运行 ID 和耗时，但不记录参数中的凭据、原始 OCR 文本或图片内容。DeepSeek 调用只记录模型名、输入类型、token/耗时元数据和结果状态，不记录 API Key、完整提示词、发票图像或完整发票文本。OFD 解析只记录来源 XML 路径、解析分支和结果状态，不记录完整 XML。
+ZeroPipeline 节点在执行开始、成功、失败、重试和取消时写入结构化事件。Avalonia WebView bridge 记录 RPC 方法名、请求 ID、运行 ID 和耗时，但不记录参数中的凭据、原始 OCR 文本或图片内容。DeepSeek 调用只记录模型名、输入类型、token/耗时元数据和结果状态，不记录 API Key、完整提示词、发票图像或完整发票文本。OFD 解析只记录来源 XML 路径、解析分支和结果状态，不记录完整 XML。
 
 日志与审计分离：Serilog 日志用于诊断和运行观测；真值审计事件使用独立的 `IAuditStore` 持久化，并以稳定 schema 保存。日志可以按保留策略滚动清理，不能替代审计证据。
 
@@ -831,7 +831,7 @@ ZeroPipeline 节点在执行开始、成功、失败、重试和取消时写入�
 
 ### ZeroPipeline 适配边界
 
-- `RunCoordinator`：创建/销毁图实例、绑定运行 ID、接收取消请求、汇总节点状态并向 WebView2 发事件；
+- `RunCoordinator`：创建/销毁图实例、绑定运行 ID、接收取消请求、汇总节点状态并向 Avalonia WebView 发事件；
 - `PipelineGraph`：描述阶段依赖和数据流，不承载用户凭据或持久化状态；
 - `PipelineExecutor`：执行拓扑调度、节点并发和背压；
 - 应用节点：将 `IMailboxScanner`、`IInvoiceParser`、`IInvoiceOcr`、`IInvoiceFieldExtractor`、`IArchiveService` 和 `IReportExporter` 适配为 ZeroPipeline 节点；
@@ -1656,7 +1656,7 @@ public interface IManualReviewService
 
 ### 运行基础设施接口
 
-这些接口位于 `InvoiceFlowAI.Application` 的抽象边界，具体实现由 `InvoiceFlowAI.Infrastructure.Persistence`、`InvoiceFlowAI.App.Rpc` 或运行编排层提供。它们不暴露 EF Core、WebView2、MailKit 或 ZeroPipeline 类型。
+这些接口位于 `InvoiceFlowAI.Application` 的抽象边界，具体实现由 `InvoiceFlowAI.Infrastructure.Persistence`、`InvoiceFlowAI.App.Rpc` 或运行编排层提供。它们不暴露 EF Core、Avalonia.Controls.WebView、MailKit 或 ZeroPipeline 类型。
 
 #### 应用事务抽象
 
@@ -1767,7 +1767,7 @@ public interface IArchiveRepository
 }
 ```
 
-`IRunStateStore`、`IRunRepository` 等上层接口可以由同一个 Infrastructure adapter 委托实现，但不能形成第二套状态语义。`IDocumentRepository` 负责来源和 processing revision，`IInvoiceRepository` 只负责归一化发票及明细，`IManualReviewRepository` 负责 revision 乐观并发，`IArchiveRepository` 只负责 `Prepared/Committed` 数据状态；文件系统移动由 `IArchiveCommitCoordinator` 负责。仓储不得写 Serilog，不得直接发布 WebView2 事件。
+`IRunStateStore`、`IRunRepository` 等上层接口可以由同一个 Infrastructure adapter 委托实现，但不能形成第二套状态语义。`IDocumentRepository` 负责来源和 processing revision，`IInvoiceRepository` 只负责归一化发票及明细，`IManualReviewRepository` 负责 revision 乐观并发，`IArchiveRepository` 只负责 `Prepared/Committed` 数据状态；文件系统移动由 `IArchiveCommitCoordinator` 负责。仓储不得写 Serilog，不得直接发布 Avalonia WebView 事件。
 
 #### 运行状态与 checkpoint
 
@@ -2040,7 +2040,7 @@ public interface IEventReplayStore
 
 Python 的进程内 `RunStateStore`、进度 snapshot 和轮询状态不是持久化来源；迁移到 .NET 后不尝试反序列化旧内存状态。新运行从 `Created` 开始，所有状态转换、candidate processing、checkpoint 和 `RunEvents` 在 SQLite 中提交。若启动时发现旧 Python 进程遗留状态文件或无法映射为 `RunSnapshot`，标记为诊断信息并创建新的空运行，不伪造已完成结果。
 
-每个 ZeroPipeline packet 的提交顺序固定为：业务结果 + `AuditEvents` + `RunCheckpoints` + `RunEvents` + `Runs.LastEventSequence` 同一 UoW 提交；提交成功后才向 WebView2 推送事件。页面断线时事件仍写入 `RunEvents`，重连通过 `ReadSinceAsync` 补发；超过保留窗口则先返回完整 snapshot，再从当前 sequence 开始接收新事件。旧 `get_progress` 轮询结果只作为迁移测试输入，不能写入 `RunEvents`。
+每个 ZeroPipeline packet 的提交顺序固定为：业务结果 + `AuditEvents` + `RunCheckpoints` + `RunEvents` + `Runs.LastEventSequence` 同一 UoW 提交；提交成功后才向 Avalonia WebView 推送事件。页面断线时事件仍写入 `RunEvents`，重连通过 `ReadSinceAsync` 补发；超过保留窗口则先返回完整 snapshot，再从当前 sequence 开始接收新事件。旧 `get_progress` 轮询结果只作为迁移测试输入，不能写入 `RunEvents`。
 
 旧生命周期状态映射固定为：旧 `running`/`processing` -> 新 `Running`；旧 `completed` 且无错误候选 -> `Completed`；旧 `completed` 且存在未解决、超时或 quota 候选 -> `PartialSuccess`；旧 `completed` 且存在人工复核候选 -> `NeedsManualReview`；旧 `failed` -> `Failed`；旧 `stop_requested=true` 且没有运行级失败 -> `Cancelled`。无法从旧 snapshot 判断的状态不得猜测为 `Completed`，统一标记 `RUN_STATE_MIGRATION_UNRESOLVED` 并要求新运行。
 
@@ -2048,7 +2048,7 @@ Python 的进程内 `RunStateStore`、进度 snapshot 和轮询状态不是持�
 
 ### 核心领域 DTO
 
-以下类型位于 `InvoiceFlowAI.Domain`，是 parser、候选流水线、配对、归档、审计和持久化之间的唯一业务数据契约。它们使用不可变 `record`，不引用 MailKit、PdfPig、PDFiumCore、SkiaSharp、WebView2、EF Core 或 ZeroPipeline 类型；JSON/RPC 和数据库分别使用 Contracts/Infrastructure 的映射 DTO，不能反向污染领域模型。
+以下类型位于 `InvoiceFlowAI.Domain`，是 parser、候选流水线、配对、归档、审计和持久化之间的唯一业务数据契约。它们使用不可变 `record`，不引用 MailKit、PdfPig、PDFiumCore、SkiaSharp、Avalonia.Controls.WebView、EF Core 或 ZeroPipeline 类型；JSON/RPC 和数据库分别使用 Contracts/Infrastructure 的映射 DTO，不能反向污染领域模型。
 
 #### 来源身份与候选
 
@@ -2697,7 +2697,7 @@ public interface IEmailBodyReceiptParserRegistry
 
 正文 receipt 成功后仍必须生成统一 `DocumentCandidate`/`InvoiceParseResult`，并在后续阶段走同样的 acceptance、查重、配对、归档、审计和报表链路；不能生成旁路成功结果。正文 parser 的失败、冲突和成功 route 必须写入 `ExtractionTrace.InputKind=EmailBodyReceipt`。
 
-`InvoiceParseResult` 已在本节前的领域 DTO 中定义，同时保留 QingPiao 风格的成功/人工处理结果和当前 Python 的稳定诊断信息。`InvoiceDocument` 包含发票主数据、`InvoiceItem` 明细、`DocumentIdentity`、来源身份、归一化金额/日期、文档类型和置信度；审计元数据由应用层事件单独保存。解析器不能直接写数据库、归档文件或 WebView2 事件。
+`InvoiceParseResult` 已在本节前的领域 DTO 中定义，同时保留 QingPiao 风格的成功/人工处理结果和当前 Python 的稳定诊断信息。`InvoiceDocument` 包含发票主数据、`InvoiceItem` 明细、`DocumentIdentity`、来源身份、归一化金额/日期、文档类型和置信度；审计元数据由应用层事件单独保存。解析器不能直接写数据库、归档文件或 Avalonia WebView 事件。
 
 ### XML 实现
 
@@ -3242,7 +3242,7 @@ public interface ISecretStore
 
 邮箱授权码沿用同一 `ISecretStore` 抽象和 DPAPI 保护策略。DeepSeek 与邮箱凭据使用不同的逻辑名称，例如 `deepseek.api-key` 和 `mail.imap.auth-code`，但共享相同的用户绑定和文件权限策略。
 
-旧 Python 设置中的 `api_key` 和 `auth_code` 不做明文迁移：首次启动只读取旧设置文件中的非秘密字段；检测到旧 secret 字段时写入一次性迁移诊断 `LEGACY_SECRET_REQUIRES_REENTRY`，不复制到数据库、WebView2 sessionStorage 或日志。用户必须通过 `secret.set` 重新输入，成功后旧字段所在设置文件使用原子重写删除；删除失败阻止旧文件继续被读取并返回 `LEGACY_SECRET_CLEANUP_FAILED`。旧 `email` 映射为新 `MailboxAccountDraft.EmailAddress`，新建账户由后端生成 `AccountId`，旧 `save_path/company/date` 映射为 `UserSettings` 非秘密字段。
+旧 Python 设置中的 `api_key` 和 `auth_code` 不做明文迁移：首次启动只读取旧设置文件中的非秘密字段；检测到旧 secret 字段时写入一次性迁移诊断 `LEGACY_SECRET_REQUIRES_REENTRY`，不复制到数据库、Avalonia WebView sessionStorage 或日志。用户必须通过 `secret.set` 重新输入，成功后旧字段所在设置文件使用原子重写删除；删除失败阻止旧文件继续被读取并返回 `LEGACY_SECRET_CLEANUP_FAILED`。旧 `email` 映射为新 `MailboxAccountDraft.EmailAddress`，新建账户由后端生成 `AccountId`，旧 `save_path/company/date` 映射为 `UserSettings` 非秘密字段。
 
 `LegacySettingsImporter` 是一次性启动组件，不是 `ISecretStore` 的 fallback provider：它读取旧设置文件的非秘密字段，检测 secret 字段存在性但不得调用旧 DPAPI 解密函数；成功导入后写入 `LegacyImportState(importVersion, sourceFingerprint, importedAtUtc, secretReentryRequired)`，重复启动只读取该状态，不再次读取旧文件。旧文件清理必须在新设置和账户事务提交、secret re-entry 完成后执行；清理失败保持 `LEGACY_SECRET_CLEANUP_FAILED`，禁止回退读取旧文件。此规则明确“无旧格式运行时兼容”与“一次性迁移导入”不矛盾。
 
@@ -3272,7 +3272,7 @@ InvoiceFlowAI/
   InvoiceFlowAI.App.dll
   runtimes/win-x64/native/pdfium/pdfium.dll
   runtimes/win-x64/native/skia/libSkiaSharp.dll
-  webview2/FixedVersionRuntime/       # 与 1.0.4255-prerelease 匹配
+  webview/WindowsBackend/             # Avalonia.Controls.WebView 12.1.0 的 Windows backend
   models/paddle/chinese-v6-tiny/
     model-manifest.json
     *.pdmodel
@@ -3286,7 +3286,7 @@ InvoiceFlowAI/
   release-manifest.json
 ```
 
-`release-manifest.json` 固定应用版本、Git revision、RID、每个 native 文件的 SHA-256、WebView2 Fixed Runtime 版本、OCR 模型版本/哈希、Playwright Chromium revision 和许可证清单版本。启动诊断只记录 manifest 校验结果，不记录密钥或发票内容。
+`release-manifest.json` 固定应用版本、Git revision、RID、每个 native 文件的 SHA-256、Avalonia.Controls.WebView backend 版本/哈希、OCR 模型版本/哈希、Playwright Chromium revision 和许可证清单版本。启动诊断只记录 manifest 校验结果，不记录密钥或发票内容。
 
 manifest schema 固定为：
 
@@ -3298,7 +3298,7 @@ manifest schema 固定为：
   "runtimeIdentifier": "win-x64",
   "configuration": "Release",
   "signed": true,
-  "webView2": { "packageVersion": "1.0.4255-prerelease", "fixedRuntimeVersion": "<asset-generated>" },
+  "webView": { "packageVersion": "12.1.0", "backendVersion": "<asset-generated>" },
   "playwright": { "packageVersion": "1.62.0", "chromiumRevision": "<asset-generated>" },
   "assets": [
     { "relativePath": "InvoiceFlowAI.exe", "length": 0, "sha256": "<generated-at-publish>" },
@@ -3312,9 +3312,9 @@ manifest schema 固定为：
 }
 ```
 
-`release-manifest.json` 是发布流水线最后生成的文件，不提交带占位符的生产 manifest。构建顺序固定为：publish -> 复制 Fixed Runtime/native/model/browser/license 资产 -> 计算每个文件长度和 SHA-256 -> 生成 model/browser manifest -> 生成 release manifest -> 对 manifest 自身计算 hash -> 签名 exe/DLL/MSI -> 重新验证签名和全部 hash。`<generated-at-publish>`、`<asset-generated>` 和 `0` 只能出现在 schema/example fixture，不能出现在 `publish/` 或 MSI 输入目录。
+`release-manifest.json` 是发布流水线最后生成的文件，不提交带占位符的生产 manifest。构建顺序固定为：publish -> 复制 Avalonia WebView backend/native/model/browser/license 资产 -> 计算每个文件长度和 SHA-256 -> 生成 model/browser manifest -> 生成 release manifest -> 对 manifest 自身计算 hash -> 签名 exe/DLL/MSI -> 重新验证签名和全部 hash。`<generated-at-publish>`、`<asset-generated>` 和 `0` 只能出现在 schema/example fixture，不能出现在 `publish/` 或 MSI 输入目录。
 
-发布资产验证器必须检查相对路径规范化、文件存在、长度、SHA-256、PE x64 架构、签名状态、manifest schema、WebView2 Fixed Runtime 版本、Chromium revision、OCR model manifest 和许可证清单。验证失败阻止 WiX 构建；安装后启动再次验证，但只报告脱敏的 asset path/hash 前缀。当前仓库缺少真实 native/runtime/model/browser 二进制，因此只能先提交 manifest schema 和 fixture，真实 hash 必须由 CI 首次下载并锁定资产后生成。
+发布资产验证器必须检查相对路径规范化、文件存在、长度、SHA-256、PE x64 架构、签名状态、manifest schema、Avalonia.Controls.WebView backend 版本、Chromium revision、OCR model manifest 和许可证清单。验证失败阻止 WiX 构建；安装后启动再次验证，但只报告脱敏的 asset path/hash 前缀。当前仓库缺少真实 native/runtime/model/browser 二进制，因此只能先提交 manifest schema 和 fixture，真实 hash 必须由 CI 首次下载并锁定资产后生成。
 
 资源加载规则：
 
@@ -3322,7 +3322,7 @@ manifest schema 固定为：
 - SkiaSharp native asset 从 `runtimes/win-x64/native/skia` 加载，验证 x64、版本和 `SKBitmap` stride/通道后才交给 OCR；
 - OCR `ChineseV6Tiny` 模型只从 `models/paddle/chinese-v6-tiny` 加载，manifest 或 SHA-256 不匹配时返回 `OCR_MODEL_LOAD_FAILED`；
 - Playwright 不在用户机器上执行 `playwright install`，构建阶段下载并固定 Chromium revision，运行时使用 manifest 中的 `ExecutablePath`；
-- WebView2 使用 Fixed Version Runtime，通过 `CoreWebView2Environment.CreateAsync` 指定 `webview2/FixedVersionRuntime`；不回退到 Evergreen，避免版本漂移；
+- `Avalonia.Controls.WebView` 使用发布 manifest 指定的 Windows backend；backend 缺失、版本不匹配或无法通过安全策略校验时返回 `WEBVIEW_RUNTIME_UNAVAILABLE`，禁止静默切换到其他浏览器 runtime；
 - 所有临时文件、SQLite、日志、secret 和用户输出目录仍位于 `%LocalAppData%/InvoiceFlowAI` 或用户显式选择的输出目录，不写入安装目录。
 
 签名和安装规则：
@@ -3332,9 +3332,9 @@ manifest schema 固定为：
 - WiX MSI 使用稳定 ProductCode，升级通过递增 ProductVersion/PackageCode 原地升级，不允许同一版本并行安装；
 - 升级前保留数据库、secrets、日志和用户输出，升级失败自动回滚应用文件但不覆盖用户数据；
 - 卸载移除程序文件、快捷方式和 Fixed Runtime，但默认保留 `%LocalAppData%/InvoiceFlowAI` 数据；提供显式“同时删除用户数据”选项并二次确认；
-- 安装器必须校验 Windows 11 x64、VC++ 运行时依赖、Avalonia self-contained 发布文件、Fixed Runtime 和发布 manifest，失败时不注册半成品安装。
+- 安装器必须校验 Windows 11 x64、VC++ 运行时依赖、Avalonia self-contained 发布文件、WebView backend 和发布 manifest，失败时不注册半成品安装。
 
-第三方许可证清单至少包含：Avalonia、WebView2 Fixed Runtime、ZeroPipeline、MailKit/MimeKit、EF Core、PDFiumCore/PDFium、PdfPig、SkiaSharp、SimdPaddleOCR 及 `ChineseV6Tiny` 模型、Microsoft.Playwright/Chromium、ClosedXML 和所有传递依赖。清单由 lock file、native manifest 和模型 manifest 生成，并随安装器发布。
+第三方许可证清单至少包含：Avalonia、Avalonia.Controls.WebView Windows backend、ZeroPipeline、MailKit/MimeKit、EF Core、PDFiumCore/PDFium、PdfPig、SkiaSharp、SimdPaddleOCR 及 `ChineseV6Tiny` 模型、Microsoft.Playwright/Chromium、ClosedXML 和所有传递依赖。清单由 lock file、native manifest 和模型 manifest 生成，并随安装器发布。
 
 ### PDF 渲染适配边界
 
@@ -3507,7 +3507,7 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 }
 ```
 
-错误类别包括输入校验、单文件失败、可重试的网络/AI 失败、邮箱认证、AI 认证、邮件正文、配对、规则、归档、人工复核、OCR、持久化、磁盘、WebView2 和系统错误。邮箱扫描至少使用 `MAILBOX_CREDENTIALS_INVALID`、`MAILBOX_TLS_FAILED`、`MAILBOX_SELECT_FAILED`、`MAILBOX_CONNECTION_FAILED`、`MAILBOX_INPUT_UNRESOLVED`、`ATTACHMENT_OVER_SIZE`、`ZIP_LIMIT_EXCEEDED`；AI 认证使用 `AI_AUTHENTICATION_FAILED`；邮件正文使用 `EMAIL_BODY_PARSER_CONFLICT`、`EMAIL_BODY_RECEIPT_INVALID`、`LEGACY_SECRET_REQUIRES_REENTRY`、`LEGACY_SECRET_CLEANUP_FAILED`；配对/规则使用 `PAIRING_AMBIGUOUS`、`PAIRING_CROSS_MESSAGE_DISABLED`、`RULESET_INVALID`、`PROVIDER_RULE_CONFLICT`、`SPECIAL_PARSER_CONFLICT`；归档/复核/OCR 使用 `ARCHIVE_NAME_CONFLICT`、`ARCHIVE_RECOVERY_FAILED`、`REVIEW_REVISION_CONFLICT`、`OCR_MODEL_LOAD_FAILED`、`OCR_IMAGE_INVALID`、`PDF_RENDER_FAILED`；持久化使用 `PERSISTENCE_DISK_FULL`、`DB_CORRUPTED`、`DB_MIGRATION_FAILED` 和 `RUN_RECOVERY_FAILED`。面向用户的消息安全且可本地化；诊断信息只保留脱敏后的技术细节。
+错误类别包括输入校验、单文件失败、可重试的网络/AI 失败、邮箱认证、AI 认证、邮件正文、配对、规则、归档、人工复核、OCR、持久化、磁盘、Avalonia WebView 和系统错误。邮箱扫描至少使用 `MAILBOX_CREDENTIALS_INVALID`、`MAILBOX_TLS_FAILED`、`MAILBOX_SELECT_FAILED`、`MAILBOX_CONNECTION_FAILED`、`MAILBOX_INPUT_UNRESOLVED`、`ATTACHMENT_OVER_SIZE`、`ZIP_LIMIT_EXCEEDED`；AI 认证使用 `AI_AUTHENTICATION_FAILED`；邮件正文使用 `EMAIL_BODY_PARSER_CONFLICT`、`EMAIL_BODY_RECEIPT_INVALID`、`LEGACY_SECRET_REQUIRES_REENTRY`、`LEGACY_SECRET_CLEANUP_FAILED`；配对/规则使用 `PAIRING_AMBIGUOUS`、`PAIRING_CROSS_MESSAGE_DISABLED`、`RULESET_INVALID`、`PROVIDER_RULE_CONFLICT`、`SPECIAL_PARSER_CONFLICT`；归档/复核/OCR 使用 `ARCHIVE_NAME_CONFLICT`、`ARCHIVE_RECOVERY_FAILED`、`REVIEW_REVISION_CONFLICT`、`OCR_MODEL_LOAD_FAILED`、`OCR_IMAGE_INVALID`、`PDF_RENDER_FAILED`；持久化使用 `PERSISTENCE_DISK_FULL`、`DB_CORRUPTED`、`DB_MIGRATION_FAILED` 和 `RUN_RECOVERY_FAILED`。面向用户的消息安全且可本地化；诊断信息只保留脱敏后的技术细节。
 
 ## 11. 测试与验收
 
@@ -3517,13 +3517,13 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 
 ### 集成测试
 
-验证 WebView2 RPC 分发、完整本地文件链路、真实 OFD 样本、假的 `IChatClient` 响应、重试/取消、EF Core SQLite 持久化、迁移、IUnitOfWork commit/rollback、业务数据与审计原子性、RunEvents 序号并发、Prepared/Committed 归档恢复、并发写入和 Excel 生成。四类特殊 parser 和四类 email-body parser 还必须用当前 Python 样本和 QingPiao 样本做行为对照：字段等价、人工复核原因稳定、PDF 多发票切分一致、XML/OFD 优先级一致。
+验证 Avalonia.Controls.WebView RPC 分发、完整本地文件链路、真实 OFD 样本、假的 `IChatClient` 响应、重试/取消、EF Core SQLite 持久化、迁移、IUnitOfWork commit/rollback、业务数据与审计原子性、RunEvents 序号并发、Prepared/Committed 归档恢复、并发写入和 Excel 生成。四类特殊 parser 和四类 email-body parser 还必须用当前 Python 样本和 QingPiao 样本做行为对照：字段等价、人工复核原因稳定、PDF 多发票切分一致、XML/OFD 优先级一致。
 
 上述集成测试必须额外包含以下故障注入场景：事务提交前进程终止、业务结果已提交但 RunEvent 未提交、checkpoint 已提交但下游输出未提交、`Prepared` 临时文件存在而最终文件不存在、最终文件 hash 相同/不同、report.export 重复请求、report.open token 重复消费、旧路径 API 被拒绝、旧 GLM 配置触发 secret re-entry，以及四类 email-body receipt parser 的成功/缺字段/冲突样本。每个场景都必须验证不会产生重复归档、重复审计事件、重复 event sequence 或伪造 `Completed` 终态。
 
 ### Windows 端到端测试
 
-在干净的 Windows 11 x64 环境中验证首次启动、WebView2 加载、取消、网络中断和重试、大批量处理、WebView2 故障后的恢复、自包含启动、OCR 模型随包加载，以及不依赖 Python。
+在干净的 Windows 11 x64 环境中验证首次启动、Avalonia.Controls.WebView 加载、取消、网络中断和重试、大批量处理、WebView backend 故障后的恢复、自包含启动、OCR 模型随包加载，以及不依赖 Python。
 
 ### 性能预算与容量验收
 
@@ -3532,7 +3532,7 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 | 场景 | 预算 |
 | --- | ---: |
 | 冷启动到 `Ready`（已有数据库和已校验资产） | p95 <= 5 s |
-| WebView2 `index.html` 加载到 `bridge.hello` 完成 | p95 <= 1.5 s |
+| Avalonia.Controls.WebView `index.html` 加载到 `bridge.hello` 完成 | p95 <= 1.5 s |
 | 空邮箱运行到 `Completed/NO_CANDIDATES` | p95 <= 8 s |
 | 单页本地 OCR（不含模型首次加载） | p95 <= 2.5 s |
 | 单候选 Track A 提取（不含网络重试） | p95 <= 6 s |
