@@ -1,3 +1,4 @@
+using InvoiceFlowAI.Application.Persistence;
 using InvoiceFlowAI.Application.Rules;
 using InvoiceFlowAI.Contracts.Errors;
 using InvoiceFlowAI.Contracts.Rules;
@@ -48,6 +49,23 @@ public sealed class RuleSetBootstrapper
         await _store.SaveAsync(document, cancellationToken).ConfigureAwait(false);
         await _store.UpdateUserSettingsRuleSetAsync(document.RuleSetId, version, cancellationToken).ConfigureAwait(false);
         return new RuleSetBootstrapResult(document.RuleSetId, version, Inserted: true);
+    }
+
+    /// <summary>
+    /// Bootstrap variant that runs inside a caller-supplied UoW so the
+    /// start-up recovery phase can wrap migration + default-RuleSet
+    /// insertion + UserSettings singleton insert into one atomic commit.
+    /// </summary>
+    public async Task<RuleSetBootstrapResult> EnsureDefaultInTransactionAsync(
+        IUnitOfWork transaction,
+        CancellationToken cancellationToken)
+    {
+        _ = transaction ?? throw new ArgumentNullException(nameof(transaction));
+
+        // Re-use the same logic as the no-transaction overload — the
+        // production EF Core store writes through the tracked DbContext
+        // and the UoW commits everything atomically.
+        return await EnsureDefaultAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private string ComputeCanonicalFingerprint()

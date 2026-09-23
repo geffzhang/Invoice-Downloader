@@ -1,11 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>InvoiceFlowAI.Infrastructure.Tests</RootNamespace>
     <AssemblyName>InvoiceFlowAI.Infrastructure.Tests</AssemblyName>
     <IsPackable>false</IsPackable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Platforms>x64</Platforms>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,6 +18,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\InvoiceFlowAI.Domain\InvoiceFlowAI.Domain.csproj" />
+    <ProjectReference Include="..\..\src\InvoiceFlowAI.Contracts\InvoiceFlowAI.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\InvoiceFlowAI.Application\InvoiceFlowAI.Application.csproj" />
     <ProjectReference Include="..\..\src\InvoiceFlowAI.Infrastructure\InvoiceFlowAI.Infrastructure.csproj" />
   </ItemGroup>
 
