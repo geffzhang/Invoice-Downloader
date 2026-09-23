@@ -2,18 +2,18 @@
 
 > **供 Agentic Worker 使用：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans`，逐项执行本计划。所有步骤使用复选框 `- [ ]` 跟踪。
 
-**目标：** 按已批准的迁移规格构建 Windows 11 x64 .NET 10 WinUI 3/WebView2 InvoiceFlowAI 应用，在保持 Python 业务行为契约的同时，替换为 C# 服务、ZeroPipeline、SQLite、DeepSeek、本地 OCR 和受控 JSON/RPC。
+**目标：** 按已批准的迁移规格构建 Windows 11 x64 .NET 10 Avalonia.Controls.WebView InvoiceFlowAI 应用，在保持 Python 业务行为契约的同时，替换为 C# 服务、ZeroPipeline、SQLite、DeepSeek、本地 OCR 和受控 JSON/RPC。
 
-**架构：** 使用五层项目结构：Domain 负责不可变业务模型和确定性校验；Contracts 负责 JSON/RPC 与持久化安全 DTO；Application 负责编排、运行终态、仓储和应用服务；Infrastructure 负责 MailKit、EF Core、OCR、PDF/OFD、DeepSeek、Playwright、归档、报表、DPAPI 和日志适配器；App 负责 WinUI 3、WebView2、DI 组合、本地资源服务和 RPC bridge。第一条可执行垂直切片为 `bridge.hello -> settings/account bootstrap -> run.start -> deterministic empty mailbox -> run.completed -> report.export -> report.open`。
+**架构：** 使用五层项目结构：Domain 负责不可变业务模型和确定性校验；Contracts 负责 JSON/RPC 与持久化安全 DTO；Application 负责编排、运行终态、仓储和应用服务；Infrastructure 负责 MailKit、EF Core、OCR、PDF/OFD、DeepSeek、Playwright、归档、报表、DPAPI 和日志适配器；App 负责 Avalonia 12、Avalonia.Controls.WebView、DI 组合、本地资源服务和 RPC bridge。第一条可执行垂直切片为 `bridge.hello -> settings/account bootstrap -> run.start -> deterministic empty mailbox -> run.completed -> report.export -> report.open`。
 
-**技术栈：** .NET SDK 10.0.100、`net10.0-windows`、`win-x64`、Windows App SDK 1.8.250916001、WebView2 1.0.4255-prerelease、ZeroPipeline Core/Recipe 1.2.0、EF Core SQLite 10.0.12、MailKit 4.18.0、PDFiumCore 155.0.8057、PdfPig `0.1.17-alpha-202609192350-df33d`、SkiaSharp `4.154.0-preview.1.26454.9`、Sdcb.SimdPaddleOCR 1.4.2、Microsoft.Extensions.AI.OpenAI 10.10.0、Microsoft.Playwright 1.62.0、ClosedXML 0.105.1、Serilog、WiX Toolset 5.0.2。
+**技术栈：** .NET SDK 10.0.100、`net10.0-windows`、`win-x64`、Avalonia 12.1.0、Avalonia.Controls.WebView 12.1.0、ZeroPipeline Core/Recipe 1.2.0、EF Core SQLite 10.0.12、MailKit 4.18.0、PDFiumCore 155.0.8057、PdfPig `0.1.17-alpha-202609192350-df33d`、SkiaSharp `4.154.0-preview.1.26454.9`、Sdcb.SimdPaddleOCR 1.4.2、Microsoft.Extensions.AI.OpenAI 10.10.0、Microsoft.Playwright 1.62.0、ClosedXML 0.105.1、Serilog、WiX Toolset 5.0.2。
 
 ## 全局约束
 
-- 只支持 Windows 11 x64，使用 `net10.0-windows`、RID `win-x64`、self-contained、unpackaged WinUI 3 应用。
+- 只支持 Windows 11 x64，使用 `net10.0-windows`、RID `win-x64`、self-contained、unpackaged Avalonia 12 应用。
 - 使用 SDK `10.0.100`、`rollForward=disable`、`allowPrerelease=false`，CI 使用 `dotnet restore --locked-mode`。
-- Domain 不得引用 WebView2、EF Core、HTTP、MailKit、PdfPig、PDFiumCore、SkiaSharp、ZeroPipeline 或供应商 SDK。
-- provider secret 不得进入 DTO、日志、审计事件、Recipe、SQLite 结果 JSON、WebView2 事件或 fingerprint；使用 DPAPI-backed `ISecretStore` 和逻辑 secret reference。
+- Domain 不得引用 Avalonia.Controls.WebView、EF Core、HTTP、MailKit、PdfPig、PDFiumCore、SkiaSharp、ZeroPipeline 或供应商 SDK。
+- provider secret 不得进入 DTO、日志、审计事件、Recipe、SQLite 结果 JSON、Avalonia WebView 事件或 fingerprint；使用 DPAPI-backed `ISecretStore` 和逻辑 secret reference。
 - 使用 `invoiceflow.rpc.v1`、camelCase JSON、严格未知字段拒绝、稳定错误 envelope；新 dispatcher 不注册旧 Python 方法。
 - 业务状态和审计写入使用显式 UoW 事务；不得向 Application 暴露 ambient EF transaction。
 - 使用 typed ZeroPipeline port；业务 payload 不进入 `PipelineContext` dictionary；所有输入 port 使用 blocking backpressure。
@@ -41,7 +41,7 @@
 
 **接口边界：**
 - 产出规格要求的项目引用图和确定性的 Release 构建目标。
-- `Domain <- Contracts <- Application <- Infrastructure`；`App` 引用 Application/Infrastructure/WebView2/Windows App SDK；Installer 只引用 publish 输出。
+- `Domain <- Contracts <- Application <- Infrastructure`；`App` 引用 Application/Infrastructure/Avalonia.Controls.WebView；Installer 只引用 publish 输出。
 
 - [ ] **步骤 1：先写失败的工具链检查**
 
@@ -310,55 +310,35 @@ git commit -m "feat: add report export and secure open tokens"
 ### 任务 8：实现 DeepSeek/OCR 和邮件正文 receipt pipeline
 
 **文件：**
-- 创建：`src/InvoiceFlowAI.Infrastructure/Ai/DeepSeekAdapter.cs`
-- 创建：`src/InvoiceFlowAI.Infrastructure/Ocr/SimdPaddleOcrService.cs`
-- 创建：`src/InvoiceFlowAI.Infrastructure/Documents/EmailBodyReceiptParsers/*.cs`
-- 创建：`tests/InvoiceFlowAI.Infrastructure.Tests/Ai/*`
-- 创建：`tests/InvoiceFlowAI.Infrastructure.Tests/Documents/EmailBodyReceiptTests.cs`
 
 **接口边界：**
-- 实现 `IDeepSeekAdapter`、`IInvoiceFieldExtractor`、`IInvoiceOcr`、`IEmailBodyReceiptParserRegistry`。
-- provider 顺序：Baiwang 400、Fpyun 390、51fapiao 380、iCloud 370。
-- 所有 receipt 结果都必须经过 normalizer 和 acceptance service，并保持 candidate identity。
 
 - [ ] **步骤 1：编写失败测试**
 
 加载四类 parser 成功 fixture、缺字段 fixture、冲突 fixture、fake `IChatClient` 文本/视觉请求、401/429/timeout/image-size 场景，并断言 `InputKind=EmailBodyReceipt` trace。
-
-- [ ] **步骤 2：实现 adapter**
-
-Infrastructure 只使用 `IChatClient`/DeepSeek；原始文本和图片不得进入日志或持久化；拒绝 GLM 配置并要求重新录入 DeepSeek secret。
-
-- [ ] **步骤 3：运行测试并提交**
-
 ```powershell
 dotnet test tests/InvoiceFlowAI.Infrastructure.Tests --filter FullyQualifiedName~Ai|FullyQualifiedName~EmailBody -c Release
-git add src/InvoiceFlowAI.Infrastructure/Ai src/InvoiceFlowAI.Infrastructure/Ocr src/InvoiceFlowAI.Infrastructure/Documents tests
-git commit -m "feat: add deepseek ocr and email body extraction"
 ```
-
-### 任务 9：实现 WebView2 host、JSON/RPC client 并迁移现有前端
+### 任务 9：实现 Avalonia.Controls.WebView host、JSON/RPC client 并迁移现有前端
 
 **文件：**
-- 创建：`src/InvoiceFlowAI.App/WebView/WebView2Host.cs`
+- 创建：`src/InvoiceFlowAI.App/WebView/AvaloniaWebViewHost.cs`
 - 创建：`src/InvoiceFlowAI.App/Rpc/WebViewRpcBridge.cs`
 - 创建：`src/InvoiceFlowAI.App/AppHost.cs`
 - 修改：`templates/index_app.js`
-- 修改：`templates/index.html`
 - 创建：`tests/InvoiceFlowAI.App.Tests/WebView/*`
 - 创建：`tests/InvoiceFlowAI.App.Tests/Rpc/*`
 
-**接口边界：**
-- WebView2 host 使用 `https://app.local/Web/...`、`IWebViewAssetVerifier`、`IWebViewNavigationPolicy` 和 `IRpcDispatcher`。
+- Avalonia.Controls.WebView host 使用本地 `Web/index.html`、`IWebViewAssetVerifier`、`IWebViewNavigationPolicy` 和 `IRpcDispatcher`；启动时验证 Windows backend、版本和资源 manifest。
 - 前端使用 `RpcClient`、单一 `AppStore` reducer、`bridge.hello`、event sequence 校验、`run.get` 重放、`account.*`、`ruleset.*`、`report.export/open`，不再使用 `window.pywebview.api`。
 
 - [ ] **步骤 1：编写失败的 bridge/frontend 测试**
 
-测试握手、未知旧方法拒绝、请求 timeout/cancel、事件缺口重放、页面重载、旧 page 消息拒绝、账户设置、报表导出/打开和 sessionStorage 不含 secret。
+测试握手、未知旧方法拒绝、请求 timeout/cancel、事件缺口重放、控件重建、页面重载、旧 page 消息拒绝、backend 缺失、账户设置、报表导出/打开和 sessionStorage 不含 secret。
 
 - [ ] **步骤 2：实现 host 和 bridge**
 
-按固定初始化顺序实现；RPC handler 在 UI 线程之外执行，响应和事件回到 WebView2 UI 线程。
+按固定初始化顺序实现 Avalonia WebView 控件、backend 验证、资源加载和消息桥接；RPC handler 在 UI 线程之外执行，响应和事件回到 Avalonia UI 线程。
 
 - [ ] **步骤 3：迁移三个现有页面**
 
@@ -418,7 +398,7 @@ git commit -m "feat: implement invoice processing pipeline"
 
 - [ ] **步骤 1：编写失败的 manifest 测试**
 
-测试资产缺失、长度/hash 错误、PE 架构错误、Fixed Runtime 缺失、Chromium revision 不匹配、model manifest 不匹配、生产资产未签名和路径穿越。
+测试资产缺失、长度/hash 错误、PE 架构错误、Avalonia WebView backend 缺失、Chromium revision 不匹配、model manifest 不匹配、生产资产未签名和路径穿越。
 
 - [ ] **步骤 2：实现脚本和 WiX 打包**
 
@@ -452,7 +432,7 @@ git commit -m "build: add release manifests installer and ci"
 - 修改：`docs/superpowers/specs/2026-09-23-dotnet10-migration-design.md`，仅在验证出偏差时修改
 
 **接口边界：**
-- 产出干净 Windows 11 x64 启动、WebView2 本地加载、DPAPI、账户 revision、空邮箱、完整运行、取消、失败隔离、报表导出/打开、归档恢复、OCR 资产加载、DeepSeek fake/兼容性行为和卸载/升级保留数据的证据。
+- 产出干净 Windows 11 x64 启动、Avalonia.Controls.WebView 本地加载、DPAPI、账户 revision、空邮箱、完整运行、取消、失败隔离、报表导出/打开、归档恢复、OCR 资产加载、DeepSeek fake/兼容性行为和卸载/升级保留数据的证据。
 
 - [ ] **步骤 1：建立完整 fixture 矩阵**
 
@@ -462,7 +442,7 @@ git commit -m "build: add release manifests installer and ci"
 
 运行：`dotnet test -c Release --collect:"XPlat Code Coverage"`
 
-预期：contracts、migration、persistence、pipeline、RPC、WebView2 fake-host、report、archive 和 parser 测试全部通过。
+预期：contracts、migration、persistence、pipeline、RPC、Avalonia WebView fake-host、report、archive 和 parser 测试全部通过。
 
 - [ ] **步骤 3：运行干净 Windows 验收**
 
@@ -487,7 +467,7 @@ git commit -m "test: verify migration behavior and release acceptance"
 
 ## 计划自审
 
-- **规格覆盖：** solution scaffold、typed Recipe DAG、设置/账户/secret、RuleSets、SQLite/UoW/audit/events/checkpoints、五类终态、候选隔离、MailKit、URL provider、parser、OCR、DeepSeek、report export/open、WebView2、前端迁移、manifest、WiX、CI 和 Windows 验收均有对应任务。
+- **规格覆盖：** solution scaffold、typed Recipe DAG、设置/账户/secret、RuleSets、SQLite/UoW/audit/events/checkpoints、五类终态、候选隔离、MailKit、URL provider、parser、OCR、DeepSeek、report export/open、Avalonia.Controls.WebView、前端迁移、manifest、WiX、CI 和 Windows 验收均有对应任务。
 - **类型一致性：** `RecoverUrls` 使用 `Candidates<PipelineItem<CandidateBatch>>`；`ExtractDocuments` 消费 Candidates 并产生 `Results<PipelineItem<ExtractionBatch>>`；pairing 产生 Pairs；archive 产生 Archived；report 消费 Archived。这与已修正的 Recipe fixture 一致。
 - **不伪造资产：** model、browser、native library 和 release hash 仍由 CI 生成，计划不伪造这些值。
 - **已知外部检查：** live DeepSeek 兼容性、OCR 准确率、真实 provider 浏览器流程、代码签名和最终资产 hash 都明确作为发布检查，不从本地 fake test 声称已通过。
