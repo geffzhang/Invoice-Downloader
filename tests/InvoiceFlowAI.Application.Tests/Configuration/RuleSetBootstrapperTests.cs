@@ -1,0 +1,77 @@
+// Tests for RuleSetBootstrapper. Per design §5 the bootstrapper must:
+//   * Insert default RuleSet (version 1) when none exists
+//   * Be idempotent — re-running does not insert a second version
+//   * Validate the existing fingerprint — if it does not match the built-in
+//     fixture, throw rather than silently re-insert
+//   * Reject schema versions other than the supported set
+//   * Return the inserted/existing RuleSetVersion
+
+using FluentAssertions;
+using InvoiceFlowAI.Application.Configuration;
+using InvoiceFlowAI.Application.Rules;
+using InvoiceFlowAI.Contracts.Errors;
+using InvoiceFlowAI.Contracts.Rules;
+using Xunit;
+
+namespace InvoiceFlowAI.Application.Tests.Configuration;
+
+public sealed class RuleSetBootstrapperTests
+{
+    [Fact]
+    public async Task First_run_inserts_default_version_one()
+    {
+        var store = new InMemoryRuleSetStore();
+        var bootstrapper = new RuleSetBootstrapper(store, new RuleSetValidator());
+
+        var result = await bootstrapper.EnsureDefaultAsync(CancellationToken.None);
+
+        result.RuleSetId.Should().Be("default");
+        result.Version.Should().Be(1);
+        store.SavedVersions.Should().HaveCount(1);
+        store.UserSettingsUpdates.Should().HaveCount(1);
+        store.UserSettingsUpdates[0].RuleSetVersion.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Second_run_is_idempotent_and_does_not_insert_again()
+    {
+        var store = new InMemoryRuleSetStore();
+        var bootstrapper = new RuleSetBootstrapper(store, new RuleSetValidator());
+
+        var first = await bootstrapper.EnsureDefaultAsync(CancellationToken.None);
+        var second = await bootstrapper.EnsureDefaultAsync(CancellationToken.None);
+
+        first.Version.Should().Be(second.Version);
+        store.SavedVersions.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task Tampered_existing_default_version_throws()
+    {
+        var store = new InMemoryRuleSetStore();
+        // Pre-populate with a tampered version whose fingerprint differs from
+        // the built-in fixture.
+        store.SeedTamperedDefault();
+        var bootstrapper = new RuleSetBootstrapper(store, new RuleSetValidator());
+
+        var act = () => bootstrapper.EnsureDefaultAsync(CancellationToken.None);
+        var ex = await act.Should().ThrowAsync<RuleSetBootstrapException>();
+        ex.Which.ReasonCode.Should().Be(RpcErrorCodes.RulesetRevisionConflict);
+    }
+
+    [Fact]
+    public void Validator_rejects_unknown_schema_version()
+    {
+        var validator = new RuleSetValidator();
+        var doc = new RuleSetDocument("99.0", "default", new[]
+        {
+            new RuleRule("r", 1, true,
+                new RuleRuleWhen(DocumentType: null, SellerContains: null),
+                new RuleRuleThen("folder", "category", false, true)),
+        });
+
+        var act = () => validator.Validate(doc);
+        act.Should().Throw<RuleSetValidationException>()
+            .Which.ReasonCode.Should().Be(RpcErrorCodes.RecipeSchemaUnsupported);
+    }
+}
