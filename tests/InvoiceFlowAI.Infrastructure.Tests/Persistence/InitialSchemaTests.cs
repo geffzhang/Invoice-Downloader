@@ -5,6 +5,7 @@
 
 using FluentAssertions;
 using InvoiceFlowAI.Infrastructure.Persistence;
+using InvoiceFlowAI.Infrastructure.Persistence.Entities;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
@@ -80,13 +81,30 @@ public sealed class InitialSchemaTests : IClassFixture<SqliteTestFixture>
     public async Task Migration_is_idempotent_and_does_not_re_execute()
     {
         // Migrations history table is the single source of truth — running the
-        // migration a second time must not add another row and must not throw.
+        // committed migrations a second time must not add rows and must not throw.
         await using var context = _fixture.CreateContext();
         await context.Database.MigrateAsync();
 
-        var historyRows = await SqliteScalarAsync(context,
-            "SELECT COUNT(*) FROM __EFMigrationsHistory;");
-        historyRows.Should().Be(1);
+        var migrationIds = new List<string>();
+        await context.Database.OpenConnectionAsync();
+        try
+        {
+            await using var command = context.Database.GetDbConnection().CreateCommand();
+            command.CommandText = "SELECT MigrationId FROM __EFMigrationsHistory ORDER BY MigrationId;";
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                migrationIds.Add(reader.GetString(0));
+            }
+        }
+        finally
+        {
+            await context.Database.CloseConnectionAsync();
+        }
+
+        migrationIds.Should().Equal(
+            "20260923_InitialSchema",
+            "20260924_AddMailboxDefaultMailbox");
     }
 
     [Fact]
@@ -99,6 +117,24 @@ public sealed class InitialSchemaTests : IClassFixture<SqliteTestFixture>
         var rows = await SqliteScalarAsync(context,
             "SELECT COUNT(*) FROM UserSettings;");
         rows.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Invoice_items_unique_index_uses_expected_database_name()
+    {
+        await using var context = _fixture.CreateContext();
+
+        var exists = await SqliteScalarAsync(context,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name='InvoiceItems' AND name='IX_InvoiceItems_Ordinal';");
+
+        exists.Should().Be(1);
+
+        var modelIndex = context.Model
+            .FindEntityType(typeof(InvoiceItemRow))!
+            .GetIndexes()
+            .Single(index => index.Properties.Select(property => property.Name).SequenceEqual(["InvoiceId", "Ordinal"]));
+
+        modelIndex.GetDatabaseName().Should().Be("IX_InvoiceItems_Ordinal");
     }
 
     private static async Task<long> SqliteScalarAsync(InvoiceFlowDbContext context, string sql)

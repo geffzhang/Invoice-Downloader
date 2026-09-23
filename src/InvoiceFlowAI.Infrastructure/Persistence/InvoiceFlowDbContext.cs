@@ -126,7 +126,7 @@ public sealed class InvoiceFlowDbContext : DbContext
             b.HasKey(x => x.InvoiceItemId);
             b.Property(x => x.InvoiceItemId).HasMaxLength(64).IsRequired();
             b.Property(x => x.InvoiceId).HasMaxLength(64).IsRequired();
-            b.HasIndex(x => new { x.InvoiceId, x.Ordinal }).IsUnique();
+            b.HasIndex(x => new { x.InvoiceId, x.Ordinal }).HasDatabaseName("IX_InvoiceItems_Ordinal").IsUnique();
         });
 
         modelBuilder.Entity<PairingRow>(b =>
@@ -190,6 +190,7 @@ public sealed class InvoiceFlowDbContext : DbContext
             b.Property(x => x.UseTls).IsRequired();
             b.Property(x => x.CredentialName).HasMaxLength(64).IsRequired();
             b.Property(x => x.DisplayName).HasMaxLength(128);
+            b.Property(x => x.DefaultMailbox).HasMaxLength(128);
             b.Property(x => x.Revision).IsRequired();
             b.Property(x => x.CreatedAtUtc).IsRequired();
             b.Property(x => x.UpdatedAtUtc).IsRequired();

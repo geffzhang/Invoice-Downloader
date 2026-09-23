@@ -25,8 +25,6 @@ public sealed class SqliteTestFixture : IAsyncLifetime
 
         var options = new DbContextOptionsBuilder<InvoiceFlowDbContext>()
             .UseSqlite(_connection, sqlite => sqlite.MigrationsAssembly("InvoiceFlowAI.Infrastructure"))
-            .ConfigureWarnings(warnings => warnings.Ignore(
-                Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning))
             .Options;
         return new InvoiceFlowDbContext(options);
     }
@@ -85,6 +83,8 @@ public sealed class SqliteTestFixture : IAsyncLifetime
             DELETE FROM __EFMigrationsHistory;
             INSERT INTO __EFMigrationsHistory (MigrationId, ProductVersion)
                 VALUES ('20260923_InitialSchema', '10.0.12');
+            INSERT INTO __EFMigrationsHistory (MigrationId, ProductVersion)
+                VALUES ('20260924_AddMailboxDefaultMailbox', '10.0.12');
             CREATE TRIGGER AuditEvents_NoUpdate
                 BEFORE UPDATE ON AuditEvents
                 BEGIN

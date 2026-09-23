@@ -1,8 +1,9 @@
-// Verifies MailboxAccounts optimistic concurrency from design §5:
+// Verifies MailboxAccounts optimistic concurrency and connection-setting reads:
 //   * SaveAsync with stale expectedRevision returns MAILBOX_ACCOUNT_REVISION_CONFLICT
-//   * GetAsync returns the latest Revision so the UI can re-read before retrying
+//   * FindAsync returns non-secret settings including the persisted default mailbox
 
 using FluentAssertions;
+using InvoiceFlowAI.Application.Mail;
 using InvoiceFlowAI.Application.Persistence;
 using InvoiceFlowAI.Contracts.Accounts;
 using InvoiceFlowAI.Contracts.Errors;
@@ -68,6 +69,83 @@ public sealed class MailboxAccountRevisionTests : IClassFixture<SqliteTestFixtur
         updated.Revision.Should().Be(2);
         updated.DisplayName.Should().Be("Alice (renamed)");
         await uow2.CommitAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task FindAsync_returns_saved_connection_settings_including_default_mailbox()
+    {
+        await _fixture.ResetAsync();
+        await using var context = _fixture.CreateContext();
+        var store = new EfMailboxAccountStore(context);
+
+        await using (var uow = await BeginAsync(context))
+        {
+            await store.SaveAsync(
+                NewDraft("acct-read") with { DefaultMailbox = "Invoices" },
+                expectedRevision: 0,
+                uow,
+                CancellationToken.None);
+            await uow.CommitAsync(CancellationToken.None);
+        }
+
+        IMailboxAccountReader reader = store;
+        var settings = await reader.FindAsync("acct-read", CancellationToken.None);
+
+        settings.Should().NotBeNull();
+        settings!.AccountId.Should().Be("acct-read");
+        settings.EmailAddress.Should().Be("alice@example.com");
+        settings.ImapHost.Should().Be("imap.example.com");
+        settings.ImapPort.Should().Be(993);
+        settings.UseTls.Should().BeTrue();
+        settings.CredentialName.Should().Be("mail.imap.auth-code");
+        settings.DefaultMailbox.Should().Be("Invoices");
+    }
+
+    [Fact]
+    public async Task FindAsync_returns_null_for_missing_account_id()
+    {
+        await _fixture.ResetAsync();
+        await using var context = _fixture.CreateContext();
+        IMailboxAccountReader reader = new EfMailboxAccountStore(context);
+
+        var settings = await reader.FindAsync("missing", CancellationToken.None);
+
+        settings.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Save_update_persists_new_default_mailbox_for_subsequent_reads()
+    {
+        await _fixture.ResetAsync();
+        await using var context = _fixture.CreateContext();
+        var store = new EfMailboxAccountStore(context);
+
+        await using (var uow = await BeginAsync(context))
+        {
+            await store.SaveAsync(
+                NewDraft("acct-default") with { DefaultMailbox = "Archive" },
+                expectedRevision: 0,
+                uow,
+                CancellationToken.None);
+            await uow.CommitAsync(CancellationToken.None);
+        }
+
+        await using (var uow = await BeginAsync(context))
+        {
+            var updated = await store.SaveAsync(
+                NewDraft("acct-default") with { DefaultMailbox = "Invoices" },
+                expectedRevision: 1,
+                uow,
+                CancellationToken.None);
+            updated.DefaultMailbox.Should().Be("Invoices");
+            await uow.CommitAsync(CancellationToken.None);
+        }
+
+        IMailboxAccountReader reader = store;
+        var settings = await reader.FindAsync("acct-default", CancellationToken.None);
+
+        settings.Should().NotBeNull();
+        settings!.DefaultMailbox.Should().Be("Invoices");
     }
 
     private static MailboxAccountDraft NewDraft(string id) => new(

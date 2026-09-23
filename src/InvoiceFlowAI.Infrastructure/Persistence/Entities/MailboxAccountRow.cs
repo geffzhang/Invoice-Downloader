@@ -13,6 +13,7 @@ public sealed class MailboxAccountRow
     public bool UseTls { get; set; }
     public string CredentialName { get; set; } = string.Empty;
     public string? DisplayName { get; set; }
+    public string? DefaultMailbox { get; set; }
     public int Revision { get; set; }
     public DateTimeOffset CreatedAtUtc { get; set; }
     public DateTimeOffset UpdatedAtUtc { get; set; }

@@ -4,13 +4,14 @@
 // MAILBOX_ACCOUNT_REVISION_CONFLICT by the dispatcher).
 
 using InvoiceFlowAI.Application.Persistence;
+using InvoiceFlowAI.Application.Mail;
 using InvoiceFlowAI.Contracts.Accounts;
 using InvoiceFlowAI.Infrastructure.Persistence.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace InvoiceFlowAI.Infrastructure.Persistence.Stores;
 
-public sealed class EfMailboxAccountStore
+public sealed class EfMailboxAccountStore : IMailboxAccountReader
 {
     private readonly InvoiceFlowDbContext _context;
 
@@ -50,6 +51,7 @@ public sealed class EfMailboxAccountStore
                 UseTls = draft.UseTls,
                 CredentialName = draft.CredentialName,
                 DisplayName = draft.DisplayName,
+                DefaultMailbox = draft.DefaultMailbox,
                 Revision = 1,
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now,
@@ -81,6 +83,7 @@ public sealed class EfMailboxAccountStore
         existing.UseTls = draft.UseTls;
         existing.CredentialName = draft.CredentialName;
         existing.DisplayName = draft.DisplayName;
+        existing.DefaultMailbox = draft.DefaultMailbox;
         existing.Revision++;
         existing.UpdatedAtUtc = now;
 
@@ -95,7 +98,24 @@ public sealed class EfMailboxAccountStore
             existing.Revision,
             existing.CredentialName is not null,
             MaskEmail(existing.EmailAddress),
-            existing.UpdatedAtUtc);
+            existing.UpdatedAtUtc,
+            existing.DefaultMailbox);
+    }
+
+    public Task<MailboxConnectionSettings?> FindAsync(string accountId, CancellationToken cancellationToken)
+    {
+        return _context.MailboxAccounts
+            .AsNoTracking()
+            .Where(x => x.AccountId == accountId)
+            .Select(x => new MailboxConnectionSettings(
+                x.AccountId,
+                x.EmailAddress,
+                x.ImapHost,
+                x.ImapPort,
+                x.UseTls,
+                x.CredentialName,
+                x.DefaultMailbox))
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     private static string MaskEmail(string email)
