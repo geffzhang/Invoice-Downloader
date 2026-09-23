@@ -690,6 +690,38 @@ public interface IArchiveService
     ArchiveOptions options,
     CancellationToken cancellationToken);
 }
+
+public sealed record ArchivePreparation(
+  string PreparationId,
+  IReadOnlyList<ArchivedArtifact> Artifacts,
+  string PreparationHash,
+  string TemporaryRoot);
+
+public interface IArchiveCommitCoordinator
+{
+  Task<ArchivePreparation> PrepareAsync(
+    PairingBatch pairing,
+    ArchiveOptions options,
+    CancellationToken cancellationToken);
+
+  Task MarkPreparedAsync(
+    ArchivePreparation preparation,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+
+  Task MovePreparedFilesAsync(
+    ArchivePreparation preparation,
+    CancellationToken cancellationToken);
+
+  Task MarkCommittedAsync(
+    ArchivePreparation preparation,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+
+  Task RecoverAsync(
+    string runId,
+    CancellationToken cancellationToken);
+}
 ```
 
 归档使用 `DocumentId + NamingPolicyVersion` 作为幂等键；命名策略只接受已归一化领域字段，生成相对路径后再由路径安全组件解析到 `OutputRoot`。同哈希文件视为已归档，内容不同的同名文件按明确冲突策略生成新名称或返回 `ARCHIVE_NAME_CONFLICT`。单个归档失败只更新对应 `CandidateProcessResult`，数据库状态和审计事件必须在同一应用事务中提交。
@@ -784,6 +816,7 @@ public interface IManualReviewService
 
   Task<CandidateProcessResult> SubmitAsync(
     ManualReviewUpdate update,
+    IUnitOfWork transaction,
     CancellationToken cancellationToken);
 }
 ```
@@ -803,6 +836,54 @@ public interface IManualReviewService
 ### 运行基础设施接口
 
 这些接口位于 `InvoiceFlowAI.Application` 的抽象边界，具体实现由 `InvoiceFlowAI.Infrastructure.Persistence`、`InvoiceFlowAI.App.Rpc` 或运行编排层提供。它们不暴露 EF Core、WebView2、MailKit 或 ZeroPipeline 类型。
+
+#### 应用事务抽象
+
+应用层使用显式事务对象，不使用 EF Core 的 `DbContext`、`IDbContextTransaction` 或隐式 ambient transaction：
+
+```csharp
+public enum TransactionPurpose
+{
+  RunCreate,
+  RunTransition,
+  CandidateCommit,
+  CheckpointCommit,
+  ArchivePrepare,
+  ArchiveCommit,
+  ReviewSubmit,
+  EventAppend,
+  Migration
+}
+
+public interface IUnitOfWorkFactory
+{
+  Task<IUnitOfWork> BeginAsync(
+    TransactionPurpose purpose,
+    CancellationToken cancellationToken);
+}
+
+public interface IUnitOfWork : IAsyncDisposable
+{
+  string TransactionId { get; }
+  TransactionPurpose Purpose { get; }
+  bool IsCompleted { get; }
+
+  Task CommitAsync(CancellationToken cancellationToken);
+  Task RollbackAsync(CancellationToken cancellationToken);
+}
+```
+
+规则固定为：
+
+- 只有 `IUnitOfWorkFactory` 可以创建事务；同一 UoW 内由一个 scoped `InvoiceFlowDbContext` 执行所有仓储写入；
+- 变更仓储和 `IAuditStore` 的写方法必须显式接收同一个 `IUnitOfWork`，禁止各自开启独立事务；
+- UoW 只能由创建它的应用协调器提交或回滚，提交/回滚后不可再次使用；未完成的 UoW 在 `DisposeAsync` 时回滚；
+- 不允许跨线程并发使用同一个 UoW 或 `DbContext`，不允许嵌套 UoW；需要新事务时必须先结束外层事务；
+- `CommitAsync` 内部按 SQLite `BEGIN IMMEDIATE`、有界 busy timeout 和一次性提交执行；锁冲突、磁盘满和约束错误映射为稳定持久化错误；
+- 只读查询不强制开启 UoW，但必须使用独立短生命周期 DbContext；
+- 事务边界不跨越网络请求、OCR、DeepSeek、Playwright 或文件长时间处理。外部副作用先完成准备，再通过短事务写状态和审计。
+
+`IAuditStore`、`IRunStateStore`、人工复核提交和 checkpoint 提交使用同一 UoW 时，业务记录和审计记录要么共同提交，要么共同回滚。应用服务负责创建 UoW、调用各接口、处理异常并在一个位置决定 commit/rollback。
 
 #### 运行状态与 checkpoint
 
@@ -841,6 +922,7 @@ public interface IRunStateStore
   Task CreateAsync(
     RunInput request,
     string configurationFingerprint,
+    IUnitOfWork transaction,
     CancellationToken cancellationToken);
 
   Task<RunSnapshot?> GetAsync(
@@ -852,17 +934,20 @@ public interface IRunStateStore
 
   Task<RunSnapshot> TransitionAsync(
     RunTransition transition,
+    IUnitOfWork transaction,
     CancellationToken cancellationToken);
 
   Task SaveCheckpointAsync(
     RunCheckpoint checkpoint,
     int expectedCheckpointRevision,
+    IUnitOfWork transaction,
     CancellationToken cancellationToken);
 
   Task CompleteAsync(
     string runId,
     RunTerminalStatus status,
     RunSummary summary,
+    IUnitOfWork transaction,
     CancellationToken cancellationToken);
 }
 ```
@@ -890,10 +975,12 @@ public interface IAuditStore
 {
   Task AppendAsync(
     AuditEvent auditEvent,
+    IUnitOfWork transaction,
     CancellationToken cancellationToken);
 
   Task AppendBatchAsync(
     IReadOnlyList<AuditEvent> auditEvents,
+    IUnitOfWork transaction,
     CancellationToken cancellationToken);
 
   Task<IReadOnlyList<AuditEvent>> ReadRunAsync(
@@ -1043,6 +1130,7 @@ public interface IEventReplayStore
 {
   Task AppendAsync(
     StoredRunEvent runEvent,
+    IUnitOfWork transaction,
     CancellationToken cancellationToken);
 
   Task<EventReplayResult> ReadSinceAsync(
@@ -2061,7 +2149,7 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 
 ### 集成测试
 
-验证 WebView2 RPC 分发、完整本地文件链路、真实 OFD 样本、假的 `IChatClient` 响应、重试/取消、EF Core SQLite 持久化、迁移、事务、并发写入、审计事件和 Excel 生成。三类 parser 还必须用当前 Python 样本和 QingPiao 样本做行为对照：字段等价、人工复核原因稳定、PDF 多发票切分一致、XML/OFD 优先级一致。
+验证 WebView2 RPC 分发、完整本地文件链路、真实 OFD 样本、假的 `IChatClient` 响应、重试/取消、EF Core SQLite 持久化、迁移、IUnitOfWork commit/rollback、业务数据与审计原子性、RunEvents 序号并发、Prepared/Committed 归档恢复、并发写入和 Excel 生成。三类 parser 还必须用当前 Python 样本和 QingPiao 样本做行为对照：字段等价、人工复核原因稳定、PDF 多发票切分一致、XML/OFD 优先级一致。
 
 ### Windows 端到端测试
 
