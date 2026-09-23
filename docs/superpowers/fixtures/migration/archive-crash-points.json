@@ -1,0 +1,48 @@
+{
+  "$comment": "Task 12 step 1 — every process-crash point the archive two-phase commit must tolerate. For each crash point the recovery service must land in the documented state on the next launch, and must never silently delete evidence when the outcome is ambiguous.",
+  "schema_version": 1,
+  "phases": [
+    {
+      "phase": "Prepared",
+      "crash_before": "txn_A_commit",
+      "expected_state": "Absent",
+      "recovery_action": "drop temp file, do nothing in DB"
+    },
+    {
+      "phase": "Prepared",
+      "crash_after": "txn_A_commit_before_temp_finalised",
+      "expected_state": "RecoveryRequired",
+      "recovery_action": "query temp; if missing, drop DB Prepared row"
+    },
+    {
+      "phase": "Committed",
+      "crash_after": "txn_A_before_temp_moved",
+      "expected_state": "Prepared",
+      "recovery_action": "validate temp hash matches DB; finalise move"
+    },
+    {
+      "phase": "Committed",
+      "crash_after": "temp_moved_before_hash_validated",
+      "expected_state": "Prepared",
+      "recovery_action": "re-validate final hash; rollback if mismatch"
+    },
+    {
+      "phase": "Committed",
+      "crash_after": "hash_validated_before_txn_B_commit",
+      "expected_state": "Committed",
+      "recovery_action": "idempotent: txn_B replay"
+    },
+    {
+      "phase": "Committed",
+      "crash_after": "txn_B_commit",
+      "expected_state": "Committed",
+      "recovery_action": "no-op"
+    },
+    {
+      "phase": "RecoveryRequired",
+      "crash_after": "recovery_before_drop",
+      "expected_state": "RecoveryRequired",
+      "recovery_action": "retry — never drop evidence without diagnostic"
+    }
+  ]
+}
