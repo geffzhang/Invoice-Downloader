@@ -147,6 +147,44 @@ ZeroPipeline 参考仓库：<https://github.com/kzxl/ZeroPipeline/tree/master>�
 
 ZeroPipeline 只位于应用编排层。领域层不依赖 ZeroPipeline；节点通过应用层定义的端口 DTO 与领域服务通信，避免将 DAG 类型扩散到业务实体中。
 
+### 构建工具链与工程结构
+
+首版固定使用 `.NET SDK 10.0.100`、`net10.0-windows`、`win-x64`、Windows App SDK `1.8.250916001`、WiX Toolset `5.0.2`、Windows SDK `10.0.26100.1`、MSVC v143 `14.44.35207` 和 VC++ Runtime `14.44.35211` x64。CI 使用 Windows Server 2025 x64 runner，并在构建前校验这些精确版本；不接受“使用已安装的最近版本”。
+
+目标工程结构为：
+
+```text
+InvoiceFlowAI.sln
+global.json
+Directory.Build.props
+Directory.Build.targets
+Directory.Packages.props
+NuGet.Config
+src/
+  InvoiceFlowAI.App/InvoiceFlowAI.App.csproj
+  InvoiceFlowAI.Application/InvoiceFlowAI.Application.csproj
+  InvoiceFlowAI.Contracts/InvoiceFlowAI.Contracts.csproj
+  InvoiceFlowAI.Domain/InvoiceFlowAI.Domain.csproj
+  InvoiceFlowAI.Infrastructure/InvoiceFlowAI.Infrastructure.csproj
+  InvoiceFlowAI.Installer/InvoiceFlowAI.Installer.wixproj
+tests/
+  InvoiceFlowAI.Domain.Tests/InvoiceFlowAI.Domain.Tests.csproj
+  InvoiceFlowAI.Application.Tests/InvoiceFlowAI.Application.Tests.csproj
+  InvoiceFlowAI.Infrastructure.Tests/InvoiceFlowAI.Infrastructure.Tests.csproj
+  InvoiceFlowAI.App.Tests/InvoiceFlowAI.App.Tests.csproj
+build/
+  verify-toolchain.ps1
+  model-manifest.ps1
+  release-manifest.ps1
+  licenses/
+```
+
+`Domain` 不引用基础设施或 ZeroPipeline；`Contracts` 只承载跨层 DTO；`Application` 引用 Domain、Contracts、ZeroPipeline；`Infrastructure` 实现应用接口；只有 `App` 引用 WebView2/Windows App SDK；只有 `Installer` 引用 WiX。
+
+`global.json` 固定 `10.0.100`、`rollForward=disable`、`allowPrerelease=false`。`Directory.Build.props` 固定 nullable、deterministic build、CI build 和 warnings-as-errors。`Directory.Packages.props` 集中维护所有精确 NuGet 版本；每个项目生成 `packages.lock.json`，CI 使用 `dotnet restore --locked-mode`。`NuGet.Config` 只允许审查过的 package sources。
+
+CI 顺序固定为：`verify-toolchain.ps1`、`dotnet restore --locked-mode`、Release build/test、`dotnet publish -r win-x64 --self-contained true`、模型和 release manifest 校验、WiX x64 MSI 构建。WiX 阶段只消费 publish 输出和已校验的 Fixed WebView2/OCR/Chromium/许可证资产，不下载运行时文件。
+
 ## 4. WebView2 契约
 
 前端通过 `window.chrome.webview.postMessage` 向 `InvoiceFlowAI.App` 发送 JSON/RPC 请求，并通过 WebView2 `message` 事件接收响应和异步事件。协议固定为 `invoiceflow.rpc.v1`，JSON 属性使用 camelCase，时间使用 UTC ISO-8601，金额使用字符串或已明确精度的 JSON number，所有 ID 使用不透明字符串。页面不直接访问文件系统、DPAPI、数据库、MailKit、HTTP 或 ZeroPipeline。
