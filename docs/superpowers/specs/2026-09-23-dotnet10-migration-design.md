@@ -185,6 +185,8 @@ build/
 
 CI 顺序固定为：`verify-toolchain.ps1`、`dotnet restore --locked-mode`、Release build/test、`dotnet publish -r win-x64 --self-contained true`、模型和 release manifest 校验、WiX x64 MSI 构建。WiX 阶段只消费 publish 输出和已校验的 Fixed WebView2/OCR/Chromium/许可证资产，不下载运行时文件。
 
+CI 每一步的输入/输出也固定：`verify-toolchain.ps1` 只读 SDK/Windows SDK/MSVC/WiX 版本并输出机器可读 `artifacts/toolchain.json`；restore 输出锁文件校验结果；test 输出 TRX 和 coverage summary；publish 输出 `artifacts/publish/win-x64/`；资产校验输出 `artifacts/manifests/*.json`；WiX 只读取 publish 目录并输出带版本的 x64 MSI。任何步骤不得从用户 profile、全局 NuGet cache 中复制未锁定的运行时资产；需要使用缓存时必须以 package/version/hash 清单验证后复制。
+
 ### DI 组合根与启动图
 
 `InvoiceFlowAI.App` 是唯一组合根。`InvoiceFlowAI.Infrastructure` 提供 `AddInvoiceFlowInfrastructure(IServiceCollection, AppPaths)`，`InvoiceFlowAI.Application` 提供 `AddInvoiceFlowApplication(IServiceCollection)`；页面桥接和 WinUI 生命周期不反向注册到 Domain。所有 singleton/scoped/transient 生命周期固定如下：
@@ -610,7 +612,10 @@ fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SET
 - `docs/superpowers/fixtures/recipe/invoiceflow.default.v1.json`：Recipe schema、节点注册、连接和执行策略；
 - `docs/superpowers/fixtures/rules/default.v1.json`：RuleSet schema、priority 和 action；
 - `docs/superpowers/fixtures/rpc/account-save.request.json`：账户保存 RPC request；
+- `docs/superpowers/fixtures/rpc/account-save.response.json`：账户保存成功 response；
+- `docs/superpowers/fixtures/rpc/account-revision-conflict.response.json`：账户 revision 冲突 response；
 - `docs/superpowers/fixtures/rpc/run-progress.event.json`：事件 reducer 的顺序与重放样本；
+- `docs/superpowers/fixtures/url/provider-registry.v1.json`：首版 URL provider 注册表；
 - `docs/superpowers/fixtures/release/release-manifest.example.json`：发布 manifest 字段和资源条目示例。
 
 这些 fixture 是测试输入，不是用户数据，也不包含真实凭据。正式 .NET scaffold 后，测试项目必须将它们复制或链接到 `tests/*/Fixtures`，并为每个 fixture 增加 serializer round-trip、schema validation 和 fingerprint golden test。
@@ -1296,6 +1301,15 @@ public interface IUrlRecoveryDownloadLease : IAsyncDisposable
 ```
 
 首版 registry 只注册 `direct-http` 和 `playwright-browser` 两类 provider。provider 按 `Priority DESC, ProviderId ASC` 选择；同一 URL 多 provider 命中时选择第一项，但必须把候选 provider 列表和 registry fingerprint 写入脱敏 trace。`AllowedDomains` 使用规范化 host 后缀匹配，禁止把 `example.com.evil.test` 视为 `example.com`；每次重定向都重新执行协议、host、端口和私有网段检查。只允许 `https`，除非内置 provider 明确声明受控的 `http` 本地测试模式。
+
+首版 URL provider 注册表固定为：
+
+| ProviderId | Priority | 匹配范围 | 默认能力 | 失败码 |
+| --- | ---: | --- | --- | --- |
+| `direct-http` | 200 | 所有通过 host allowlist 的 HTTPS URL | 流式下载、重定向校验、MIME/魔数校验 | `URL_HTTP_FAILED`, `URL_REDIRECT_BLOCKED`, `URL_CONTENT_INVALID` |
+| `playwright-browser` | 100 | `direct-http` 返回认证/JS challenge 且候选允许 browser fallback | 受限 browser context、下载事件、同一套文件校验 | `URL_BROWSER_FAILED`, `URL_BROWSER_TIMEOUT`, `URL_DOWNLOAD_BLOCKED` |
+
+`direct-http` 永远先尝试；只有失败码属于 `URL_AUTH_REQUIRED`、`URL_JS_CHALLENGE` 或显式 provider policy 允许时才进入 `playwright-browser`。401/403 不能无限触发 browser fallback，单 candidate 最多一次 browser fallback；未允许的域名、私网地址、非 HTTPS、超大小和魔数失败不得 fallback。`IUrlRecoveryProviderRegistry.RegistryFingerprint` 由稳定的 provider ID、priority、能力版本和校验策略版本计算，不包含用户 secret 或运行时 cookie。
 
 下载必须通过 `IUrlRecoveryDownloadLease : IAsyncDisposable` 管理临时文件：先限制响应头 `Content-Length`，再以流式读取执行硬字节上限，写入应用 staging 目录并计算 SHA-256；随后依次验证最终 URI、响应 MIME、文件魔数、扩展名、大小和内容哈希，验证成功后由 `CommitAsync` 原子转交 candidate processing。任何失败都调用 `AbandonAsync`/`DisposeAsync` 删除临时文件并返回稳定的 `URL_*` candidate failure。`TemporaryPath` 不进入持久化、日志或 RPC，只在 lease 生命周期内有效；lease 只能 commit 一次，重复 commit 返回已提交摘要，不能生成第二个 candidate。
 
@@ -3271,6 +3285,23 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 ### Windows 端到端测试
 
 在干净的 Windows 11 x64 环境中验证首次启动、WebView2 加载、取消、网络中断和重试、大批量处理、WebView2 故障后的恢复、自包含启动、OCR 模型随包加载，以及不依赖 Python。
+
+### 性能预算与容量验收
+
+首版性能预算是 Windows 11 x64、Release、无调试器、SSD、本地 SQLite、固定模型和默认并发配置下的验收上限，而不是硬件承诺：
+
+| 场景 | 预算 |
+| --- | ---: |
+| 冷启动到 `Ready`（已有数据库和已校验资产） | p95 <= 5 s |
+| WebView2 `index.html` 加载到 `bridge.hello` 完成 | p95 <= 1.5 s |
+| 空邮箱运行到 `Completed/NO_CANDIDATES` | p95 <= 8 s |
+| 单页本地 OCR（不含模型首次加载） | p95 <= 2.5 s |
+| 单候选 Track A 提取（不含网络重试） | p95 <= 6 s |
+| 单候选 Track B 请求端到端 | p95 <= 30 s |
+| SQLite 单 packet 提交（含审计） | p95 <= 250 ms |
+| 32 个 in-flight candidate 稳定运行 10 分钟 | 无未释放 image lease、无 sequence gap、工作集 <= 1.5 GiB |
+
+性能测试必须固定输入样本、机器规格、模型 manifest、DeepSeek fake latency 和并发参数；报告 p50/p95、峰值 working set、GC、SQLite busy/retry、packet backlog 和候选吞吐。超过预算只记录为性能回归，不得通过放大队列、取消 hash 校验、跳过审计或提高并发上限掩盖问题。
 
 验收以行为而非代码翻译相似度为标准：
 
