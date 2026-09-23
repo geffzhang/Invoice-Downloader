@@ -634,7 +634,11 @@ fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SET
 - `docs/superpowers/fixtures/parsers/registry.v1.json`：首版特殊 parser registry；
 - `docs/superpowers/fixtures/parsers/conflict.response.json`：`SPECIAL_PARSER_CONFLICT` 字段级 details；
 - `docs/superpowers/fixtures/rpc/account-test.request.json`：账户测试 RPC request；
+- `docs/superpowers/fixtures/rpc/account-test.response.json`：账户测试成功 response；
 - `docs/superpowers/fixtures/rpc/account-test.error.json`：账户 TLS 失败 RPC response；
+- `docs/superpowers/fixtures/rpc/account-test.auth-error.json`：账户认证失败 response；
+- `docs/superpowers/fixtures/rpc/account-test.mailbox-not-found.json`：mailbox 不存在 response；
+- `docs/superpowers/fixtures/rpc/account-test.credentials-missing.json`：凭据缺失 response；
 - `docs/superpowers/fixtures/url/provider-registry.v1.json`：首版 URL provider 注册表；
 - `docs/superpowers/fixtures/url/errors.v1.json`：URL 恢复错误、重试和 browser fallback 矩阵；
 - `docs/superpowers/fixtures/release/release-manifest.example.json`：发布 manifest 字段和资源条目示例。
@@ -1332,6 +1336,10 @@ public interface IUrlRecoveryDownloadLease : IAsyncDisposable
 
 `direct-http` 永远先尝试；只有失败码属于 `URL_AUTH_REQUIRED`、`URL_JS_CHALLENGE` 或显式 provider policy 允许时才进入 `playwright-browser`。401/403 不能无限触发 browser fallback，单 candidate 最多一次 browser fallback；未允许的域名、私网地址、非 HTTPS、超大小和魔数失败不得 fallback。`IUrlRecoveryProviderRegistry.RegistryFingerprint` 由稳定的 provider ID、priority、能力版本和校验策略版本计算，不包含用户 secret 或运行时 cookie。
 
+首版 HTTP policy 固定为：解析 DNS 后拒绝 loopback、link-local、RFC1918/RFC6598 私网、IPv4-mapped private IPv6、IPv6 loopback/link-local 和未定义地址；每次重定向重新解析并校验所有地址。只允许 `https`、端口 `443`，本地测试 double 才允许 `http:80` 且不能进入生产 registry。`Content-Length` 缺失时允许流式读取，但必须以 `MaxDownloadBytes + 1` 的硬上限读取，超过上限立即终止并返回 `URL_CONTENT_TOO_LARGE`。
+
+响应校验顺序固定为：最终 URI/地址 -> Content-Length -> 流式字节上限 -> Content-Type -> 文件魔数 -> 扩展名 -> SHA-256。Content-Type 与魔数不一致时以魔数为准：若魔数属于允许格式而 Content-Type 是通用 `application/octet-stream`，允许继续；若 Content-Type 声称 PDF/OFD/XML 但魔数不匹配，返回 `URL_CONTENT_INVALID`，不得 fallback。`Content-Disposition` 文件名只接受 RFC 5987/quoted token，先 Unicode NFC，再替换路径分隔符、控制字符和非法 Windows 字符，压缩空白并限制 120 个 UTF-16 code units；非法或缺失文件名使用 `DocumentId` 前 8 位加已验证扩展名。
+
 下载必须通过 `IUrlRecoveryDownloadLease : IAsyncDisposable` 管理临时文件：先限制响应头 `Content-Length`，再以流式读取执行硬字节上限，写入应用 staging 目录并计算 SHA-256；随后依次验证最终 URI、响应 MIME、文件魔数、扩展名、大小和内容哈希，验证成功后由 `CommitAsync` 原子转交 candidate processing。任何失败都调用 `AbandonAsync`/`DisposeAsync` 删除临时文件并返回稳定的 `URL_*` candidate failure。`TemporaryPath` 不进入持久化、日志或 RPC，只在 lease 生命周期内有效；lease 只能 commit 一次，重复 commit 返回已提交摘要，不能生成第二个 candidate。
 
 `playwright-browser` 使用单个受限 browser context lease：禁止下载到默认 Downloads、禁止页面导航到非允许域名、禁止执行用户脚本、禁止访问本地文件和非必要权限；下载事件必须在 context 关闭前完成 hash/魔数校验。浏览器 context、page、response stream 和临时文件都必须在成功、失败、取消和超时路径释放。provider registry 在应用启动后冻结，变更 registry fingerprint 必须生成新的 `ConfigurationFingerprint`。
@@ -1402,6 +1410,21 @@ public interface IArchiveCommitCoordinator
 
 归档采用 `Prepared -> Committed` 两阶段补偿：移动前先写 `Prepared` 记录和临时文件哈希，文件原子替换并 fsync 后再提交 `Committed`。归档成功但数据库提交失败时，启动恢复根据哈希把文件绑定回 `Prepared` 记录并重试数据库提交；数据库成功但移动失败时，记录保持 `Prepared`，不标记为已归档，由恢复任务重试移动。文件和数据库都无法证明一致时进入 `ARCHIVE_RECOVERY_FAILED`，保留文件并人工复核，禁止静默删除。
 
+归档操作的幂等键固定为 `RunId + DocumentId + ProcessingRevision + Role + ContentHash`；`PreparationId` 是该键的稳定 SHA-256 前缀，不是随机重试 ID。`PrepareAsync` 重复调用返回同一 preparation；`MarkPreparedAsync`、文件移动和 `MarkCommittedAsync` 对同一 preparation 重复调用必须返回已有状态，不重复复制或追加审计事件。目标文件存在且 hash 相同返回 `AlreadyExisted=true/Committed`；目标文件存在但 hash 不同按 `_01` 至 `_99` 选择下一个确定性名称，超过 99 返回 `ARCHIVE_NAME_CONFLICT`。
+
+崩溃恢复决策矩阵固定为：
+
+| DB Prepared | Temporary file | Final file | 恢复动作 |
+| --- | --- | --- | --- |
+| 存在 | 存在 | 不存在 | 校验临时 hash，继续移动并提交 |
+| 存在 | 不存在 | 存在且 hash 相同 | 直接补交 `Committed` |
+| 存在 | 存在 | 存在且 hash 相同 | 删除临时副本，补交 `Committed` |
+| 存在 | 任意 | 存在且 hash 不同 | 保留两者，生成 `ARCHIVE_RECOVERY_FAILED` |
+| 存在 | 不存在 | 不存在 | 保留 Prepared，重新准备或人工复核 |
+| 不存在 | 任意 | 存在 | 不自动认领，记录孤立文件诊断 |
+
+`ARCHIVE_RECOVERY_FAILED` 的 details 固定为 `PreparationId`、`RunId`、`DocumentId`、`ProcessingRevision`、`RelativePath`、`ExpectedHash`、`TemporaryHash`、`FinalHash`、`ObservedStates` 和 `Resolution=manual_review`；路径必须是相对路径，hash 只允许完整 SHA-256，不能包含异常文本或绝对路径。
+
 #### 报表
 
 ```csharp
@@ -1419,6 +1442,19 @@ public sealed record ReportExportResult(
   int InvoiceRowCount,
   int ManualReviewRowCount,
   string TemplateVersion);
+
+public sealed record ReportOpenToken(
+  string Token,
+  string RunId,
+  string RelativePath,
+  DateTimeOffset ExpiresAtUtc,
+  string ContentHash);
+
+public sealed record ReportExportFailureDetails(
+  string Field,
+  string Code,
+  string SafeValue,
+  bool Retryable);
 
 public interface IReportExporter
 {
@@ -1450,6 +1486,8 @@ public interface IReportExporter
 - 固定列宽：`运行汇总` 18/16/14/14/22/16/16/16/16/18/16/14/24；`发票明细` 10/66/16/14/18/22/24/28/16/18/14/14/14/12/16/48/28；`人工复核` 18/66/18/28/28/16/32/24/24/20/48；
 - `ManualReview`、`Unresolved` 和 `Cancelled` 行使用浅色状态填充，但颜色不是业务判断依据；
 - workbook properties 写入 `TemplateVersion`、`RunId` 和生成时间；不写入 API Key、OCR 原文、邮件正文或完整 URL。
+
+`report.open` 只返回一次性 `ReportOpenToken`：token 随机生成、只保存短 hash，默认有效期 60 秒、成功消费一次后立即失效，最多允许同一 `runId` 并发 3 个未消费 token。token 只绑定已提交的相对报告路径和 content hash，过期、重复消费、hash 不一致或 run 不存在分别返回 `REPORT_TOKEN_EXPIRED`、`REPORT_TOKEN_ALREADY_USED`、`REPORT_HASH_MISMATCH` 和 `RUN_NOT_FOUND`。报表生成失败统一返回 `REPORT_EXPORT_FAILED`，`error.details` 只能是 `ReportExportFailureDetails[]`，`Field` 只允许 `OutputRoot`、`ReportName`、`Workbook`、`TemplateVersion`、`Persistence`，不得放异常文本或绝对路径。
 
 报表 golden fixture 使用 JSON 而不是比较二进制 xlsx：
 
@@ -1788,6 +1826,10 @@ public interface IAuditStore
 ```
 
 `IAuditStore` 只允许 append 和只读查询，不提供 update/delete。`AppendAsync`/`AppendBatchAsync` 必须加入调用方当前的应用 transaction；实现不能自行开启一个独立提交，否则业务状态成功而审计失败时会产生不可接受的不一致。审计 payload 只允许稳定 schema 和脱敏字段，原始正文、图片、秘密和完整 URL 必须在进入 store 前被拒绝。
+
+审计 payload 的首版白名单为：`run.created`、`run.stage_changed`、`run.progress_committed`、`run.candidate_result`、`run.failed`、`run.cancelled`、`run.completed`、`settings.changed`、`account.changed`、`ruleset.saved`、`ruleset.rollback`、`review.created`、`review.resolved`、`archive.prepared`、`archive.committed`、`archive.recovery_failed`、`provider.rule_conflict` 和 `parser.conflict`。每种 event type 必须有固定 DTO schema，未知 event type 拒绝写入并返回 `AUDIT_EVENT_TYPE_INVALID`。
+
+审计事件使用按 run 的 hash chain：`PayloadHash = SHA256(CanonicalJson(Payload))`，并在 payload envelope 中保存 `PreviousPayloadHash`；首个事件使用 64 个零字符。链断裂、sequence 重复、前一 hash 不匹配返回 `AUDIT_CHAIN_INVALID`，阻止当前事务提交。审计数据长期 append-only，默认保留 7 年；`RunEvents` 只保留 30 天或每个 run 最近 10,000 条，以先达到者为 compact 触发条件。compact 只能删除已终态 run 的中间进度事件，保留首个 snapshot、最后一个 terminal event 和 event sequence gap marker；compact 失败返回 `EVENT_RETENTION_FAILED`，不删除任何事件。SQLite 文件超过 2 GiB 或剩余磁盘低于 2 GiB 时停止 compact 和新 run，并返回 `PERSISTENCE_DISK_FULL`。
 
 #### 重试协调
 

@@ -1,0 +1,11 @@
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-account-test-1",
+  "ok": true,
+  "result": {
+    "accountId": "mail-account-1",
+    "succeeded": true,
+    "mailbox": "INBOX",
+    "safeMessage": "邮箱连接和目标 mailbox 可用。"
+  }
+}
