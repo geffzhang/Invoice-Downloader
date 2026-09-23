@@ -641,6 +641,7 @@ fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SET
 - `docs/superpowers/fixtures/rpc/account-test.credentials-missing.json`：凭据缺失 response；
 - `docs/superpowers/fixtures/url/provider-registry.v1.json`：首版 URL provider 注册表；
 - `docs/superpowers/fixtures/url/errors.v1.json`：URL 恢复错误、重试和 browser fallback 矩阵；
+- `docs/superpowers/fixtures/email-body/baiwang.receipt.json`：邮件正文 canonical receipt 解析样本；
 - `docs/superpowers/fixtures/release/release-manifest.example.json`：发布 manifest 字段和资源条目示例。
 
 这些 fixture 是测试输入，不是用户数据，也不包含真实凭据。正式 .NET scaffold 后，测试项目必须将它们复制或链接到 `tests/*/Fixtures`，并为每个 fixture 增加 serializer round-trip、schema validation 和 fingerprint golden test。
@@ -688,6 +689,23 @@ fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SET
 | `get_progress` | `run.get` + 推送事件 | 不再轮询；断线或 event sequence 跳跃时请求快照/补发事件 |
 | `get_results` | `run.get`、`review.list`、`report.open` | 分离运行摘要、复核分页和受控文件打开 |
 | `open_folder` / `view_invoice` | `report.open` 或受控 artifact command | 后端根据 `runId`、artifact ID 和相对路径校验，不接受任意绝对路径 |
+
+#### 旧前端适配和淘汰规则
+
+旧 `window.pywebview.api` 方法只作为迁移输入映射，不作为 .NET 兼容 API：
+
+| 旧方法/状态 | 迁移动作 | 新行为 |
+| --- | --- | --- |
+| `load_user_settings` | 读取旧设置仅用于一次性导入 | 拆成 `settings.get`、`account.list` 和秘密 configured 状态；旧明文 secret 不回显到页面 |
+| `save_user_settings` | 只读取非秘密字段 | 写入 `UserSettings`/账户 revision；`auth_code`、`api_key` 被拒绝并要求 `secret.set` |
+| `test_email_auth` | 旧参数不直接转发 | 转换为 `account.test(accountId, mailbox?)` |
+| `test_api_key` | 不保留 GLM endpoint | 转换为 DeepSeek adapter health/auth test，不返回供应商原始响应 |
+| `start_processing` | 旧位置参数解析一次 | 转换为显式 `run.start` DTO，缺失字段返回 `RPC_INVALID_PARAMS` |
+| `get_progress` | 不再轮询 | 转换为 `run.get` 快照和 `run.*` event reducer |
+| `get_results` | 不返回旧结果字典 | 转换为 `run.get`、`review.list` 和 `report.open` |
+| `open_folder`/`view_invoice` | 旧绝对路径永不接受 | 通过 run/artifact 相对路径生成一次性 report token |
+
+旧方法名在迁移测试 fixture 中允许出现，但不注册到 `IRpcDispatcher`。页面完成 `bridge.hello` 前不得调用任何旧方法；WebView2 页面重载后必须丢弃旧 pending calls，并重新进行 RPC 握手。
 
 `RpcClient` 的唯一传输入口是：
 
@@ -1489,6 +1507,8 @@ public interface IReportExporter
 
 `report.open` 只返回一次性 `ReportOpenToken`：token 随机生成、只保存短 hash，默认有效期 60 秒、成功消费一次后立即失效，最多允许同一 `runId` 并发 3 个未消费 token。token 只绑定已提交的相对报告路径和 content hash，过期、重复消费、hash 不一致或 run 不存在分别返回 `REPORT_TOKEN_EXPIRED`、`REPORT_TOKEN_ALREADY_USED`、`REPORT_HASH_MISMATCH` 和 `RUN_NOT_FOUND`。报表生成失败统一返回 `REPORT_EXPORT_FAILED`，`error.details` 只能是 `ReportExportFailureDetails[]`，`Field` 只允许 `OutputRoot`、`ReportName`、`Workbook`、`TemplateVersion`、`Persistence`，不得放异常文本或绝对路径。
 
+旧 Python 报表的 `分类汇总`、`成功明细`、`异常记录` 不直接作为新 workbook schema；迁移测试必须把同一候选输入同时投影到旧 workbook matrix 和新三 sheet matrix，核对候选数量、状态、金额、reason code 和人工复核数量。旧绝对 `output_path` 只作为本地测试输入，目标 `ReportExportResult.ReportPath` 和 `report.open` 永远只保存相对路径、content hash 和一次性 token。
+
 报表 golden fixture 使用 JSON 而不是比较二进制 xlsx：
 
 ```json
@@ -1985,6 +2005,12 @@ public interface IEventReplayStore
 ```
 
 `IEventReplayStore` 对应独立的 `RunEvents` 表，不等同于 `AuditEvents`：进度事件可以按保留策略压缩，审计事件必须长期 append-only 保存。`RunEvents` 使用 `(RunId, EventSequence)` 唯一约束；`ReadSinceAsync` 超出保留窗口时返回 `RequiresFullRefresh=true`，前端必须先使用最新 `RunSnapshot`，不能拼接不完整事件流。append 与 `Runs.LastEventSequence` 更新在同一事务内完成。
+
+#### 旧内存运行状态迁移
+
+Python 的进程内 `RunStateStore`、进度 snapshot 和轮询状态不是持久化来源；迁移到 .NET 后不尝试反序列化旧内存状态。新运行从 `Created` 开始，所有状态转换、candidate processing、checkpoint 和 `RunEvents` 在 SQLite 中提交。若启动时发现旧 Python 进程遗留状态文件或无法映射为 `RunSnapshot`，标记为诊断信息并创建新的空运行，不伪造已完成结果。
+
+每个 ZeroPipeline packet 的提交顺序固定为：业务结果 + `AuditEvents` + `RunCheckpoints` + `RunEvents` + `Runs.LastEventSequence` 同一 UoW 提交；提交成功后才向 WebView2 推送事件。页面断线时事件仍写入 `RunEvents`，重连通过 `ReadSinceAsync` 补发；超过保留窗口则先返回完整 snapshot，再从当前 sequence 开始接收新事件。旧 `get_progress` 轮询结果只作为迁移测试输入，不能写入 `RunEvents`。
 
 ### 核心领域 DTO
 
@@ -2582,6 +2608,46 @@ InvoiceParserDispatcher
   -> ManualReviewResult
 ```
 
+#### 邮件正文票据解析迁移契约
+
+Python 的 `email_body_receipts.py` 是独立的确定性输入路径，不等同于普通 OCR：首版 .NET 必须保留 canonical receipt marker `EMAIL_BODY_RECEIPT_CANONICAL`，并在附件解析前执行正文 parser。正文 parser 只消费 subject、sender、body text 和 email date，不能访问网络、secret 或直接写数据库。
+
+```csharp
+public sealed record EmailBodyReceiptRequest(
+  string Subject,
+  string Sender,
+  string BodyText,
+  string? EmailDate,
+  string SourceMessageUid);
+
+public sealed record EmailBodyReceipt(
+  string Marker,
+  string ProviderId,
+  string SourceMessageUid,
+  InvoiceParseResult Result,
+  string EvidenceFingerprint);
+
+public interface IEmailBodyReceiptParser
+{
+  string ProviderId { get; }
+  int Priority { get; }
+  bool CanParse(EmailBodyReceiptRequest request);
+  EmailBodyReceipt? TryParse(EmailBodyReceiptRequest request);
+}
+
+public interface IEmailBodyReceiptParserRegistry
+{
+  IReadOnlyList<IEmailBodyReceiptParser> GetOrderedParsers();
+  string RegistryFingerprint { get; }
+}
+```
+
+首版正文 parser 顺序固定为：`baiwang-email-body` priority 400、`fpyun-email-body` priority 390、`51fapiao-email-body` priority 380、`icloud-receipt` priority 370。正文少于 40 个非空字符、缺少 provider marker、发票号码、日期或金额时返回 null，继续附件路径；命中多个 parser 时返回 `EMAIL_BODY_PARSER_CONFLICT`，进入人工复核，不按 JSON/注册顺序静默选择。成功结果必须经过 `InvoiceNormalizer` 和 `InvoiceAcceptanceService`，`EmailBodyReceipt.Result` 的 `DocumentIdentity` 使用原始 candidate identity，不能重新生成 ID。
+
+正文字段规则固定为：金额规范化为两位 Decimal 字符串；日期内部先用 `yyyyMMdd`，再由领域 normalizer 转换为 `DateOnly`；缺购买方统一为 `未知购买方`；seller 规则按供应商 parser 固定；类型规则保留住宿、餐饮和其他三类初始分类，之后映射到 `InvoiceDocumentType`；邮件日期只在 51 发票正文没有日期时作为 fallback。`EvidenceFingerprint` 只对 provider ID、marker ID、字段是否存在和 source kind 做 canonical hash，不包含正文。
+
+正文 receipt 成功后仍必须生成统一 `DocumentCandidate`/`InvoiceParseResult`，并在后续阶段走同样的 acceptance、查重、配对、归档、审计和报表链路；不能生成旁路成功结果。正文 parser 的失败、冲突和成功 route 必须写入 `ExtractionTrace.InputKind=EmailBodyReceipt`。
+
 `InvoiceParseResult` 已在本节前的领域 DTO 中定义，同时保留 QingPiao 风格的成功/人工处理结果和当前 Python 的稳定诊断信息。`InvoiceDocument` 包含发票主数据、`InvoiceItem` 明细、`DocumentIdentity`、来源身份、归一化金额/日期、文档类型和置信度；审计元数据由应用层事件单独保存。解析器不能直接写数据库、归档文件或 WebView2 事件。
 
 ### XML 实现
@@ -3006,6 +3072,18 @@ DeepSeek 视觉配置固定为：
 
 远程 AI 错误必须转换为稳定错误，包括超时、认证失败、限流、额度耗尽、请求体超过 48 MiB、图片格式不支持、响应无效和多模态序列化不兼容。单元测试使用假的 `IChatClient`，不需要真实 API Key；另设 DeepSeek 兼容端点集成测试验证最终 JSON content block。
 
+#### GLM 到 DeepSeek 的迁移边界
+
+旧 Python 的 `glm-ocr`、`glm-4-flash`、`glm-4.5v`、智谱 endpoint、1302/1305/1312 限流和旧 `api_key` 设置不映射为新的运行配置。迁移时：
+
+1. 旧 GLM API Key 不迁移，标记 `LEGACY_SECRET_REQUIRES_REENTRY`，用户通过 `secret.set(name="deepseek.api-key")` 重新配置；
+2. 旧模型名和智谱 endpoint 只保留在迁移诊断，不进入 `ConfigurationFingerprint`；
+3. 旧 1302/1305/1312 错误分别映射为 `AI_RATE_LIMITED`、`AI_QUOTA_EXHAUSTED` 或 `AI_REQUEST_FAILED`，最终以 DeepSeek adapter 的稳定错误码和 retry policy 为准；
+4. 旧 GLM 文案、字段名和前端输入控件不得出现在发布 UI；
+5. 迁移验收使用同一 OCR/票据样本，比较规范化 `InvoiceDocument`、人工复核原因和候选终态，不要求模型原始响应或 token 数相同。
+
+如果 DeepSeek adapter 不支持旧 GLM 的某个视觉输入能力，必须进入 `ManualReview/AI_UNSUPPORTED_IMAGE`，不能偷偷回退到 GLM 或保留第二个远程模型 provider。
+
 ## 8. 存储与安全
 
 使用 EF Core SQLite 保存运行索引、发票历史、审计事件和人工复核状态。应用数据保存到 `%LocalAppData%/InvoiceFlowAI`；用户选择的发票和报表保存到指定输出目录。
@@ -3114,6 +3192,8 @@ public interface ISecretStore
 默认不使用 `LocalMachine`，因为本应用是单用户桌面应用，不需要让同一台机器上的其他账户读取凭据。若未来提供 Windows 服务模式，必须新增显式配置和单独的安全评审，不能静默改变现有密钥作用域。
 
 邮箱授权码沿用同一 `ISecretStore` 抽象和 DPAPI 保护策略。DeepSeek 与邮箱凭据使用不同的逻辑名称，例如 `deepseek.api-key` 和 `mail.imap.auth-code`，但共享相同的用户绑定和文件权限策略。
+
+旧 Python 设置中的 `api_key` 和 `auth_code` 不做明文迁移：首次启动只读取旧设置文件中的非秘密字段；检测到旧 secret 字段时写入一次性迁移诊断 `LEGACY_SECRET_REQUIRES_REENTRY`，不复制到数据库、WebView2 sessionStorage 或日志。用户必须通过 `secret.set` 重新输入，成功后旧字段所在设置文件使用原子重写删除；删除失败阻止旧文件继续被读取并返回 `LEGACY_SECRET_CLEANUP_FAILED`。旧 `email` 映射为新 `MailboxAccountDraft.EmailAddress`，新建账户由后端生成 `AccountId`，旧 `save_path/company/date` 映射为 `UserSettings` 非秘密字段。
 
 URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件和发票图片默认保存在本地，只有在用户配置的 AI 策略允许时才上传给 DeepSeek。
 
@@ -3376,7 +3456,7 @@ IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务�
 }
 ```
 
-错误类别包括输入校验、单文件失败、可重试的网络/AI 失败、邮箱认证、AI 认证、配对、规则、归档、人工复核、OCR、持久化、磁盘、WebView2 和系统错误。邮箱扫描至少使用 `MAILBOX_CREDENTIALS_INVALID`、`MAILBOX_TLS_FAILED`、`MAILBOX_SELECT_FAILED`、`MAILBOX_CONNECTION_FAILED`、`MAILBOX_INPUT_UNRESOLVED`、`ATTACHMENT_OVER_SIZE`、`ZIP_LIMIT_EXCEEDED`；AI 认证使用 `AI_AUTHENTICATION_FAILED`；配对/规则使用 `PAIRING_AMBIGUOUS`、`PAIRING_CROSS_MESSAGE_DISABLED`、`RULESET_INVALID`、`PROVIDER_RULE_CONFLICT`、`SPECIAL_PARSER_CONFLICT`；归档/复核/OCR 使用 `ARCHIVE_NAME_CONFLICT`、`ARCHIVE_RECOVERY_FAILED`、`REVIEW_REVISION_CONFLICT`、`OCR_MODEL_LOAD_FAILED`、`OCR_IMAGE_INVALID`、`PDF_RENDER_FAILED`；持久化使用 `PERSISTENCE_DISK_FULL`、`DB_CORRUPTED`、`DB_MIGRATION_FAILED` 和 `RUN_RECOVERY_FAILED`。面向用户的消息安全且可本地化；诊断信息只保留脱敏后的技术细节。
+错误类别包括输入校验、单文件失败、可重试的网络/AI 失败、邮箱认证、AI 认证、邮件正文、配对、规则、归档、人工复核、OCR、持久化、磁盘、WebView2 和系统错误。邮箱扫描至少使用 `MAILBOX_CREDENTIALS_INVALID`、`MAILBOX_TLS_FAILED`、`MAILBOX_SELECT_FAILED`、`MAILBOX_CONNECTION_FAILED`、`MAILBOX_INPUT_UNRESOLVED`、`ATTACHMENT_OVER_SIZE`、`ZIP_LIMIT_EXCEEDED`；AI 认证使用 `AI_AUTHENTICATION_FAILED`；邮件正文使用 `EMAIL_BODY_PARSER_CONFLICT`、`EMAIL_BODY_RECEIPT_INVALID`、`LEGACY_SECRET_REQUIRES_REENTRY`、`LEGACY_SECRET_CLEANUP_FAILED`；配对/规则使用 `PAIRING_AMBIGUOUS`、`PAIRING_CROSS_MESSAGE_DISABLED`、`RULESET_INVALID`、`PROVIDER_RULE_CONFLICT`、`SPECIAL_PARSER_CONFLICT`；归档/复核/OCR 使用 `ARCHIVE_NAME_CONFLICT`、`ARCHIVE_RECOVERY_FAILED`、`REVIEW_REVISION_CONFLICT`、`OCR_MODEL_LOAD_FAILED`、`OCR_IMAGE_INVALID`、`PDF_RENDER_FAILED`；持久化使用 `PERSISTENCE_DISK_FULL`、`DB_CORRUPTED`、`DB_MIGRATION_FAILED` 和 `RUN_RECOVERY_FAILED`。面向用户的消息安全且可本地化；诊断信息只保留脱敏后的技术细节。
 
 ## 11. 测试与验收
 

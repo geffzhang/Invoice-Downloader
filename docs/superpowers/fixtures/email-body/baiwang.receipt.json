@@ -1,0 +1,20 @@
+{
+  "marker": "EMAIL_BODY_RECEIPT_CANONICAL",
+  "providerId": "baiwang-email-body",
+  "sourceMessageUid": "uid-100",
+  "request": {
+    "subject": "百望电子发票通知",
+    "sender": "notice@baiwang.com",
+    "emailDate": "Tue, 22 Sep 2026 10:00:00 +0800"
+  },
+  "result": {
+    "isInvoice": true,
+    "invoiceDate": "2026-09-22",
+    "invoiceNumber": "12345678",
+    "purchaser": "Example Co",
+    "seller": "Example Seller",
+    "amount": "100.00",
+    "documentType": "Catering"
+  },
+  "evidenceFingerprint": "fixture-email-body-fingerprint"
+}
