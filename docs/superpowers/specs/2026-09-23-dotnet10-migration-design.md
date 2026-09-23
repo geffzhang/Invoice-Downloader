@@ -944,6 +944,75 @@ public interface IReportExporter
 
 报表必须由统一的候选终态结果生成，至少包含汇总页、发票明细页和人工复核页；失败候选不能被静默过滤。输出路径只能由 `OutputRoot + ReportName` 经过路径安全校验得到，重复导出使用内容哈希和幂等键处理。
 
+`TemplateVersion=2026-09-23-v1` 的工作簿 schema 固定为以下三个工作表，名称和列顺序不可变：
+
+| 工作表 | 列顺序 |
+| --- | --- |
+| `运行汇总` | `RunId`、`Status`、`DateFrom`、`DateToExclusive`、`ScannedMessageCount`、`CandidateCount`、`ResolvedCount`、`DuplicateCount`、`RetainedCount`、`ManualReviewCount`、`UnresolvedCount`、`CancelledCount`、`ReportGeneratedAtUtc` |
+| `发票明细` | `Sequence`、`DocumentId`、`Status`、`InvoiceDate`、`InvoiceCode`、`InvoiceNumber`、`Purchaser`、`Seller`、`DocumentType`、`Category`、`Amount`、`TaxAmount`、`TotalAmount`、`Confidence`、`PairingState`、`ArchivePath`、`ReasonCode` |
+| `人工复核` | `ReviewId`、`DocumentId`、`Status`、`ReasonCode`、`SourceFileName`、`SourceKind`、`EditableFields`、`CreatedAtUtc`、`ResolvedAtUtc`、`ResolvedBy`、`Comment` |
+
+字段映射固定为：`RunSummary` 直接映射 `运行汇总`；每个 `CandidateProcessResult` 一行映射 `发票明细`，没有 `InvoiceDocument` 的失败结果仍必须输出一行，发票字段为空；`ManualReviewItem` 映射 `人工复核`，`EditableFields` 使用按字母排序后以 `,` 连接的白名单字段名。`ArchivePath` 只能是相对路径，`ReasonCode` 使用稳定错误码，不能填异常文本。
+
+格式固定为：
+
+- 首行冻结、加粗、深色底白字；自动筛选覆盖完整表头；
+- `DateFrom`、`DateToExclusive`、`InvoiceDate` 使用 `yyyy-mm-dd`；UTC 时间使用 `yyyy-mm-ddThh:mm:ssZ`；
+- `Amount`、`TaxAmount`、`TotalAmount` 使用 Excel numeric cell 和 `0.00` 格式；空值保持空 cell，不写“未知”；
+- `Confidence` 使用 numeric cell 和 `0.000` 格式；状态、类型、reason code 使用文本；
+- 所有 worksheet 默认字体为 Calibri 11，表头行高 24，数据行高 20，启用自动换行但不允许内容改变列宽；
+- 固定列宽：`运行汇总` 18/16/14/14/22/16/16/16/16/18/16/14/24；`发票明细` 10/66/16/14/18/22/24/28/16/18/14/14/14/12/16/48/28；`人工复核` 18/66/18/28/28/16/32/24/24/20/48；
+- `ManualReview`、`Unresolved` 和 `Cancelled` 行使用浅色状态填充，但颜色不是业务判断依据；
+- workbook properties 写入 `TemplateVersion`、`RunId` 和生成时间；不写入 API Key、OCR 原文、邮件正文或完整 URL。
+
+报表 golden fixture 使用 JSON 而不是比较二进制 xlsx：
+
+```json
+{
+  "templateVersion": "2026-09-23-v1",
+  "runId": "run-1",
+  "results": [
+    {
+      "sequence": 1,
+      "documentId": "document-1",
+      "status": "Resolved",
+      "invoice": {
+        "invoiceDate": "2026-09-22",
+        "invoiceNumber": "12345678",
+        "purchaser": "Example Co",
+        "seller": "Example Seller",
+        "documentType": "Catering",
+        "amount": "100.00",
+        "taxAmount": "6.00",
+        "totalAmount": "106.00",
+        "confidence": "0.950"
+      },
+      "archivePath": "餐饮/20260922_餐饮_106.00_Example Seller.pdf",
+      "reasonCode": ""
+    },
+    {
+      "sequence": 2,
+      "documentId": "document-2",
+      "status": "ManualReview",
+      "invoice": null,
+      "archivePath": "",
+      "reasonCode": "PAIRING_AMBIGUOUS"
+    }
+  ],
+  "reviews": [
+    {
+      "reviewId": "review-1",
+      "documentId": "document-2",
+      "status": "Open",
+      "reasonCode": "PAIRING_AMBIGUOUS",
+      "editableFields": ["Amount", "InvoiceDate", "Seller"]
+    }
+  ]
+}
+```
+
+golden 测试将 fixture 映射为每张表的二维 cell matrix，并断言 sheet 名称、列顺序、行数、字段值、numeric/date 类型、number format、冻结行、筛选范围、列宽和 template version；不比较 ClosedXML 生成的 zip/XML 文件字节序。另设一条导出回读测试，用 ClosedXML 重新打开 workbook，验证没有公式错误、损坏工作表或超出输出根目录的路径。
+
 #### 人工复核
 
 ```csharp
