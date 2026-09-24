@@ -92,6 +92,103 @@ public sealed class RuleSetBootstrapperTests
     }
 
     [Fact]
+    public void Validator_accepts_rule_with_only_subject_match_criterion()
+    {
+        var validator = new RuleSetValidator();
+        var doc = new RuleSetDocument("1.0", "default", new[]
+        {
+            new RuleRule("r", 1, true,
+                new RuleRuleWhen(SubjectContains: "flight"),
+                new RuleRuleThen("folder", "category", false, true)),
+        });
+
+        var act = () => validator.Validate(doc);
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Validator_rejects_unknown_purchaser_relation()
+    {
+        var validator = new RuleSetValidator();
+        var doc = new RuleSetDocument("1.0", "default", new[]
+        {
+            new RuleRule("r", 1, true,
+                new RuleRuleWhen(PurchaserRelation: "affiliate"),
+                new RuleRuleThen("folder", "category", false, true)),
+        });
+
+        var act = () => validator.Validate(doc);
+        act.Should().Throw<RuleSetValidationException>()
+            .Which.ReasonCode.Should().Be(RpcErrorCodes.RulesetInvalid);
+    }
+
+    [Fact]
+    public void Validator_rejects_unknown_document_type()
+    {
+        var validator = new RuleSetValidator();
+        var doc = new RuleSetDocument("1.0", "default", new[]
+        {
+            new RuleRule("r", 1, true,
+                new RuleRuleWhen(DocumentType: "ImaginaryInvoice", SellerContains: "seller"),
+                new RuleRuleThen("folder", "category", false, true)),
+        });
+
+        var act = () => validator.Validate(doc);
+        act.Should().Throw<RuleSetValidationException>()
+            .Which.ReasonCode.Should().Be(RpcErrorCodes.RulesetInvalid);
+    }
+
+    [Theory]
+    [InlineData("../outside")]
+    [InlineData("transport/../../outside")]
+    [InlineData("/outside")]
+    [InlineData("C:/outside")]
+    [InlineData(@"transport\..\outside")]
+    public void Validator_rejects_unsafe_archive_folder_paths(string archiveFolder)
+    {
+        var validator = new RuleSetValidator();
+        var doc = new RuleSetDocument("1.0", "default", new[]
+        {
+            new RuleRule("r", 1, true,
+                new RuleRuleWhen(DocumentType: "FlightInvoice"),
+                new RuleRuleThen(archiveFolder, "travel", false, true)),
+        });
+
+        var act = () => validator.Validate(doc);
+        act.Should().Throw<RuleSetValidationException>()
+            .Which.ReasonCode.Should().Be(RpcErrorCodes.RulesetInvalid);
+    }
+
+    [Theory]
+    [InlineData("target")]
+    [InlineData("non_target")]
+    [InlineData("unknown")]
+    public void Validator_accepts_supported_purchaser_relations(string relation)
+    {
+        var validator = new RuleSetValidator();
+        var doc = new RuleSetDocument("1.0", "default", new[]
+        {
+            new RuleRule("r", 1, true,
+                new RuleRuleWhen(PurchaserRelation: relation),
+                new RuleRuleThen("folder", "category", false, true)),
+        });
+
+        var act = () => validator.Validate(doc);
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Validator_rejects_empty_rules_array()
+    {
+        var validator = new RuleSetValidator();
+        var doc = new RuleSetDocument("1.0", "default", Array.Empty<RuleRule>());
+
+        var act = () => validator.Validate(doc);
+        act.Should().Throw<RuleSetValidationException>()
+            .Which.ReasonCode.Should().Be(RpcErrorCodes.RulesetInvalid);
+    }
+
+    [Fact]
     public void Validator_rejects_rule_without_effective_action_or_category()
     {
         var validator = new RuleSetValidator();

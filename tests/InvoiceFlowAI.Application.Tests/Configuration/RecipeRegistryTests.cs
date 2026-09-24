@@ -109,4 +109,26 @@ public sealed class RecipeRegistryTests
         var ex = await act.Should().ThrowAsync<RecipeValidationException>();
         ex.Which.ReasonCode.Should().Be(RpcErrorCodes.RecipePortInvalid);
     }
+
+    [Fact]
+    public async Task Rejects_connection_between_ports_with_incompatible_packet_types()
+    {
+        var registry = new RecipeRegistry(BuiltInNodeTypes.Default, BuiltInConnections.Default, null);
+        var nodes = new[]
+        {
+            new RecipeNode("validate", "validate-request", "1.0", new Dictionary<string, object?>()),
+            new RecipeNode("scan", "scan-mailbox", "1.0", new Dictionary<string, object?>()),
+        };
+        var connections = new[]
+        {
+            new RecipeConnection("validate", "Failure", "scan", "Input"),
+        };
+
+        var act = async () => await registry.ValidateAsync(
+            new RecipeValidationRequest(nodes, connections),
+            CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<RecipeValidationException>();
+        ex.Which.ReasonCode.Should().Be(RpcErrorCodes.RecipePortInvalid);
+    }
 }

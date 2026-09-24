@@ -35,7 +35,7 @@ internal sealed class InMemoryRuleSetStore : IRuleSetBootstrapStore
                 Rules: new[]
                 {
                     new RuleRule("rule-tampered", 1, true,
-                        new RuleRuleWhen(DocumentType: "Ghost", SellerContains: null),
+                        new RuleRuleWhen(DocumentType: "FlightInvoice", SellerContains: null),
                         new RuleRuleThen("folder", "category", false, true)),
                 }));
         }

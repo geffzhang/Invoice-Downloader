@@ -30,14 +30,14 @@ public sealed class BuiltInNodeTypes : INodeTypeRegistry
                 new[]
                 {
                     new NodePortDefinition("Input", "Input", "ValidatedRunInput"),
-                    new NodePortDefinition("Messages", "Output", "PipelineItem<MailboxMessageBatch>"),
+                    new NodePortDefinition("Messages", "Output", "PipelineItem<MailboxScanResult>"),
                     new NodePortDefinition("Failure", "Output", "RunFailure"),
                 }),
             ["collect-candidates|1.0"] = new NodeTypeDefinition(
                 "collect-candidates", "1.0",
                 new[]
                 {
-                    new NodePortDefinition("Messages", "Input", "PipelineItem<MailboxMessageBatch>"),
+                    new NodePortDefinition("Messages", "Input", "PipelineItem<MailboxScanResult>"),
                     new NodePortDefinition("Candidates", "Output", "PipelineItem<CandidateBatch>"),
                     new NodePortDefinition("Failure", "Output", "RunFailure"),
                 }),
@@ -115,6 +115,6 @@ public sealed class BuiltInConnections : IConnectionPolicy
             string.Equals(p.Name, toPort, StringComparison.Ordinal) &&
             string.Equals(p.Direction, "Input", StringComparison.Ordinal));
         if (fromDef is null || toDef is null) return false;
-        return true;
+        return string.Equals(fromDef.PacketType, toDef.PacketType, StringComparison.Ordinal);
     }
 }
