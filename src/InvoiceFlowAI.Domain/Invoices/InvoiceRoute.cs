@@ -1,11 +1,21 @@
 namespace InvoiceFlowAI.Domain.Invoices;
 
 /// <summary>
-/// Whether the document represents an inbound purchase (purchaser pays) or
-/// outbound sale (seller charges). Used to decide which side of the
-/// purchase-sale match the document should fill in pairing.
+/// Travel details and direction for an invoice. Static direction values
+/// preserve the existing inbound/outbound construction pattern.
 /// </summary>
-public enum InvoiceRoute
+public sealed record InvoiceRoute(
+    InvoiceRouteDirection Direction,
+    DateOnly? DepartureDate = null,
+    string DepartureCity = "",
+    string DestinationCity = "")
+{
+    public static InvoiceRoute Inbound { get; } = new(InvoiceRouteDirection.Inbound);
+    public static InvoiceRoute Outbound { get; } = new(InvoiceRouteDirection.Outbound);
+    public static InvoiceRoute Unknown { get; } = new(InvoiceRouteDirection.Unknown);
+}
+
+public enum InvoiceRouteDirection
 {
     Inbound = 0,
     Outbound = 1,

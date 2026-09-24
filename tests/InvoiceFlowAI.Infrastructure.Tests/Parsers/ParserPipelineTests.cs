@@ -120,7 +120,7 @@ public sealed class ParserPipelineTests
         var registry = new ParserRegistry(new IParser[]
         {
             NewParser("railway-ticket", $"{FixtureRoot}/railway-ticket-basic.json", priority: 400, sourceKinds: new[] { "pdf" }),
-            NewParser("accommodation-folio", $"{FixtureRoot}/accommodation-folio-basic.json", priority: 390, sourceKinds: new[] { "pdf" }),
+            NewParser("accommodation-folio", $"{FixtureRoot}/accommodation-folio-basic.json", priority: 400, sourceKinds: new[] { "pdf" }),
         });
         var pipeline = new ParserPipeline(registry);
 

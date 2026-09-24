@@ -14,10 +14,15 @@ public interface IChatCompletionService
 
     Task<ChatCompletionResult> CompleteVisionAsync(
         ChatCompletionRequest request,
-        ReadOnlyMemory<byte> image,
-        string contentType,
+        IReadOnlyList<ChatImagePart> images,
         CancellationToken cancellationToken);
 }
+
+    public sealed record ChatImagePart(
+        string ContentType,
+        ReadOnlyMemory<byte> Bytes,
+        int Width,
+        int Height);
 
 public sealed record ChatCompletionRequest(
     string SystemPrompt,
@@ -39,15 +44,19 @@ public enum ChatCompletionErrorCode
     RateLimited,
     Timeout,
     ImageTooLarge,
+    RequestTooLarge,
+    UnsupportedImage,
     InvalidResponse,
 }
 
 public sealed class ChatCompletionException : Exception
 {
     public ChatCompletionErrorCode Code { get; }
-    public ChatCompletionException(ChatCompletionErrorCode code, string message)
+    public TimeSpan? RetryAfter { get; }
+    public ChatCompletionException(ChatCompletionErrorCode code, string message, TimeSpan? retryAfter = null)
         : base(message)
     {
         Code = code;
+        RetryAfter = retryAfter;
     }
 }

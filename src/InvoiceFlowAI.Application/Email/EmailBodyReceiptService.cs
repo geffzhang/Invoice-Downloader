@@ -4,14 +4,9 @@
 // InputKind=EmailBodyReceipt so the archive + report can distinguish
 // these from attachment-derived invoices.
 //
-// The service takes an email subject, sender, and body text and
-// produces an InvoiceDocument together with a trace dictionary. The
-// DeepSeek chat completion service is consulted when the heuristic
-// parser cannot extract enough fields on its own; the IChatCompletion
-// abstraction keeps the network / API key out of the application core.
+// The service parses recognized receipt layouts deterministically. Email
+// content is transient and never copied into trace fields.
 
-using InvoiceFlowAI.Application.Ai;
-using InvoiceFlowAI.Application.Parsers;
 using InvoiceFlowAI.Domain.Candidates;
 using InvoiceFlowAI.Domain.Invoices;
 
@@ -33,109 +28,47 @@ public sealed record EmailBodyReceiptRequest(
 public sealed record EmailBodyReceiptOutcome(
     InvoiceDocument? Invoice,
     IReadOnlyDictionary<string, string> Trace,
-    CandidateFailure? Failure);
+    CandidateFailure? Failure,
+    bool ContinueWithAttachments = false);
 
 public sealed class EmailBodyReceiptService : IEmailBodyReceiptService
 {
     public const string InputKind = "EmailBodyReceipt";
 
-    private readonly IChatCompletionService _chat;
-
-    public EmailBodyReceiptService(IChatCompletionService chat)
-    {
-        _chat = chat ?? throw new ArgumentNullException(nameof(chat));
-    }
-
-    public async Task<EmailBodyReceiptOutcome> ExtractAsync(
+    public Task<EmailBodyReceiptOutcome> ExtractAsync(
         EmailBodyReceiptRequest request,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var trace = new Dictionary<string, string>
         {
             ["InputKind"] = InputKind,
             ["SourceMessageUid"] = request.SourceMessageUid,
-            ["Subject"] = request.Subject,
-            ["Sender"] = request.Sender,
         };
-
-        // Heuristic parse first. The heuristic recognises icloud, baiwang,
-        // and the canonical "notice@baiwang.com" sender.
         var heuristic = HeuristicParse(request);
 
-        // The DeepSeek model is consulted for the date + amount confirmation
-        // and to handle cases the heuristic does not recognise. The image
-        // path is unused here — emails carry no images in the body receipt
-        // pipeline — but the same service is reused.
-        string modelText = "";
-        try
+        if (heuristic.IsComplete)
         {
-            var aiResult = await _chat.CompleteTextAsync(
-                new ChatCompletionRequest(
-                    SystemPrompt: "You extract invoice fields from email bodies. Output JSON with invoiceDate, invoiceNumber, purchaser, seller, amount, taxAmount, totalAmount, documentType.",
-                    UserPrompt: $"subject={request.Subject}\nsender={request.Sender}\nbody={request.BodyText}"),
-                cancellationToken).ConfigureAwait(false);
-            modelText = aiResult.Text;
-        }
-        catch (ChatCompletionException ex) when (ex.Code is ChatCompletionErrorCode.Unauthorized or ChatCompletionErrorCode.RateLimited or ChatCompletionErrorCode.Timeout)
-        {
-            trace["AiErrorCode"] = ex.Code.ToString();
-            // Heuristic is still our source of truth — surface a partial
-            // result rather than rejecting the whole email.
+            trace["Parser"] = "deterministic-baiwang";
+            trace["Status"] = "resolved";
+            trace["ReceiptContract"] = "EMAIL_BODY_RECEIPT_CANONICAL";
+            return Task.FromResult(new EmailBodyReceiptOutcome(heuristic.ToInvoice(request.SourceMessageUid), trace, Failure: null));
         }
 
-        trace["ModelOutputPresent"] = string.IsNullOrEmpty(modelText) ? "false" : "true";
-
-        if (!string.IsNullOrEmpty(heuristic.InvoiceNumber))
-        {
-            trace["Parser"] = "heuristic-baiwang";
-            return new EmailBodyReceiptOutcome(heuristic.ToInvoice(), trace, Failure: null);
-        }
-
-        if (string.IsNullOrEmpty(modelText))
-        {
-            trace["Parser"] = "none";
-            return new EmailBodyReceiptOutcome(
-                Invoice: null,
-                Trace: trace,
-                Failure: new CandidateFailure(
-                    ReasonCode: "EMAIL_BODY_RECEIPT_UNRECOGNIZED",
-                    Scope: FailureScope.Candidate,
-                    Category: FailureCategory.Document,
-                    Retryable: false,
-                    SafeMessage: "Email body did not match any known receipt layout."));
-        }
-
-        // Parse the model's JSON output into a partial invoice. Field
-        // validation happens in the candidate commit step; here we just
-        // surface what the model gave us.
-        trace["Parser"] = "deepseek-text";
-        return new EmailBodyReceiptOutcome(
-            new InvoiceDocument(
-                DocumentId: request.SourceMessageUid,
-                InvoiceDate: DateOnly.MinValue,
-                Purchaser: "",
-                Seller: "",
-                Amount: 0m,
-                TaxAmount: 0m,
-                TotalAmount: 0m,
-                InvoiceCode: null,
-                InvoiceNumber: null,
-                DocumentType: InvoiceDocumentType.Other,
-                Category: null,
-                Route: InvoiceRoute.Inbound,
-                Items: Array.Empty<InvoiceItem>(),
-                SourceFileName: "",
-                ContentHash: "",
-                Trace: new Dictionary<string, string>
-                {
-                    ["ParsedBy"] = "deepseek-text",
-                    ["Confidence"] = "0.40",
-                    ["SourceKind"] = "email-body",
-                }),
-            trace,
-            Failure: null);
+        trace["Parser"] = "none";
+        trace["Status"] = "receipt_miss_continue_attachments";
+        return Task.FromResult(new EmailBodyReceiptOutcome(
+            Invoice: null,
+            Trace: trace,
+            Failure: new CandidateFailure(
+                ReasonCode: "EMAIL_BODY_RECEIPT_UNRECOGNIZED",
+                Scope: FailureScope.Candidate,
+                Category: FailureCategory.Document,
+                Retryable: false,
+                SafeMessage: "Email body did not match any known receipt layout."),
+            ContinueWithAttachments: true));
     }
 
     private static HeuristicResult HeuristicParse(EmailBodyReceiptRequest request)
@@ -147,32 +80,72 @@ public sealed class EmailBodyReceiptService : IEmailBodyReceiptService
             || text.Contains("百望", StringComparison.OrdinalIgnoreCase))
         {
             // Heuristic: capture invoice number (8+ digits), amount, date.
-            var numberMatch = System.Text.RegularExpressions.Regex.Match(text, @"\b(\d{8,20})\b");
+            var numberMatch = System.Text.RegularExpressions.Regex.Match(text,
+                @"(?:发票号码|Invoice\s*(?:No\.?|Number))\s*[:：#]?\s*(\d{8,20})",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
             if (numberMatch.Success)
             {
                 result.InvoiceNumber = numberMatch.Groups[1].Value;
             }
-            var amountMatch = System.Text.RegularExpressions.Regex.Match(
-                text, @"(?:金额|价税合计|合计)[^0-9]*([0-9]+(?:\.[0-9]{1,2})?)");
+            result.Amount = ExtractAmount(text) ?? 0m;
+            var dateMatch = System.Text.RegularExpressions.Regex.Match(
+                text, @"开票日期\s*[:：]?\s*(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+            if (dateMatch.Success
+                && int.TryParse(dateMatch.Groups[1].Value, out var y)
+                && int.TryParse(dateMatch.Groups[2].Value, out var mo)
+                && int.TryParse(dateMatch.Groups[3].Value, out var d))
+            {
+                try { result.InvoiceDate = new DateOnly(y, mo, d); }
+                catch (ArgumentOutOfRangeException) { }
+            }
+
+            result.Purchaser = ExtractLabeledValue(text, "购买方名称", "购买方", "Purchaser");
+            result.Seller = ExtractLabeledValue(text, "销售方名称", "销售方", "Seller");
+            var typeName = ExtractLabeledValue(text, "发票类型", "单据类型", "Document Type");
+            if (Enum.TryParse<InvoiceDocumentType>(typeName, ignoreCase: true, out var documentType)
+                && Enum.IsDefined(documentType))
+            {
+                result.DocumentType = documentType;
+            }
+        }
+        return result;
+    }
+
+    private static string ExtractLabeledValue(string text, params string[] labels)
+    {
+        foreach (var label in labels)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(text,
+                $@"{System.Text.RegularExpressions.Regex.Escape(label)}\s*[:：]?\s*(?<value>[^，,。;；\r\n]+)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+            if (match.Success)
+            {
+                return match.Groups["value"].Value.Trim();
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static decimal? ExtractAmount(string text)
+    {
+        foreach (var label in new[] { "价税合计", "合计", "金额" })
+        {
+            var amountMatch = System.Text.RegularExpressions.Regex.Match(text,
+                $@"{label}\s*[:：]?\s*[¥￥]?\s*([0-9,]+(?:\.[0-9]{{1,2}})?)",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant);
             if (amountMatch.Success
                 && decimal.TryParse(amountMatch.Groups[1].Value,
                     System.Globalization.NumberStyles.Number,
                     System.Globalization.CultureInfo.InvariantCulture,
                     out var amount))
             {
-                result.Amount = amount;
-            }
-            var dateMatch = System.Text.RegularExpressions.Regex.Match(
-                text, @"(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})");
-            if (dateMatch.Success
-                && int.TryParse(dateMatch.Groups[1].Value, out var y)
-                && int.TryParse(dateMatch.Groups[2].Value, out var mo)
-                && int.TryParse(dateMatch.Groups[3].Value, out var d))
-            {
-                result.InvoiceDate = new DateOnly(y, mo, d);
+                return amount;
             }
         }
-        return result;
+
+        return null;
     }
 
     private sealed class HeuristicResult
@@ -180,18 +153,28 @@ public sealed class EmailBodyReceiptService : IEmailBodyReceiptService
         public string? InvoiceNumber { get; set; }
         public decimal Amount { get; set; }
         public DateOnly InvoiceDate { get; set; }
+        public string Purchaser { get; set; } = string.Empty;
+        public string Seller { get; set; } = string.Empty;
+        public InvoiceDocumentType DocumentType { get; set; } = InvoiceDocumentType.Other;
+        public bool IsComplete =>
+            !string.IsNullOrWhiteSpace(InvoiceNumber)
+            && InvoiceDate != default
+            && !string.IsNullOrWhiteSpace(Purchaser)
+            && !string.IsNullOrWhiteSpace(Seller)
+            && Amount > 0m
+            && DocumentType is not InvoiceDocumentType.Other and not InvoiceDocumentType.Unrecognized;
 
-        public InvoiceDocument ToInvoice() => new(
-            DocumentId: "",
-            InvoiceDate: InvoiceDate,
-            Purchaser: "",
-            Seller: "百望",
+        public InvoiceDocument ToInvoice(string sourceMessageUid) => new(
+            DocumentId: sourceMessageUid,
+            InvoiceDate: InvoiceDate == default ? null : InvoiceDate,
+            Purchaser: Purchaser,
+            Seller: Seller,
             Amount: Amount,
             TaxAmount: 0m,
             TotalAmount: Amount,
             InvoiceCode: null,
             InvoiceNumber: InvoiceNumber,
-            DocumentType: InvoiceDocumentType.Other,
+            DocumentType: DocumentType,
             Category: null,
             Route: InvoiceRoute.Inbound,
             Items: Array.Empty<InvoiceItem>(),
@@ -199,9 +182,15 @@ public sealed class EmailBodyReceiptService : IEmailBodyReceiptService
             ContentHash: "",
             Trace: new Dictionary<string, string>
             {
-                ["ParsedBy"] = "heuristic-baiwang",
+                ["ParsedBy"] = "deterministic-baiwang",
                 ["Confidence"] = "0.70",
+                ["ReceiptContract"] = "EMAIL_BODY_RECEIPT_CANONICAL",
                 ["SourceKind"] = "email-body",
-            });
+            })
+        {
+            Identity = DocumentIdentity.Create(sourceMessageUid),
+            Confidence = 0.70m,
+            ParserName = "deterministic-baiwang",
+        };
     }
 }

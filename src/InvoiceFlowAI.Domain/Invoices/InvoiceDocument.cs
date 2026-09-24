@@ -1,3 +1,5 @@
+using InvoiceFlowAI.Domain.Candidates;
+
 namespace InvoiceFlowAI.Domain.Invoices;
 
 /// <summary>
@@ -18,8 +20,22 @@ public sealed record InvoiceDocument(
     string? InvoiceNumber,
     InvoiceDocumentType DocumentType,
     string? Category,
-    InvoiceRoute Route,
+    InvoiceRoute? Route,
     IReadOnlyList<InvoiceItem> Items,
     string SourceFileName,
     string ContentHash,
-    IReadOnlyDictionary<string, string>? Trace = null);
+    IReadOnlyDictionary<string, string>? Trace = null)
+{
+    public DocumentIdentity Identity { get; init; } =
+        string.IsNullOrWhiteSpace(DocumentId) ? default : new DocumentIdentity(DocumentId);
+
+    public bool IsInvoice { get; init; } = true;
+
+    public InvoiceFlags Flags { get; init; }
+
+    public decimal Confidence { get; init; }
+
+    public string ParserName { get; init; } = string.Empty;
+
+    public string ExtractionRevision { get; init; } = string.Empty;
+}
