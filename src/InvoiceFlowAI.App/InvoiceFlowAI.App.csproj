@@ -33,6 +33,8 @@
     <ProjectReference Include="..\InvoiceFlowAI.Contracts\InvoiceFlowAI.Contracts.csproj" />
     <ProjectReference Include="..\InvoiceFlowAI.Application\InvoiceFlowAI.Application.csproj" />
     <ProjectReference Include="..\InvoiceFlowAI.Infrastructure\InvoiceFlowAI.Infrastructure.csproj" />
+    <ProjectReference Include="..\InvoiceFlowAI.UrlRecovery.Worker\InvoiceFlowAI.UrlRecovery.Worker.csproj"
+              ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
@@ -47,5 +49,19 @@
     <Content Include="..\..\templates\static\**" Link="Web\static\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
   </ItemGroup>
+
+  <Target Name="CopyUrlRecoveryWorkerForDevelopment" AfterTargets="Build" Condition="'$(RuntimeIdentifier)' == ''">
+    <PropertyGroup>
+      <UrlRecoveryWorkerOutput>$(MSBuildProjectDirectory)\..\InvoiceFlowAI.UrlRecovery.Worker\bin\$(Configuration)\net10.0</UrlRecoveryWorkerOutput>
+    </PropertyGroup>
+    <ItemGroup>
+      <UrlRecoveryWorkerSidecar Include="$(UrlRecoveryWorkerOutput)\InvoiceFlowAI.UrlRecovery.Worker.exe" Condition="'$(OS)' == 'Windows_NT'" />
+      <UrlRecoveryWorkerSidecar Include="$(UrlRecoveryWorkerOutput)\InvoiceFlowAI.UrlRecovery.Worker" Condition="'$(OS)' != 'Windows_NT'" />
+      <UrlRecoveryWorkerSidecar Include="$(UrlRecoveryWorkerOutput)\InvoiceFlowAI.UrlRecovery.Worker.dll" />
+      <UrlRecoveryWorkerSidecar Include="$(UrlRecoveryWorkerOutput)\InvoiceFlowAI.UrlRecovery.Worker.deps.json" />
+      <UrlRecoveryWorkerSidecar Include="$(UrlRecoveryWorkerOutput)\InvoiceFlowAI.UrlRecovery.Worker.runtimeconfig.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(UrlRecoveryWorkerSidecar)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

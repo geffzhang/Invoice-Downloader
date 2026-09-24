@@ -21,6 +21,15 @@
     <ProjectReference Include="..\..\src\InvoiceFlowAI.Contracts\InvoiceFlowAI.Contracts.csproj" />
     <ProjectReference Include="..\..\src\InvoiceFlowAI.Application\InvoiceFlowAI.Application.csproj" />
     <ProjectReference Include="..\..\src\InvoiceFlowAI.Infrastructure\InvoiceFlowAI.Infrastructure.csproj" />
+    <ProjectReference Include="..\InvoiceFlowAI.UrlRecovery.WorkerProcessFixture\InvoiceFlowAI.UrlRecovery.WorkerProcessFixture.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
+
+  <Target Name="CopyUrlRecoveryWorkerProcessFixture" AfterTargets="Build">
+    <ItemGroup>
+      <WorkerProcessFixtureFiles Include="..\InvoiceFlowAI.UrlRecovery.WorkerProcessFixture\bin\$(Configuration)\net10.0\*" />
+    </ItemGroup>
+    <MakeDir Directories="$(OutDir)worker-process-fixture" />
+    <Copy SourceFiles="@(WorkerProcessFixtureFiles)" DestinationFolder="$(OutDir)worker-process-fixture" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

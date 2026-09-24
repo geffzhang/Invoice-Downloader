@@ -163,6 +163,7 @@ public sealed class MailKitMailboxScannerTests
         result.UidValidity.Should().Be("77");
         result.UidValidityChanged.Should().BeFalse();
         result.HighestUid.Should().Be(105);
+        result.AccountId.Should().Be("acct-1");
     }
 
     [Fact]
@@ -283,6 +284,102 @@ public sealed class MailKitMailboxScannerTests
 
         payload[0] = 99;
         candidate.Payload.ToArray().Should().Equal(1, 2, 3, 4);
+    }
+
+    [Fact]
+    public async Task Url_candidates_are_projected_from_plain_text_and_html_without_retaining_bodies()
+    {
+        var plainUrl = "https://invoices.example.com/download?id=plain-token";
+        var htmlUrl = "https://fp.bwjf.cn/downsigninvoice?code=html-token&amp;format=pdf";
+        var session = new FakeMailboxSession
+        {
+            SessionInfo = new MailboxSessionInfo(77),
+            SearchResults =
+            [
+                NewMessage(uid: 201, bodyText: $"Invoice: {plainUrl}") with
+                {
+                    HtmlBody = $"<a href=\"{htmlUrl}\">Download invoice</a><a href=\"{htmlUrl}\">again</a>"
+                }
+            ]
+        };
+        var scanner = CreateScanner(session: session);
+
+        var result = await scanner.ScanAsync(new MailboxScanRequest("acct-1", null, null, null), CancellationToken.None);
+
+        result.UrlCandidates.Should().HaveCount(2);
+        result.UrlCandidates[0].SourceUrl.ToString().Should().Be(plainUrl);
+        result.UrlCandidates[0].ProviderFamily.Should().BeEmpty();
+        result.UrlCandidates[1].SourceUrl.ToString().Should().Be("https://fp.bwjf.cn/downsigninvoice?code=html-token&format=pdf");
+        result.UrlCandidates[1].ProviderFamily.Should().Be("bwjf_signed_invoice");
+        result.UrlCandidates.Should().OnlyContain(candidate =>
+            candidate.AccountId == "acct-1"
+            && candidate.Mailbox == "INBOX"
+            && candidate.UidValidity == "77"
+            && candidate.MessageUid == "201");
+        result.UrlCandidates.SelectMany(candidate => candidate.ExpectedFields.Values)
+            .Should().NotContain(value => value.Contains("Invoice:", StringComparison.Ordinal));
+        result.UrlCandidates.Should().OnlyContain(candidate => candidate.SourceUrl.Query.Length > 0);
+    }
+
+    [Fact]
+    public async Task Direct_provider_expected_fields_are_extracted_without_copying_message_body()
+    {
+        var sourceUrl = new Uri("https://dppt.beijing.chinatax.gov.cn/kpfw/fpjfzz/v1/exportdzfpwjewm?Wjgs=xml");
+        var session = new FakeMailboxSession
+        {
+            SearchResults =
+            [
+                NewMessage(
+                    uid: 202,
+                    subject: "发票号码：12345678901234567890",
+                    bodyText: "开票日期：2026-09-24 请下载附件") with
+                {
+                    HtmlBody = $"<a href=\"{sourceUrl}\">XML invoice</a>"
+                }
+            ]
+        };
+        var scanner = CreateScanner(session: session);
+
+        var result = await scanner.ScanAsync(new MailboxScanRequest("acct-1", null, null, null), CancellationToken.None);
+
+        var candidate = result.UrlCandidates.Should().ContainSingle().Subject;
+        candidate.ProviderFamily.Should().Be("chinatax_direct_invoice");
+        candidate.ExpectedFields.Should().Contain(new KeyValuePair<string, string>("invoice_number", "12345678901234567890"));
+        candidate.ExpectedFields.Should().Contain(new KeyValuePair<string, string>("invoice_date", "2026-09-24"));
+        candidate.ExpectedFields.Should().Contain(new KeyValuePair<string, string>("preferred_kind", "xml"));
+        candidate.ExpectedFields.Should().NotContainKey("body");
+        candidate.ExpectedFields.Values.Should().NotContain("开票日期：2026-09-24 请下载附件");
+    }
+
+    [Fact]
+    public async Task Expected_field_evidence_retains_url_subject_and_body_sources_in_priority_order()
+    {
+        var sourceUrl = new Uri("https://dppt.beijing.chinatax.gov.cn/kpfw/fpjfzz/v1/exportdzfpwjewm?Fphm=11111111111111111111");
+        var session = new FakeMailboxSession
+        {
+            SearchResults =
+            [
+                NewMessage(
+                    uid: 209,
+                    subject: "发票号码：22222222222222222222",
+                    bodyText: "发票号码：33333333333333333333") with
+                {
+                    HtmlBody = $"<a href=\"{sourceUrl}\">Download</a>"
+                }
+            ]
+        };
+        var scanner = CreateScanner(session: session);
+
+        var result = await scanner.ScanAsync(new MailboxScanRequest("acct-1", null, null, null), CancellationToken.None);
+
+        var candidate = result.UrlCandidates.Should().ContainSingle().Subject;
+        candidate.ExpectedFields["invoice_number"].Should().Be("11111111111111111111");
+        candidate.ExpectedFieldEvidence["invoice_number"].Should().Equal(
+            new ExpectedFieldEvidence("11111111111111111111", ExpectedFieldSource.UrlQuery, 0),
+            new ExpectedFieldEvidence("22222222222222222222", ExpectedFieldSource.Subject, 0),
+            new ExpectedFieldEvidence("33333333333333333333", ExpectedFieldSource.Body, 0));
+        candidate.ExpectedFieldEvidence.Values.SelectMany(evidence => evidence)
+            .Should().NotContain(evidence => evidence.Value.Contains("发票号码", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -638,6 +735,42 @@ public sealed class MailKitMailboxScannerTests
 
 public sealed class MailKitMailboxSessionPureTests
 {
+    [Theory]
+    [InlineData("https://dppt.beijing.chinatax.gov.cn/kpfw/fpjfzz/v1/exportdzfpwjewm", "chinatax_direct_invoice")]
+    [InlineData("https://fp.bwjf.cn/downsigninvoice?code=x", "bwjf_signed_invoice")]
+    [InlineData("https://sdapi.fpyun.com.cn/invoice/qd/download/getinvoicefile", "fpyun_direct_invoice")]
+    [InlineData("https://nnfp.jss.com.cn/scan-invoice/printqrcode", "nuonuo_scan_invoice")]
+    [InlineData("https://files.pdd-fapiao.com/invoice/pdf/a.pdf", "pdd_direct_invoice")]
+    [InlineData("https://eicore-invoice-01.s3.cn-north-1.jdcloud-oss.com/digital-invoice/a.pdf", "jdcloud_direct_invoice")]
+    [InlineData("https://etd.kpbyd.com/hub/files/download?fileCode=abc_pdf", "kpbyd_direct_invoice")]
+    public void Provider_family_detection_matches_supported_direct_invoice_urls(string rawUrl, string expectedFamily)
+    {
+        var family = MailboxUrlCandidateDiscovery.DetectProviderFamily(new Uri(rawUrl), "sender@example.com", "Invoice");
+
+        family.Should().Be(expectedFamily);
+    }
+
+    [Theory]
+    [InlineData("http://sdapi.fpyun.com.cn/invoice/qd/download/getinvoicefile")]
+    [InlineData("https://etd.kpbyd.com/hub/files/download?fileCode=abc_pdfx")]
+    public void Provider_family_detection_rejects_nonmatching_scheme_or_query(string rawUrl)
+    {
+        var family = MailboxUrlCandidateDiscovery.DetectProviderFamily(new Uri(rawUrl), "sender@example.com", "Invoice");
+
+        family.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("https://mail.example.invalid/previewinvoice?id=fixture", "Invoice")]
+    [InlineData("https://mail.example.invalid/downloadpdf?id=fixture", "Invoice")]
+    [InlineData("https://mail.example.invalid/document?id=fixture", "发票 下载通知")]
+    public void Provider_family_detection_uses_baiwang_url_and_subject_signals(string rawUrl, string subject)
+    {
+        var family = MailboxUrlCandidateDiscovery.DetectProviderFamily(new Uri(rawUrl), "sender@example.com", subject);
+
+        family.Should().Be("baiwang");
+    }
+
     [Fact]
     public void Create_client_implementation_contains_only_fixed_product_metadata()
     {
@@ -690,6 +823,7 @@ public sealed class MailKitMailboxSessionPureTests
         var projected = MailKitMailboxSession.ProjectMessage(43, message, null);
 
         projected.BodyText.Should().Be("Hello invoice & receipt");
+        projected.HtmlBody.Should().Be("<div>Hello <b>invoice</b> &amp; receipt</div>");
     }
 
     [Fact]

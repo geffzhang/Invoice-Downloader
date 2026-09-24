@@ -35,7 +35,11 @@ public sealed record MailboxScanResult(
     IReadOnlyList<MailboxAttachmentCandidate> Attachments,
     long HighestUid,
     string UidValidity,
-    bool UidValidityChanged);
+    bool UidValidityChanged)
+{
+    public string AccountId { get; init; } = string.Empty;
+    public IReadOnlyList<MailboxUrlCandidate> UrlCandidates { get; init; } = Array.Empty<MailboxUrlCandidate>();
+}
 
 public interface IAttachmentLimiter
 {
