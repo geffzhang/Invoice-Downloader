@@ -25,11 +25,11 @@ if (-not (Test-Path -LiteralPath $ModelsRoot -PathType Container)) {
 
 # Stable sort by relative path so the manifest JSON hash is
 # reproducible regardless of the OS's file enumeration order.
-$files = Get-ChildItem -LiteralPath $ModelsRoot -File -Recurse |
+$files = @(Get-ChildItem -LiteralPath $ModelsRoot -File -Recurse |
     Where-Object { $_.FullName -notmatch '[\\/]manifests[\\/]' } |
-    Sort-Object -Property @{ Expression = { $_.FullName.Substring($ModelsRoot.Length).TrimStart('\','/') } }
+    Sort-Object -Property @{ Expression = { $_.FullName.Substring($ModelsRoot.Length).TrimStart('\\','/') } })
 
-$assets = foreach ($file in @($files)) {
+$assets = @(foreach ($file in $files) {
     $rel = $file.FullName.Substring($ModelsRoot.Length).TrimStart('\','/').Replace('\','/')
     $kind = switch -Wildcard ($rel) {
         '*.bin'        { 'model' }
@@ -46,13 +46,13 @@ $assets = foreach ($file in @($files)) {
         revision     = $null
         notes        = $null
     }
-}
+})
 
 $vendor = 'InvoiceFlowAI'
 $schema = 'invoiceflow.model-manifest.v1'
 
 # Compute the manifest fingerprint deterministically (sorted entries).
-$jsonForHash = ($assets | Sort-Object relativePath | ConvertTo-Json -Depth 5 -Compress)
+$jsonForHash = ConvertTo-Json -InputObject @($assets | Sort-Object relativePath) -Depth 5 -Compress
 $fingerprint = [BitConverter]::ToString(
     [System.Security.Cryptography.SHA256]::HashData(
         [System.Text.Encoding]::UTF8.GetBytes($jsonForHash)

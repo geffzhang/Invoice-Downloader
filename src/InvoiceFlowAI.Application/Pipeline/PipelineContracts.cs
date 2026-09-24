@@ -11,11 +11,24 @@ public sealed record PipelineItem<T>(string RunId, T Payload, long Sequence, boo
 public sealed record CandidateWorkItem(
     DocumentCandidate Candidate,
     ReadOnlyMemory<byte> Content,
-    MailboxAttachmentCandidate? SourceAttachment = null);
+    MailboxAttachmentCandidate? SourceAttachment = null,
+    MailboxUrlCandidate? SourceUrlCandidate = null,
+    UrlCandidateGroup? SourceUrlGroup = null);
 
-public sealed record CandidateBatch(IReadOnlyList<CandidateWorkItem> Items);
+public sealed record CandidateBatch(
+    IReadOnlyList<CandidateWorkItem> Items,
+    IReadOnlyList<CandidateProcessResult>? TerminalResults = null)
+{
+    public IReadOnlyList<CandidateProcessResult> EffectiveTerminalResults
+        => TerminalResults ?? Array.Empty<CandidateProcessResult>();
+}
 
-public sealed record ExtractionBatch(IReadOnlyList<CandidateProcessResult> Results);
+public sealed record ExtractionBatch(IReadOnlyList<CandidateProcessResult> Results)
+{
+    public IReadOnlyList<CandidateProcessResult> PreflightResults { get; init; } = Array.Empty<CandidateProcessResult>();
+
+    public IReadOnlyList<CandidateProcessResult> EffectivePreflightResults => PreflightResults;
+}
 
 public sealed record PairingBatch(
     IReadOnlyList<PairingResult> Results,

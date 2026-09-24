@@ -1,0 +1,242 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "link-plain-text",
+      "kind": "link_extraction",
+      "input": {
+        "bodyText": "Synthetic invoice: https://fixture.invalid/plain/invoice.pdf",
+        "htmlBody": ""
+      },
+      "expected": {
+        "orderedFixtureIds": ["url-plain"]
+      }
+    },
+    {
+      "id": "link-html-anchor",
+      "kind": "link_extraction",
+      "input": {
+        "bodyText": "",
+        "htmlBody": "<a href=\"https://fixture.invalid/html/invoice\">Open synthetic invoice</a>"
+      },
+      "expected": {
+        "orderedFixtureIds": ["url-html"]
+      }
+    },
+    {
+      "id": "link-body-html-duplicate-order",
+      "kind": "link_extraction",
+      "input": {
+        "bodyText": "First https://fixture.invalid/shared then https://fixture.invalid/second",
+        "htmlBody": "<a href=\"https://fixture.invalid/shared\">Duplicate</a><a href=\"https://fixture.invalid/third\">Third</a>"
+      },
+      "expected": {
+        "orderedFixtureIds": ["url-shared", "url-second", "url-third"]
+      }
+    },
+    {
+      "id": "provider-chinatax",
+      "kind": "provider_fields",
+      "input": {
+        "url": "https://dppt.beijing.chinatax.gov.cn/kpfw/fpjfzz/v1/exportdzfpwjewm?Fphm=12345678901234567890&Wjgs=pdf",
+        "subject": "Synthetic invoice",
+        "bodyText": "Synthetic seller and date"
+      },
+      "expected": {
+        "providerFamily": "chinatax_direct_invoice",
+        "expectedFields": {
+          "invoice_number": "12345678901234567890",
+          "seller": "Synthetic Seller",
+          "invoice_date": "2026-09-24",
+          "preferred_kind": "pdf"
+        }
+      }
+    },
+    {
+      "id": "provider-bwjf",
+      "kind": "provider_fields",
+      "input": {
+        "url": "https://fp.bwjf.cn/downsigninvoice/fixture",
+        "subject": "Synthetic invoice",
+        "bodyText": "Synthetic seller and date"
+      },
+      "expected": {
+        "providerFamily": "bwjf_signed_invoice",
+        "expectedFields": {
+          "invoice_number": "12345678901234567890",
+          "seller": "Synthetic Seller",
+          "invoice_date": "2026-09-24",
+          "preferred_kind": "pdf"
+        }
+      }
+    },
+    {
+      "id": "provider-fpyun",
+      "kind": "provider_fields",
+      "input": {
+        "url": "https://sdapi.fpyun.com.cn/invoice/qd/download/getinvoicefile?fixture=1",
+        "subject": "Synthetic invoice",
+        "bodyText": "Synthetic seller and date"
+      },
+      "expected": {
+        "providerFamily": "fpyun_direct_invoice",
+        "expectedFields": {
+          "invoice_number": "12345678901234567890",
+          "seller": "Synthetic Seller",
+          "invoice_date": "2026-09-24",
+          "preferred_kind": "xml"
+        }
+      }
+    },
+    {
+      "id": "provider-nuonuo",
+      "kind": "provider_fields",
+      "input": {
+        "url": "https://nnfp.jss.com.cn/invoice/scan/fixture",
+        "subject": "Synthetic invoice",
+        "bodyText": "Synthetic seller and date"
+      },
+      "expected": {
+        "providerFamily": "nuonuo_scan_invoice",
+        "expectedFields": {
+          "invoice_number": "12345678901234567890",
+          "seller": "Synthetic Seller",
+          "invoice_date": "2026-09-24",
+          "preferred_kind": "pdf"
+        }
+      }
+    },
+    {
+      "id": "provider-pdd",
+      "kind": "provider_fields",
+      "input": {
+        "url": "https://files.pdd-fapiao.com/invoice/pdf/fixture.pdf",
+        "subject": "Synthetic invoice",
+        "bodyText": "Synthetic seller and date"
+      },
+      "expected": {
+        "providerFamily": "pdd_direct_invoice",
+        "expectedFields": {
+          "invoice_number": "12345678901234567890",
+          "seller": "Synthetic Seller",
+          "invoice_date": "2026-09-24",
+          "preferred_kind": "pdf"
+        }
+      }
+    },
+    {
+      "id": "provider-jdcloud",
+      "kind": "provider_fields",
+      "input": {
+        "url": "https://eicore-invoice-fixture.s3.cn-north-1.jdcloud-oss.com/digital-invoice/fixture.xml",
+        "subject": "Synthetic invoice",
+        "bodyText": "Synthetic seller and date"
+      },
+      "expected": {
+        "providerFamily": "jdcloud_direct_invoice",
+        "expectedFields": {
+          "invoice_number": "12345678901234567890",
+          "seller": "Synthetic Seller",
+          "invoice_date": "2026-09-24",
+          "preferred_kind": "xml"
+        }
+      }
+    },
+    {
+      "id": "provider-kpbyd",
+      "kind": "provider_fields",
+      "input": {
+        "url": "https://etd.kpbyd.com/hub/files/download?fileCode=fixture_pdf",
+        "subject": "Synthetic invoice",
+        "bodyText": "Synthetic seller and date"
+      },
+      "expected": {
+        "providerFamily": "kpbyd_direct_invoice",
+        "expectedFields": {
+          "invoice_number": "12345678901234567890",
+          "seller": "Synthetic Seller",
+          "invoice_date": "2026-09-24",
+          "preferred_kind": "pdf"
+        }
+      }
+    },
+    {
+      "id": "provider-baiwang",
+      "kind": "provider_fields",
+      "input": {
+        "url": "https://fixture.invalid/baiwang/invoice",
+        "subject": "Synthetic Baiwang invoice",
+        "bodyText": "Synthetic seller and date"
+      },
+      "expected": {
+        "providerFamily": "baiwang",
+        "expectedFields": {
+          "invoice_number": "12345678901234567890",
+          "seller": "Synthetic Seller",
+          "invoice_date": "2026-09-24",
+          "preferred_kind": "pdf"
+        }
+      }
+    },
+    {
+      "id": "provider-group-opaque",
+      "kind": "provider_group",
+      "input": {
+        "providerFamily": "chinatax_direct_invoice",
+        "messageUid": "message-fixture-17",
+        "invoiceNumber": "12345678901234567890"
+      },
+      "expected": {
+        "providerGroupId": "group-hmac-v1-fixture"
+      }
+    },
+    {
+      "id": "role-ride-invoice",
+      "kind": "pairing_projection",
+      "input": {"documentType": "RideInvoice"},
+      "expected": {"role": "RideInvoice"}
+    },
+    {
+      "id": "role-ride-itinerary",
+      "kind": "pairing_projection",
+      "input": {"documentType": "RideItinerary"},
+      "expected": {"role": "RideItinerary"}
+    },
+    {
+      "id": "role-hotel-invoice",
+      "kind": "pairing_projection",
+      "input": {"documentType": "HotelInvoice"},
+      "expected": {"role": "HotelInvoice"}
+    },
+    {
+      "id": "role-hotel-folio",
+      "kind": "pairing_projection",
+      "input": {"documentType": "HotelFolio"},
+      "expected": {"role": "HotelFolio"}
+    },
+    {
+      "id": "role-unrecognized",
+      "kind": "pairing_projection",
+      "input": {"documentType": "Unrecognized"},
+      "expected": {"role": "none"}
+    },
+    {
+      "id": "pair-matched",
+      "kind": "pairing_outcome",
+      "input": {"fixtureGroup": "unique-assignment"},
+      "expected": {"outcome": "matched"}
+    },
+    {
+      "id": "pair-unmatched",
+      "kind": "pairing_outcome",
+      "input": {"fixtureGroup": "no-compatible-companion"},
+      "expected": {"outcome": "unmatched"}
+    },
+    {
+      "id": "pair-ambiguous",
+      "kind": "pairing_outcome",
+      "input": {"fixtureGroup": "multiple-optimal-memberships"},
+      "expected": {"outcome": "ambiguous"}
+    }
+  ]
+}

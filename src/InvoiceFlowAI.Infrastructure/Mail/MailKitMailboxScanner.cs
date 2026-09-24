@@ -95,7 +95,9 @@ public sealed class MailKitMailboxScanner : IMailboxScanner
             var fetchedMessages = await session.SearchAsync(criteria, cancellationToken).ConfigureAwait(false);
             var messages = new List<MailboxMessage>(fetchedMessages.Count);
             var attachments = new List<MailboxAttachmentCandidate>();
+            var urlCandidates = new List<MailboxUrlCandidate>();
             long highestUid = canReuseUidCursor ? normalizedSinceUid!.Value : 0;
+            long urlSequence = 0;
 
             foreach (var fetchedMessage in fetchedMessages)
             {
@@ -118,6 +120,39 @@ public sealed class MailKitMailboxScanner : IMailboxScanner
                         attachment.ContentDisposition.Contains("inline", StringComparison.OrdinalIgnoreCase))));
 
                 var emailTier = _tierClassifier.Classify(fetchedMessage.FromAddress, fetchedMessage.Subject, fetchedMessage.BodyText);
+                foreach (var sourceUrl in MailboxUrlCandidateDiscovery.Extract(fetchedMessage.BodyText, fetchedMessage.HtmlBody))
+                {
+                    var providerFamily = MailboxUrlCandidateDiscovery.DetectProviderFamily(
+                        sourceUrl,
+                        fetchedMessage.FromAddress,
+                        fetchedMessage.Subject);
+                    var candidateSequence = urlSequence++;
+                    urlCandidates.Add(new MailboxUrlCandidate(
+                        request.AccountId,
+                        mailboxName,
+                        sessionInfo.UidValidity.ToString(CultureInfo.InvariantCulture),
+                        fetchedMessage.Uid.ToString(CultureInfo.InvariantCulture),
+                        sourceUrl,
+                        providerFamily,
+                        string.IsNullOrEmpty(providerFamily)
+                            ? string.Empty
+                            : $"{fetchedMessage.Uid.ToString(CultureInfo.InvariantCulture)}:{providerFamily}",
+                        MailboxUrlCandidateDiscovery.ExtractExpectedFields(
+                            providerFamily,
+                            sourceUrl,
+                            fetchedMessage.Subject,
+                            fetchedMessage.BodyText),
+                        candidateSequence)
+                    {
+                        ExpectedFieldEvidence = MailboxUrlCandidateDiscovery.ExtractExpectedFieldEvidence(
+                            providerFamily,
+                            sourceUrl,
+                            fetchedMessage.Subject,
+                            fetchedMessage.BodyText,
+                            candidateSequence),
+                    });
+                }
+
                 foreach (var attachment in fetchedMessage.Attachments)
                 {
                     if (string.IsNullOrWhiteSpace(attachment.FileName))
@@ -154,7 +189,11 @@ public sealed class MailKitMailboxScanner : IMailboxScanner
                 attachments,
                 highestUid,
                 sessionInfo.UidValidity.ToString(CultureInfo.InvariantCulture),
-                uidValidityChanged);
+                uidValidityChanged)
+            {
+                AccountId = request.AccountId,
+                UrlCandidates = urlCandidates,
+            };
         }
         catch (OperationCanceledException ex)
         {

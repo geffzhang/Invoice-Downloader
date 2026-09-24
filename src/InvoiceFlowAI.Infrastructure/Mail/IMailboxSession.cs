@@ -43,4 +43,7 @@ public sealed record MailboxFetchedMessage(
     string Subject,
     string FromAddress,
     string BodyText,
-    IReadOnlyList<MailboxFetchedAttachment> Attachments);
+    IReadOnlyList<MailboxFetchedAttachment> Attachments)
+{
+    public string HtmlBody { get; init; } = string.Empty;
+}

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using InvoiceFlowAI.Application.Configuration;
 using InvoiceFlowAI.Application.Mail;
+using InvoiceFlowAI.Application.Pairing;
 using InvoiceFlowAI.Application.Pipeline.Nodes;
 using InvoiceFlowAI.Contracts.Recipe;
 using Microsoft.Extensions.DependencyInjection;
@@ -160,6 +161,8 @@ public static class PipelineApplicationServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         services.AddSingleton<INodeTypeRegistry>(BuiltInNodeTypes.Default);
         services.AddSingleton<IConnectionPolicy>(BuiltInConnections.Default);
+        services.AddSingleton<IPairingEngine, PairingEngine>();
+        services.AddScoped<IArtifactPairingStage, ArtifactPairingStage>();
         services.AddSingleton(provider => new RecipeRegistry(
             provider.GetRequiredService<INodeTypeRegistry>(),
             provider.GetRequiredService<IConnectionPolicy>(),

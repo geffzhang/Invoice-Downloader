@@ -20,4 +20,8 @@
     <ProjectReference Include="..\..\src\InvoiceFlowAI.Application\InvoiceFlowAI.Application.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Fixtures\CandidateUrlPairing\python-golden.v1.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

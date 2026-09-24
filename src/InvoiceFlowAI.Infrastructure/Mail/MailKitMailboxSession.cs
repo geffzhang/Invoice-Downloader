@@ -100,7 +100,10 @@ public sealed class MailKitMailboxSession : IMailboxSession
             message.Subject ?? string.Empty,
             ResolveFromAddress(message),
             ExtractBodyText(message),
-            ExtractAttachments(message));
+            ExtractAttachments(message))
+        {
+            HtmlBody = message.HtmlBody ?? string.Empty,
+        };
     }
 
     internal static SearchQuery BuildSearchQuery(MailboxSearchCriteria criteria)
