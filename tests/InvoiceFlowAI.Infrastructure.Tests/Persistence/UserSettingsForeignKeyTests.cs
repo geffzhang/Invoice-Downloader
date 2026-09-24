@@ -86,6 +86,93 @@ public sealed class UserSettingsForeignKeyTests : IClassFixture<SqliteTestFixtur
             .Where(e => e.ReasonCode == RpcErrorCodes.RulesetRevisionConflict);
     }
 
+    [Theory]
+    [InlineData("{\"SchemaVersion\":\"1.0\",\"RuleSetId\":\"default\",\"Rules\":[],\"Unexpected\":true}")]
+    [InlineData("{\"SchemaVersion\":\"1.0\",\"RuleSetId\":\"default\",\"Rules\":[{\"RuleId\":\"r\",\"Priority\":1,\"Enabled\":true,\"When\":{\"DocumentType\":\"FlightInvoice\",\"Unexpected\":true},\"Then\":{\"ArchiveFolder\":\"transport/flight\",\"Category\":\"transport\",\"RequireManualReview\":false,\"AllowCrossMessagePairing\":true}}]}")]
+    public async Task FindCurrent_rejects_unmapped_rule_set_json_properties(string sourceJson)
+    {
+        await _fixture.ResetAsync();
+        await using var context = _fixture.CreateContext();
+        context.RuleSets.Add(new RuleSetRow
+        {
+            RuleSetId = "default",
+            Version = 1,
+            SchemaVersion = "1.0",
+            SourceJson = sourceJson,
+            SourceFingerprint = new string('0', 64),
+            AstFingerprint = new string('0', 64),
+            IsCurrent = true,
+            CreatedBy = "test",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+        });
+        await context.SaveChangesAsync();
+
+        var store = new EfRuleSetBootstrapStore(context);
+        var act = () => store.FindCurrentAsync("default", CancellationToken.None);
+
+        await act.Should().ThrowAsync<RuleSetValidationException>()
+            .Where(exception => exception.ReasonCode == RpcErrorCodes.RulesetInvalid);
+    }
+
+    [Theory]
+    [InlineData("""{"schemaVersion":"1.0","schemaVersion":"1.0","ruleSetId":"default","rules":[{"ruleId":"r","priority":1,"enabled":true,"when":{"documentType":"FlightInvoice"},"then":{"archiveFolder":"transport/flight","category":"travel","requireManualReview":false,"allowCrossMessagePairing":true}}]}""")]
+    [InlineData("""{"schemaVersion":"1.0","ruleSetId":"default","rules":[{"ruleId":"r","priority":1,"enabled":true,"when":{"documentType":"FlightInvoice","DocumentType":"FlightInvoice"},"then":{"archiveFolder":"transport/flight","category":"travel","requireManualReview":false,"allowCrossMessagePairing":true}}]}""")]
+    public async Task FindCurrent_rejects_duplicate_json_properties(string sourceJson)
+    {
+        await _fixture.ResetAsync();
+        await using var context = _fixture.CreateContext();
+        context.RuleSets.Add(new RuleSetRow
+        {
+            RuleSetId = "default",
+            Version = 1,
+            SchemaVersion = "1.0",
+            SourceJson = sourceJson,
+            SourceFingerprint = new string('0', 64),
+            AstFingerprint = new string('0', 64),
+            IsCurrent = true,
+            CreatedBy = "test",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+        });
+        await context.SaveChangesAsync();
+
+        var store = new EfRuleSetBootstrapStore(context);
+        var act = () => store.FindCurrentAsync("default", CancellationToken.None);
+
+        await act.Should().ThrowAsync<RuleSetValidationException>()
+            .Where(exception => exception.ReasonCode == RpcErrorCodes.RulesetInvalid);
+    }
+
+    [Fact]
+    public async Task FindCurrent_preserves_all_declared_when_properties_in_camel_case()
+    {
+        await _fixture.ResetAsync();
+        await using var context = _fixture.CreateContext();
+        context.RuleSets.Add(new RuleSetRow
+        {
+            RuleSetId = "default",
+            Version = 1,
+            SchemaVersion = "1.0",
+            SourceJson = """{"schemaVersion":"1.0","ruleSetId":"default","rules":[{"ruleId":"r","priority":1,"enabled":true,"when":{"providerFamily":"airline","documentType":"AirTicket","sellerContains":"Sky","purchaserRelation":"target","subjectContains":"invoice","invoiceNumberPrefix":"A-"},"then":{"archiveFolder":"transport/flight","category":"transport","requireManualReview":false,"allowCrossMessagePairing":true}}]}""",
+            SourceFingerprint = new string('0', 64),
+            AstFingerprint = new string('0', 64),
+            IsCurrent = true,
+            CreatedBy = "test",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+        });
+        await context.SaveChangesAsync();
+
+        var store = new EfRuleSetBootstrapStore(context);
+        var document = await store.FindCurrentAsync("default", CancellationToken.None);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            document,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        json.Should().Contain("\"providerFamily\":\"airline\"")
+            .And.Contain("\"purchaserRelation\":\"target\"")
+            .And.Contain("\"subjectContains\":\"invoice\"")
+            .And.Contain("\"invoiceNumberPrefix\":\"A-\"");
+    }
+
     private static async Task<IUnitOfWork> BeginAsync(InvoiceFlowDbContext context)
     {
         var factory = new EfUnitOfWorkFactory(context);

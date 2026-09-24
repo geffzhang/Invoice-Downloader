@@ -4,14 +4,23 @@
 
 using InvoiceFlowAI.Application.Configuration;
 using InvoiceFlowAI.Application.Persistence;
+using InvoiceFlowAI.Application.Rules;
+using InvoiceFlowAI.Contracts.Errors;
 using InvoiceFlowAI.Contracts.Rules;
 using InvoiceFlowAI.Infrastructure.Persistence.Entities;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace InvoiceFlowAI.Infrastructure.Persistence.Stores;
 
 public sealed class EfRuleSetBootstrapStore : IRuleSetBootstrapStore
 {
+    private static readonly JsonSerializerOptions RuleSetJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+    };
+
     private readonly InvoiceFlowDbContext _context;
 
     public EfRuleSetBootstrapStore(InvoiceFlowDbContext context) => _context = context;
@@ -95,10 +104,57 @@ public sealed class EfRuleSetBootstrapStore : IRuleSetBootstrapStore
     }
 
     private static string DocumentToJson(RuleSetDocument document) =>
-        System.Text.Json.JsonSerializer.Serialize(document);
+        JsonSerializer.Serialize(document, RuleSetJsonOptions);
 
-    private static RuleSetDocument JsonToDocument(string json) =>
-        System.Text.Json.JsonSerializer.Deserialize<RuleSetDocument>(json) ?? throw new InvalidOperationException("Stored RuleSetDocument was empty.");
+    private static RuleSetDocument JsonToDocument(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (HasDuplicatePropertyNames(document.RootElement))
+            {
+                throw new JsonException("Duplicate property names are not allowed.");
+            }
+
+            return document.RootElement.Deserialize<RuleSetDocument>(RuleSetJsonOptions)
+                ?? throw new RuleSetValidationException(
+                    RpcErrorCodes.RulesetInvalid,
+                    "RuleSet JSON must contain an object.");
+        }
+        catch (JsonException)
+        {
+            throw new RuleSetValidationException(
+                RpcErrorCodes.RulesetInvalid,
+                "RuleSet JSON contains invalid or unsupported fields.");
+        }
+    }
+
+    private static bool HasDuplicatePropertyNames(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            var propertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in element.EnumerateObject())
+            {
+                if (!propertyNames.Add(property.Name) || HasDuplicatePropertyNames(property.Value))
+                {
+                    return true;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                if (HasDuplicatePropertyNames(item))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
 
     private static string Sha256Hex(string value)
     {
