@@ -44,6 +44,9 @@ public sealed class FixtureBackedParser : IParser
         _fixturePath = fixturePath;
     }
 
+    public bool CanParse(ParserWorkItem workItem) =>
+        SourceKinds.Contains(workItem.SourceKind, StringComparer.OrdinalIgnoreCase);
+
     public async Task<ParserOutcome> ParseAsync(ParserWorkItem workItem, CancellationToken cancellationToken)
     {
         if (!File.Exists(_fixturePath))
@@ -155,5 +158,6 @@ public sealed class FixtureBackedParser : IParser
             Scope: FailureScope.Candidate,
             Category: FailureCategory.Document,
             Retryable: false,
-            SafeMessage: message));
+            SafeMessage: message),
+        Disposition: ParserOutcomeDisposition.Failed);
 }

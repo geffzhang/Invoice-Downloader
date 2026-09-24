@@ -15,6 +15,7 @@ public interface IParser
     int Priority { get; }
     IReadOnlyList<string> SourceKinds { get; }
     string FailureCode { get; }
+    bool CanParse(ParserWorkItem workItem);
     Task<ParserOutcome> ParseAsync(ParserWorkItem workItem, CancellationToken cancellationToken);
 }
 
@@ -32,7 +33,15 @@ public sealed record ParserOutcome(
     string Version,
     InvoiceDocument? Invoice,
     IReadOnlyList<string> MissingFields,
-    CandidateFailure? Failure);
+    CandidateFailure? Failure,
+    ParserOutcomeDisposition Disposition = ParserOutcomeDisposition.Resolved);
+
+public enum ParserOutcomeDisposition
+{
+    Resolved,
+    NeedsFallback,
+    Failed,
+}
 
 public interface IParserRegistry
 {

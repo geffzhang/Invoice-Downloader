@@ -2,9 +2,12 @@
   "schemaVersion": "1.0",
   "registryFingerprint": "fixture-parser-registry-fingerprint",
   "parsers": [
-    { "parserId": "railway-ticket", "version": "1.0", "priority": 400, "sourceKinds": ["pdf"], "fixtureId": "railway-ticket-basic", "failureCode": "RAILWAY_PARSER_FAILED" },
-    { "parserId": "accommodation-folio", "version": "1.0", "priority": 390, "sourceKinds": ["pdf"], "fixtureId": "accommodation-folio-basic", "failureCode": "FOLIO_PARSER_FAILED" },
-    { "parserId": "foreign-invoice", "version": "1.0", "priority": 380, "sourceKinds": ["pdf", "image"], "fixtureId": "foreign-invoice-basic", "failureCode": "FOREIGN_INVOICE_PARSER_FAILED" },
+    { "parserId": "ride-itinerary", "version": "1.0", "priority": 470, "sourceKinds": ["pdf"], "fixtureId": "ride-itinerary-basic", "failureCode": "RIDE_ITINERARY_PARSER_FAILED" },
+    { "parserId": "didi-invoice", "version": "1.0", "priority": 460, "sourceKinds": ["pdf"], "fixtureId": "didi-invoice-basic", "failureCode": "DIDI_PARSER_FAILED" },
+    { "parserId": "railway-ticket", "version": "1.0", "priority": 450, "sourceKinds": ["pdf"], "fixtureId": "railway-ticket-basic", "failureCode": "RAILWAY_PARSER_FAILED" },
+    { "parserId": "accommodation-folio", "version": "1.0", "priority": 440, "sourceKinds": ["pdf"], "fixtureId": "accommodation-folio-basic", "failureCode": "FOLIO_PARSER_FAILED" },
+    { "parserId": "cits-gbt", "version": "1.0", "priority": 430, "sourceKinds": ["pdf"], "fixtureId": "cits-gbt-basic", "failureCode": "CITS_GBT_PARSER_FAILED" },
+    { "parserId": "foreign-invoice", "version": "1.0", "priority": 420, "sourceKinds": ["pdf"], "fixtureId": "foreign-invoice-basic", "failureCode": "FOREIGN_INVOICE_PARSER_FAILED" },
     { "parserId": "provider-special-layout", "version": "1.0", "priority": 300, "sourceKinds": ["pdf", "ofd", "xml", "url"], "fixtureId": "provider-special-layout-basic", "failureCode": "SPECIAL_PARSER_FAILED" }
   ]
 }

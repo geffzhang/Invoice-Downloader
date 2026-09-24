@@ -37,7 +37,9 @@ public sealed class ParserPipeline : IParserPipeline
 
     public async Task<ParserPipelineOutcome> RunAsync(ParserWorkItem workItem, CancellationToken cancellationToken)
     {
-        var candidates = _registry.ResolveBySourceKind(workItem.SourceKind);
+        var candidates = _registry.ResolveBySourceKind(workItem.SourceKind)
+            .Where(parser => parser.CanParse(workItem))
+            .ToList();
         if (candidates.Count == 0)
         {
             return new ParserPipelineOutcome(
@@ -56,54 +58,34 @@ public sealed class ParserPipeline : IParserPipeline
             .ThenBy(p => p.ParserId, StringComparer.Ordinal)
             .ToList();
 
-        // Run every candidate parser. A document that is recognised by
-        // multiple parsers must surface a conflict, not silently pick one.
-        var outcomes = new List<ParserOutcome>(ordered.Count);
-        foreach (var parser in ordered)
-        {
-            var outcome = await parser.ParseAsync(workItem, cancellationToken).ConfigureAwait(false);
-            outcomes.Add(outcome);
-        }
-
-        var successOutcomes = outcomes
-            .Where(o => o.Failure is null && o.Invoice is not null && o.MissingFields.Count == 0)
+        var highestPriority = ordered[0].Priority;
+        var highestPriorityParsers = ordered
+            .TakeWhile(parser => parser.Priority == highestPriority)
             .ToList();
-        if (successOutcomes.Count >= 2)
+        if (highestPriorityParsers.Count > 1)
         {
-            // Two or more parsers claim the document with complete
-            // output — route to manual review so a human disambiguates.
+            var matchingOutcomes = highestPriorityParsers
+                .Select(parser => new ParserOutcome(
+                    parser.ParserId,
+                    parser.Version,
+                    Invoice: null,
+                    MissingFields: Array.Empty<string>(),
+                    Failure: null,
+                    Disposition: ParserOutcomeDisposition.Failed))
+                .ToList();
             return new ParserPipelineOutcome(
                 Selected: null,
                 Conflict: new ParserConflictOutcome(
                     ReasonCode: "SPECIAL_PARSER_CONFLICT",
-                    Candidates: successOutcomes,
+                    Candidates: matchingOutcomes,
                     Resolution: "manual_review",
                     RequiresManualReview: true),
-                AllOutcomes: outcomes);
+                AllOutcomes: matchingOutcomes);
         }
 
-        if (successOutcomes.Count == 1)
-        {
-            return new ParserPipelineOutcome(Selected: successOutcomes[0], Conflict: null, AllOutcomes: outcomes);
-        }
-
-        var partial = outcomes
-            .Where(o => o.Failure is null && o.Invoice is not null && o.MissingFields.Count > 0)
-            .OrderByDescending(o => PriorityFor(o.ParserId))
-            .FirstOrDefault();
-        if (partial is not null)
-        {
-            return new ParserPipelineOutcome(Selected: partial, Conflict: null, AllOutcomes: outcomes);
-        }
-
-        // Every parser failed: surface the highest-priority failure so
-        // the run barrier records the canonical reason code.
-        var firstFailure = outcomes
-            .Where(o => o.Failure is not null)
-            .OrderByDescending(o => PriorityFor(o.ParserId))
-            .FirstOrDefault();
-        return new ParserPipelineOutcome(Selected: firstFailure, Conflict: null, AllOutcomes: outcomes);
+        var selected = await highestPriorityParsers[0]
+            .ParseAsync(workItem, cancellationToken)
+            .ConfigureAwait(false);
+        return new ParserPipelineOutcome(Selected: selected, Conflict: null, AllOutcomes: new[] { selected });
     }
-
-    private int PriorityFor(string parserId) => _registry.Resolve(parserId)?.Priority ?? 0;
 }

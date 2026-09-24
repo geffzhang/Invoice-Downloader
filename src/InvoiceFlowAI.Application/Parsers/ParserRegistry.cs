@@ -61,6 +61,7 @@ public sealed class ParserRegistry : IParserRegistry
         public int Priority { get; }
         public IReadOnlyList<string> SourceKinds { get; }
         public string FailureCode { get; }
+        public bool CanParse(ParserWorkItem workItem) => _inner.CanParse(workItem);
         public DescriptorAdapter(IParser inner, string version, int priority, IReadOnlyList<string> sourceKinds, string failureCode)
         {
             _inner = inner;
