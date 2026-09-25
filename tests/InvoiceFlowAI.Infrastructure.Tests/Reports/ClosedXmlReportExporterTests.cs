@@ -154,6 +154,68 @@ public sealed class ClosedXmlReportExporterTests
         finally { Directory.Delete(tmp, recursive: true); }
     }
 
+    [Fact]
+    public async Task Summary_sheet_writes_all_candidate_counts_and_failure_reasons()
+    {
+        var tmp = NewTempDir();
+        try
+        {
+            var workItem = NewWorkItem() with
+            {
+                Summary = NewWorkItem().Summary with
+                {
+                    ResolvedCount = 2,
+                    DuplicateCount = 3,
+                    RetainedCount = 4,
+                    ManualReviewCount = 5,
+                    UnresolvedCount = 6,
+                    CancelledCount = 7,
+                    QuotaExhaustedCount = 8,
+                    AuthFailedCount = 9,
+                    TimeoutCount = 10,
+                },
+                Failures = new List<ReportFailureRow> { new ReportFailureRow("AUTH_FAILED", 9) },
+            };
+            var exporter = new ClosedXmlReportExporter(new NopFileSystem(), path => Path.Combine(tmp, path));
+
+            await exporter.ExportAsync(workItem, CancellationToken.None);
+
+            using var workbook = new XLWorkbook(Path.Combine(tmp, workItem.RelativePath));
+            var summary = workbook.Worksheet("Summary");
+            summary.Cell("B5").GetString().Should().Be("2");
+            summary.Cell("B8").GetString().Should().Be("3");
+            summary.Cell("B9").GetString().Should().Be("4");
+            summary.Cell("B6").GetString().Should().Be("5");
+            summary.Cell("B10").GetString().Should().Be("6");
+            summary.Cell("B11").GetString().Should().Be("7");
+            summary.Cell("B12").GetString().Should().Be("8");
+            summary.Cell("B13").GetString().Should().Be("9");
+            summary.Cell("B14").GetString().Should().Be("10");
+            summary.Cell("A17").GetString().Should().Be("AUTH_FAILED");
+            summary.Cell("B17").GetString().Should().Be("9");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task Output_root_is_used_and_parent_traversal_is_rejected()
+    {
+        var tmp = NewTempDir();
+        try
+        {
+            var exporter = new ClosedXmlReportExporter(new NopFileSystem(), _ => throw new InvalidOperationException());
+            var workItem = NewWorkItem() with { OutputRoot = tmp };
+
+            await exporter.ExportAsync(workItem, CancellationToken.None);
+            File.Exists(Path.Combine(tmp, workItem.RelativePath)).Should().BeTrue();
+
+            var traversal = workItem with { RelativePath = "../outside.xlsx" };
+            var act = () => exporter.ExportAsync(traversal, CancellationToken.None);
+            await act.Should().ThrowAsync<ArgumentException>();
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
     private static string NewTempDir() => Path.Combine(Path.GetTempPath(), $"invoiceflow-report-{Guid.NewGuid():N}");
 
     private static ReportExportWorkItem NewWorkItem() => new(

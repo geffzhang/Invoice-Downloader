@@ -15,6 +15,21 @@ namespace InvoiceFlowAI.Application.Tests.Pipeline;
 public sealed class PipelineRecipeGraphFactoryTests
 {
     [Fact]
+    public async Task Application_registration_loads_the_default_desktop_recipe()
+    {
+        var services = new ServiceCollection();
+        services.AddInvoiceFlowApplication();
+        await using var provider = services.BuildServiceProvider();
+
+        var registry = provider.GetRequiredService<InvoiceFlowAI.Application.Configuration.RecipeRegistry>();
+        var recipe = await registry.LoadDefaultAsync(CancellationToken.None);
+
+        recipe.RecipeId.Should().Be("invoiceflow.default");
+        recipe.Nodes.Should().HaveCount(8);
+        recipe.Connections.Should().HaveCount(7);
+    }
+
+    [Fact]
     public async Task Builds_and_executes_all_eight_typed_nodes_in_recipe_order()
     {
         var calls = new List<string>();
@@ -22,8 +37,8 @@ public sealed class PipelineRecipeGraphFactoryTests
         await using var provider = services.BuildServiceProvider();
         var factory = provider.GetRequiredService<PipelineRunFactory>();
         await using var run = await factory.CreateAsync(CreateRecipe(), CancellationToken.None);
-        run.Executor.Graph.NodeCount.Should().Be(8);
-        run.Executor.Graph.ConnectionCount.Should().Be(7);
+        run.Executor.Graph.NodeCount.Should().Be(18);
+        run.Executor.Graph.ConnectionCount.Should().Be(17);
 
         run.Submit(new RunInput(
             "run-42",
@@ -39,6 +54,9 @@ public sealed class PipelineRecipeGraphFactoryTests
         }
 
         calls.Should().Equal("scan", "collect", "recover", "extract", "pair", "archive", "report");
+        run.CompletedSummary.Should().NotBeNull();
+        run.CompletedSummary!.RunId.Should().Be("run-42");
+        run.CompletedSummary.TerminalStatus.Should().Be(RunTerminalStatus.Completed);
         run.Executor.Graph.Nodes.Select(node => node.GetType().Name).Should().Contain(
             new[]
             {

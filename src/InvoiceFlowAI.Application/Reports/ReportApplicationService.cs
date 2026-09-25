@@ -73,17 +73,20 @@ public sealed class ReportApplicationService : IReportApplicationService
                 RunId: data.RunId,
                 Status: data.Status,
                 ReasonCode: data.ReasonCode,
-                ResolvedCount: data.Invoices.Count,
-                DuplicateCount: 0,
-                RetainedCount: 0,
-                ManualReviewCount: data.ManualReviews.Count,
-                UnresolvedCount: 0,
-                CancelledCount: 0,
-                QuotaExhaustedCount: 0,
-                AuthFailedCount: 0,
-                TimeoutCount: 0,
+                ResolvedCount: data.CandidateCounts.ResolvedCount,
+                DuplicateCount: data.CandidateCounts.DuplicateCount,
+                RetainedCount: data.CandidateCounts.RetainedCount,
+                ManualReviewCount: data.CandidateCounts.ManualReviewCount,
+                UnresolvedCount: data.CandidateCounts.UnresolvedCount,
+                CancelledCount: data.CandidateCounts.CancelledCount,
+                QuotaExhaustedCount: data.CandidateCounts.QuotaExhaustedCount,
+                AuthFailedCount: data.CandidateCounts.AuthFailedCount,
+                TimeoutCount: data.CandidateCounts.TimeoutCount,
                 CompletedAtUtc: data.CompletedAtUtc),
-            TemplateVersion: CurrentTemplateVersion);
+            TemplateVersion: CurrentTemplateVersion)
+        {
+            OutputRoot = data.OutputRoot,
+        };
 
         var outcome = await _exporter.ExportAsync(workItem, cancellationToken).ConfigureAwait(false);
 
@@ -110,11 +113,21 @@ public sealed class ReportApplicationService : IReportApplicationService
         ArgumentException.ThrowIfNullOrEmpty(request.ReportPath);
         ArgumentException.ThrowIfNullOrEmpty(request.ContentHash);
 
-        if (Path.IsPathRooted(request.ReportPath))
+        if (Path.IsPathRooted(request.ReportPath)
+            || request.ReportPath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)
+                .Any(segment => segment is "." or ".."))
         {
             throw new ArgumentException(
-                "ReportPath must be relative — absolute paths are rejected.",
+                "ReportPath must stay under the application's output root.",
                 nameof(request));
+        }
+
+        var data = await _dataSource.LoadAsync(request.RunId, cancellationToken).ConfigureAwait(false);
+        if (data is null
+            || !string.Equals(data.ExistingRelativePath, request.ReportPath, StringComparison.Ordinal)
+            || !string.Equals(data.ExistingContentHash, request.ContentHash, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The requested report does not match the persisted run report.");
         }
 
         var record = await _tokenStore.IssueAsync(

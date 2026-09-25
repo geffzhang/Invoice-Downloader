@@ -24,6 +24,10 @@
     <ProjectReference Include="..\InvoiceFlowAI.UrlRecovery.WorkerProcessFixture\InvoiceFlowAI.UrlRecovery.WorkerProcessFixture.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="Fixtures\DesktopParity\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <Target Name="CopyUrlRecoveryWorkerProcessFixture" AfterTargets="Build">
     <ItemGroup>
       <WorkerProcessFixtureFiles Include="..\InvoiceFlowAI.UrlRecovery.WorkerProcessFixture\bin\$(Configuration)\net10.0\*" />

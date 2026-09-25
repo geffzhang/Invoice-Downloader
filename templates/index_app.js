@@ -145,10 +145,6 @@ function joinClasses(...values) {
     return values.filter(Boolean).join(" ");
 }
 
-function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function openExternalUrl(url) {
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -157,32 +153,6 @@ function openExternalUrl(url) {
     document.body.appendChild(anchor);
     anchor.click();
     document.body.removeChild(anchor);
-}
-
-async function waitForApi() {
-    for (let attempt = 0; attempt < 120; attempt += 1) {
-        if (window.pywebview && window.pywebview.api) {
-            return window.pywebview.api;
-        }
-        await sleep(100);
-    }
-    throw new Error("桌面接口尚未就绪，请稍后重试。");
-}
-
-async function waitForApiMethod(method) {
-    const api = await waitForApi();
-    for (let attempt = 0; attempt < 120; attempt += 1) {
-        if (typeof api[method] === "function") {
-            return api[method].bind(api);
-        }
-        await sleep(100);
-    }
-    throw new Error(`缺少后端接口: ${method}`);
-}
-
-async function callApi(method, ...args) {
-    const callTarget = await waitForApiMethod(method);
-    return callTarget(...args);
 }
 
 function validateEmail(email) {
@@ -256,6 +226,7 @@ function parentFolder(path) {
 
 const SESSION_SETTINGS_KEY = "invoiceflow.session.settings";
 const SESSION_RUN_SETTINGS_KEY = "invoiceflow.session.runSettings";
+const SESSION_ACTIVE_RUN_KEY = "invoiceflow.session.activeRun";
 const CONTROLLED_AUTOSTART_PREFIX = "invoiceflow.controlledAutostart";
 
 function readSessionValue(key) {
@@ -327,7 +298,7 @@ function buildPersistPayload(settings, runSettings, runContext) {
 async function loadShellState() {
     const [loaded, runContextRes] = await Promise.all([
         window.invoiceFlowRpcReady || SettingsRpc.load(window.RpcClient),
-        callApi("get_run_context").catch(() => ({})),
+        RunPageRpc.loadRunContext(window.RpcClient).catch(() => ({})),
     ]);
 
     const snapshot = loaded.settings;
@@ -643,8 +614,8 @@ function AppWindowChrome({ active }) {
         if (minimizing) return;
         setMinimizing(true);
         try {
-            const result = await callApi("minimize_window");
-            if (!result || !result.success) {
+            const result = await RunPageRpc.windowCommand(window.RpcClient, "minimize");
+            if (!result || !result.succeeded) {
                 throw new Error((result && result.message) || UI_COPY.shell.minimizeFailed);
             }
         } catch (error) {
@@ -658,8 +629,8 @@ function AppWindowChrome({ active }) {
         if (maximizing) return;
         setMaximizing(true);
         try {
-            const result = await callApi("maximize_window");
-            if (!result || !result.success) {
+            const result = await RunPageRpc.windowCommand(window.RpcClient, "maximize");
+            if (!result || !result.succeeded) {
                 throw new Error((result && result.message) || UI_COPY.shell.maximizeFailed);
             }
         } catch (error) {
@@ -673,8 +644,8 @@ function AppWindowChrome({ active }) {
         if (closing) return;
         setClosing(true);
         try {
-            const result = await callApi("close_window");
-            if (!result || !result.success) {
+            const result = await RunPageRpc.windowCommand(window.RpcClient, "close");
+            if (!result || !result.succeeded) {
                 throw new Error((result && result.message) || UI_COPY.shell.closeFailed);
             }
         } catch (error) {
@@ -884,7 +855,6 @@ function SettingsPage({ onOpenDisclaimer }) {
     const saveTimerRef = useRef(null);
     const autostartTimerRef = useRef(null);
     const autostartTriggeredRef = useRef(false);
-    const runSecretDraftRef = useRef({ ...(window.invoiceFlowRunSecrets || {}) });
 
     useEffect(() => {
         let active = true;
@@ -928,8 +898,6 @@ function SettingsPage({ onOpenDisclaimer }) {
     const emailParts = splitEmailAddress(settings.email);
     const dateError = validateDateRange(runSettings.date_from, runSettings.date_to);
     const canStart = !validateEmail(settings.email)
-        && !!(settings.auth_code || runSecretDraftRef.current.auth_code)
-        && !!(settings.api_key || runSecretDraftRef.current.api_key)
         && !!String(settings.company || "").trim()
         && !!String(settings.save_path || "").trim()
         && !dateError;
@@ -952,10 +920,6 @@ function SettingsPage({ onOpenDisclaimer }) {
     }, [bootstrapState, runContext, starting, settings, runSettings]);
 
     function updateSetting(key, value) {
-        if (key === "auth_code" || key === "api_key") {
-            runSecretDraftRef.current[key] = value;
-            window.invoiceFlowRunSecrets = { ...runSecretDraftRef.current };
-        }
         setSettings((current) => ({ ...current, [key]: value }));
         setPageError("");
         if (key === "email" || key === "auth_code") setEmailStatus({ status: "idle", message: "" });
@@ -1023,10 +987,6 @@ function SettingsPage({ onOpenDisclaimer }) {
     async function handleStart() {
         const emailError = validateEmail(settings.email);
         if (emailError) return setPageError(emailError);
-        const authCode = settings.auth_code || runSecretDraftRef.current.auth_code;
-        const apiKey = settings.api_key || runSecretDraftRef.current.api_key;
-        if (!authCode) return setPageError("请输入邮箱授权码。");
-        if (!apiKey) return setPageError("请输入 GLM API Key。");
         if (!settings.company || !settings.company.trim()) return setPageError("请填写公司名称。");
         if (!settings.save_path) return setPageError("请选择输出目录。");
         if (dateError) return setPageError(dateError);
@@ -1035,11 +995,35 @@ function SettingsPage({ onOpenDisclaimer }) {
             if (settings.auth_code) await saveSecretInput("mail.imap.auth-code", "auth_code");
             if (settings.api_key) await saveSecretInput("deepseek.api-key", "api_key");
             await persistUserSettings(settings, runSettings, runContext);
-            const result = await callApi("start_processing", "", settings.save_path, runSettings.date_from, runSettings.date_to, String(settings.email).trim(), authCode, apiKey);
-            if (!result || !result.success) {
-                setPageError(result && result.message ? result.message : "任务启动失败。");
+            const accountId = window.invoiceFlowMailboxAccount?.accountId
+                || window.invoiceFlowSettingsSnapshot?.currentAccountId
+                || runContext.account_id;
+            if (!accountId) {
+                setPageError("请先配置邮箱账户。");
                 return;
             }
+            const runId = window.crypto?.randomUUID
+                ? window.crypto.randomUUID()
+                : `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+            const result = await RunPageRpc.startRun(window.RpcClient, {
+                runId,
+                accountId,
+                dateFrom: runSettings.date_from,
+                dateTo: runSettings.date_to,
+                outputDirectory: settings.save_path,
+                companyName: settings.company.trim(),
+                runMode: "full",
+            });
+            if (!result || !result.accepted) {
+                const messages = {
+                    RUN_ALREADY_ACTIVE: "已有任务正在运行。",
+                    RUN_CONFIGURATION_SNAPSHOT_MISSING: "邮箱账户配置已变化，请重新加载设置。",
+                    RPC_INVALID_PARAMS: "任务参数无效，请检查设置。",
+                };
+                setPageError(messages[result && result.rejectionCode] || "任务启动失败。");
+                return;
+            }
+            writeSessionValue(SESSION_ACTIVE_RUN_KEY, { runId });
             navigate("/processing");
         } catch (error) {
             setPageError(error.message || "任务启动失败。");
@@ -1207,36 +1191,48 @@ function ProcessingPage({ onOpenDisclaimer }) {
     const [progressState, setProgressState] = useState(DEFAULT_PROGRESS);
     const redirectRef = useRef(false);
     const terminalBodyRef = useRef(null);
+    const activeRunId = readSessionValue(SESSION_ACTIVE_RUN_KEY).runId || "";
 
     useEffect(() => {
         let active = true;
         let timer = null;
-        const poll = async () => {
-            try {
-                const data = await callApi("get_progress");
-                if (!active || !data) return;
-                setProgressState({ ...DEFAULT_PROGRESS, ...data, stats: Object.assign({}, DEFAULT_PROGRESS.stats, data.stats || {}) });
-                if (!redirectRef.current && ["completed", "failed"].includes(data.run_state) && !data.is_running) {
+        const applyProgress = (data) => {
+            if (!active || !data) return;
+            setProgressState({ ...DEFAULT_PROGRESS, ...data, stats: Object.assign({}, DEFAULT_PROGRESS.stats, data.stats || {}) });
+            if (!redirectRef.current && ["completed", "failed", "cancelled"].includes(data.run_state) && !data.is_running) {
                     redirectRef.current = true;
                     setTimeout(() => navigate("/analysis"), 1200);
-                }
-            } catch (error) {
-                if (active) setProgressState((current) => ({ ...current, last_error: error.message || "获取进度失败。" }));
             }
         };
-        poll();
-        timer = setInterval(poll, 1000);
+        if (!activeRunId) {
+            setProgressState((current) => ({ ...current, last_error: "任务记录不可用，请返回重新开始。" }));
+            return () => { active = false; };
+        }
+        const feed = RunPageRpc.watchProgress(window.RpcClient, activeRunId, applyProgress);
+        feed.initial.catch((error) => {
+            if (active) setProgressState((current) => ({ ...current, last_error: error.message || "获取进度失败。" }));
+        });
+        timer = setInterval(() => {
+            feed.refresh().catch((error) => {
+                if (active) setProgressState((current) => ({ ...current, last_error: error.message || "获取进度失败。" }));
+            });
+        }, 1000);
         return () => {
             active = false;
             if (timer) clearInterval(timer);
+            feed.dispose();
         };
-    }, [navigate]);
+    }, [navigate, activeRunId]);
 
     async function handleStop() {
         if (!progressState.can_stop) return;
         try {
-            const result = await callApi("stop_processing");
-            if (!result || !result.success) window.alert(result && result.message ? result.message : "停止指令发送失败。");
+            const result = await RunPageRpc.stopRun(window.RpcClient, activeRunId);
+            if (!result || !result.accepted) {
+                window.alert(result && result.errorCode === "RUN_NOT_CANCELLABLE"
+                    ? "当前任务已无法停止。"
+                    : "停止指令发送失败。");
+            }
         } catch (error) {
             window.alert(error.message || "停止指令发送失败。");
         }
@@ -1437,13 +1433,15 @@ function AnalysisPage({ onOpenDisclaimer }) {
     const [lastExportPath, setLastExportPath] = useState("");
     const [loadingError, setLoadingError] = useState("");
     const [exporting, setExporting] = useState(false);
+    const [lastExportCounts, setLastExportCounts] = useState(null);
+    const activeRunId = readSessionValue(SESSION_ACTIVE_RUN_KEY).runId || "";
 
     useEffect(() => {
         let active = true;
         let timer = null;
         const loadResults = async () => {
             try {
-                const [results, settingsRes] = await Promise.all([callApi("get_results"), callApi("load_user_settings").catch(() => null)]);
+                const results = await RunPageRpc.getResults(window.RpcClient, activeRunId || null);
                 if (!active || !results) return;
                 setSummary(results.summary || {});
                 setSuccessInvoices(normalizeSuccessInvoices(results.successInvoices || []));
@@ -1453,7 +1451,10 @@ function AnalysisPage({ onOpenDisclaimer }) {
                 setQuotaExhausted(!!results.quota_exhausted);
                 setQuotaMessage(results.quota_message || "");
                 setLastExportPath(results.last_export_path || "");
-                const baseOutput = results.output_path || parentFolder(results.manual_check_path || "") || (settingsRes && settingsRes.settings ? settingsRes.settings.save_path || "" : "");
+                const baseOutput = results.output_path
+                    || parentFolder(results.manual_check_path || "")
+                    || window.invoiceFlowSettingsSnapshot?.lastOutputDirectory
+                    || "";
                 setOutputPath(baseOutput);
                 setLoadingError("");
             } catch (error) {
@@ -1466,7 +1467,7 @@ function AnalysisPage({ onOpenDisclaimer }) {
             active = false;
             if (timer) clearInterval(timer);
         };
-    }, []);
+    }, [activeRunId]);
 
     const totalErrors = useMemo(() => groupedErrors.reduce((acc, group) => acc + (group.count || group.items.length || 0), 0), [groupedErrors]);
     const successCount = Number(summary.success_count || successInvoices.length);
@@ -1480,31 +1481,41 @@ function AnalysisPage({ onOpenDisclaimer }) {
     const groupedVisible = groupedErrors.filter((group) => Number(group.count || group.items.length || 0) > 0);
 
     async function handleOpenOutput() {
-        const target = outputPath || parentFolder(manualCheckPath);
-        if (!target) return;
-        await callApi("open_folder", target);
+        try {
+            const result = await RunPageRpc.openRunFolder(window.RpcClient, activeRunId || null);
+            if (!result || !result.succeeded) window.alert((result && result.message) || "输出目录无法打开。");
+        } catch (error) {
+            window.alert(error.message || "输出目录无法打开。");
+        }
     }
 
     async function handleOpenManualCheck() {
-        await callApi("open_manual_check_folder");
-    }
-
-    async function openExportedSummary(path) {
-        if (!path) throw new Error("结果明细已导出，但未返回文件路径。");
-        const openResult = await callApi("view_invoice", path);
-        if (!openResult || !openResult.success) throw new Error((openResult && openResult.message) || "结果明细已导出，但打开文件失败。");
+        try {
+            const result = await RunPageRpc.openManualReviewFolder(window.RpcClient, activeRunId || null);
+            if (!result || !result.succeeded) window.alert((result && result.message) || "人工复核目录无法打开。");
+        } catch (error) {
+            window.alert(error.message || "人工复核目录无法打开。");
+        }
     }
 
     async function handleExport() {
         setExporting(true);
         try {
-            const result = await callApi("export_run_summary", outputPath || "");
-            if (result && result.success) {
-                const exportedPath = result.path || "";
+            const result = await RunPageRpc.exportReport(window.RpcClient, activeRunId);
+            if (result && result.reportPath) {
+                const exportedPath = result.reportPath;
                 setLastExportPath(exportedPath);
-                await openExportedSummary(exportedPath);
+                setLastExportCounts({ invoices: result.invoiceRowCount, reviews: result.manualReviewRowCount });
+                const opened = await RunPageRpc.openReport(
+                    window.RpcClient,
+                    result.runId,
+                    result.reportPath,
+                    result.contentHash);
+                if (!opened || !opened.succeeded) {
+                    window.alert((opened && opened.message) || "报表已导出，但打开文件失败。");
+                }
             } else {
-                window.alert((result && result.message) || "导出失败。");
+                window.alert("导出失败。");
             }
         } catch (error) {
             window.alert(error.message || "导出失败。");
@@ -1525,7 +1536,7 @@ function AnalysisPage({ onOpenDisclaimer }) {
             onOpenDisclaimer={onOpenDisclaimer}
             contentScrollable={false}
             footerLeft={<button type="button" className="btn btn--ghost" onClick={() => navigate("/")}><span className="material-symbols-outlined">add_circle</span><span>开始新批次</span></button>}
-            footerRight={lastExportPath ? <p className="footer-meta">最近导出: {fileNameFromPath(lastExportPath)}</p> : null}
+            footerRight={lastExportPath ? <p className="footer-meta" title={lastExportCounts ? `发票 ${lastExportCounts.invoices} 条，人工复核 ${lastExportCounts.reviews} 条` : ""}>最近导出: {fileNameFromPath(lastExportPath)}</p> : null}
         >
             <div className="page-wrap page-wrap--analysis">
                 <PageHeader eyebrow={UI_COPY.pages.analysis.eyebrow} title={UI_COPY.pages.analysis.title} />

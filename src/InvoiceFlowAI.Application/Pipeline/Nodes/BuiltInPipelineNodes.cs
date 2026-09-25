@@ -46,7 +46,12 @@ public sealed class ScanMailboxNode : PipelineNode
         try
         {
             var result = await _scanner.ScanAsync(
-                new MailboxScanRequest(request.AccountId, request.DateFrom, SinceUid: null, UidValidity: null),
+                new MailboxScanRequest(
+                    request.AccountId,
+                    request.DateFrom,
+                    SinceUid: null,
+                    UidValidity: null,
+                    BeforeDateExclusive: request.DateTo.AddDays(1)),
                 cancellationToken).ConfigureAwait(false);
             _messages.Emit(new PipelineItem<MailboxScanResult>(request.RunId, result, packet.SequenceNumber, IsFinal: true, OutputRoot: request.SavePath), packet.SequenceNumber);
         }

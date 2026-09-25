@@ -1,11 +1,15 @@
 using System.Security.Cryptography;
 using System.Text;
 using Avalonia.Controls;
+using InvoiceFlowAI.App.Desktop;
 using InvoiceFlowAI.App.Rpc;
 using InvoiceFlowAI.App.Settings;
 using InvoiceFlowAI.Application.Configuration;
+using InvoiceFlowAI.Application.Extraction;
 using InvoiceFlowAI.Application.Persistence;
+using InvoiceFlowAI.Application.Pipeline;
 using InvoiceFlowAI.Application.Rules;
+using InvoiceFlowAI.Application.Runs;
 using InvoiceFlowAI.Infrastructure;
 using InvoiceFlowAI.Infrastructure.Persistence;
 using InvoiceFlowAI.Infrastructure.Persistence.Stores;
@@ -17,7 +21,9 @@ namespace InvoiceFlowAI.App;
 
 public static class AppServiceProviderFactory
 {
-    public static ServiceProvider Create(string? appDataDirectory = null)
+    public static ServiceProvider Create(
+        string? appDataDirectory = null,
+        Action<IServiceCollection>? configureServices = null)
     {
         var dataDirectory = Path.GetFullPath(appDataDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -35,11 +41,24 @@ public static class AppServiceProviderFactory
         services.AddSingleton<IPersistentSecretStore>(new DpapiSecretStore(secretPath, entropy));
         services.AddSingleton<IUserSettingsSnapshotStore>(new JsonUserSettingsSnapshotStore(legacySnapshotPath));
         services.AddSingleton<AvaloniaMainWindowAccessor>();
+        services.AddSingleton<WebViewRunEventPublisher>();
+        services.AddSingleton<IDesktopPathLauncher, ShellDesktopPathLauncher>();
+        services.AddSingleton<IAvaloniaUiDispatcher, AvaloniaUiDispatcher>();
+        services.AddSingleton<IWindowCommandDispatcher, AvaloniaWindowCommandDispatcher>();
+        services.AddSingleton<IRunEventPublisher>(provider => provider.GetRequiredService<WebViewRunEventPublisher>());
+        services.AddSingleton<IDesktopRunExecutorLeaseFactory, ScopedDesktopRunExecutorLeaseFactory>();
         services.AddSingleton<IMainWindowAccessor>(provider => provider.GetRequiredService<AvaloniaMainWindowAccessor>());
         services.AddSingleton<IDirectoryPicker, AvaloniaDirectoryPicker>();
         services.AddInvoiceFlowInfrastructure();
+        services.AddInvoiceFlowApplication();
 
         services.AddScoped<IUserSettingsStore, EfUserSettingsStore>();
+        services.AddScoped(provider => new InvoiceExtractionRules(
+            provider.GetRequiredService<IUserSettingsStore>()
+                .LoadAsync(CancellationToken.None)
+                .GetAwaiter()
+                .GetResult()
+                .CompanyName));
         services.AddScoped<IMailboxAccountStore, EfMailboxAccountStore>();
         services.AddScoped<InvoiceFlowAI.Application.Mail.IMailboxAccountReader>(provider =>
             provider.GetRequiredService<IMailboxAccountStore>());
@@ -55,6 +74,21 @@ public static class AppServiceProviderFactory
         services.AddScoped<SecretSetRpcHandler>();
         services.AddScoped<SecretDeleteRpcHandler>();
         services.AddScoped<DirectoryChooseRpcHandler>();
+        services.AddScoped<IDesktopActionService, AvaloniaDesktopActionService>();
+        services.AddScoped<RunFolderOpenRpcHandler>();
+        services.AddScoped<ManualReviewFolderOpenRpcHandler>();
+        services.AddScoped<RunFileOpenRpcHandler>();
+        services.AddScoped<WindowMinimizeRpcHandler>();
+        services.AddScoped<WindowMaximizeRpcHandler>();
+        services.AddScoped<WindowCloseRpcHandler>();
+        services.AddScoped<RunContextRpcHandler>();
+        services.AddScoped<RunStartRpcHandler>();
+        services.AddScoped<RunStatusRpcHandler>();
+        services.AddScoped<RunStopRpcHandler>();
+        services.AddScoped<RunResultsGetRpcHandler>();
+        services.AddScoped<ReportExportRpcHandler>();
+
+        configureServices?.Invoke(services);
 
         var serviceProvider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
         try

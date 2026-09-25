@@ -23,7 +23,8 @@ public partial class App : Avalonia.Application
                 _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
                 version);
             var windowAccessor = _serviceProvider.GetRequiredService<AvaloniaMainWindowAccessor>();
-            desktop.MainWindow = new MainWindow(dispatcher, windowAccessor);
+            var runEventPublisher = _serviceProvider.GetRequiredService<WebViewRunEventPublisher>();
+            desktop.MainWindow = new MainWindow(dispatcher, windowAccessor, runEventPublisher);
             desktop.Exit += (_, _) =>
             {
                 _serviceProvider?.Dispose();

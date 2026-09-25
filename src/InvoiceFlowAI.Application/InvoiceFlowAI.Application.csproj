@@ -26,4 +26,8 @@
     <ProjectReference Include="..\InvoiceFlowAI.Contracts\InvoiceFlowAI.Contracts.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Configuration\DefaultPipelineRecipe.json" />
+  </ItemGroup>
+
 </Project>

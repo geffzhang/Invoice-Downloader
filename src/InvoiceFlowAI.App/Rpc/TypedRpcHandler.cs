@@ -56,6 +56,10 @@ public abstract class TypedRpcHandler<TParams, TResult>(string method, bool allo
         {
             return Failure(RpcErrorCodes.MailboxAccountRevisionConflict, "Mailbox account changed. Reload and try again.");
         }
+        catch (InvoiceFlowAI.Application.Runs.DesktopRunException exception)
+        {
+            return Failure(exception.ErrorCode, exception.Message);
+        }
         catch (CryptographicException)
         {
             return Failure(RpcErrorCodes.CredentialsNotConfigured, "Credentials are unavailable. Enter them again.");

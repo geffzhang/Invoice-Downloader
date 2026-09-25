@@ -10,7 +10,7 @@ namespace InvoiceFlowAI.App.Tests.Rpc;
 public sealed class AppRpcCompositionTests
 {
     [Fact]
-    public async Task Settings_slice_methods_are_advertised_and_legacy_task_methods_are_not()
+    public async Task Typed_v1_methods_are_advertised_and_legacy_task_methods_are_not()
     {
         var services = new ServiceCollection();
         await using var provider = services.BuildServiceProvider();
@@ -26,15 +26,27 @@ public sealed class AppRpcCompositionTests
             "secret.set",
             "secret.delete",
             "directory.choose",
+            "run.context.get",
+            "run.start",
+            "run.progress.get",
+            "run.stop",
+            "run.results.get",
+            "run.report.export",
+            "run.folder.open",
+            "run.manual-review.open",
+            "run.file.open",
+            "window.minimize",
+            "window.maximize",
+            "window.close",
         ]);
-        dispatcher.RegisteredMethods.Should().NotContain("run.start");
+        dispatcher.RegisteredMethods.Should().NotContain("report.open");
         dispatcher.RegisteredMethods.Should().NotContain("start_processing");
 
         var hello = await dispatcher.DispatchAsync(
             new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, "hello", RpcDispatcher.HelloMethod, null),
             CancellationToken.None);
         hello.Result!.Value.GetProperty("registeredMethods").EnumerateArray()
-            .Select(x => x.GetString()).Should().Contain("settings.get");
+            .Select(x => x.GetString()).Should().Contain(["settings.get", "run.start", "run.report.export", "run.file.open", "window.close"]);
     }
 
     [Fact]

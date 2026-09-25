@@ -17,7 +17,8 @@ public sealed record RunTerminalDecision(
     RunTerminalStatus Status,
     string ReasonCode,
     bool FinalBarrierReached,
-    RunSummary Summary);
+    RunSummary Summary,
+    long TerminalEventSequence = 0);
 
 /// <summary>Stable reason codes attached to terminal decisions.</summary>
 public static class RunTerminalReasonCodes

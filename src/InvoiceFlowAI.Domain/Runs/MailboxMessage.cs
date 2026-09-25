@@ -10,7 +10,7 @@ public sealed record MailboxMessage(
     string Mailbox,
     string Uid,
     long UidValidity,
-    DateTimeOffset SentAtUtc,
+    DateTimeOffset? SentAtUtc,
     string Subject,
     string FromAddress,
     IReadOnlyList<string> AttachmentNames,

@@ -819,6 +819,43 @@ public sealed class MailKitMailboxSessionPureTests
     }
 
     [Fact]
+    public void Project_message_prefers_header_date_over_internal_date()
+    {
+        var message = new MimeMessage
+        {
+            Date = new DateTimeOffset(2026, 6, 10, 9, 0, 0, TimeSpan.FromHours(8)),
+        };
+        var internalDate = new DateTimeOffset(2026, 6, 11, 1, 0, 0, TimeSpan.Zero);
+
+        var projected = MailKitMailboxSession.ProjectMessage(1, message, internalDate);
+
+        projected.SentAtUtc.Should().Be(message.Date.ToUniversalTime());
+    }
+
+    [Fact]
+    public void Project_message_falls_back_to_internal_date_when_header_date_is_missing()
+    {
+        var internalDate = new DateTimeOffset(2026, 6, 10, 10, 0, 0, TimeSpan.FromHours(8));
+        var message = new MimeMessage();
+        message.Headers.Remove(HeaderId.Date);
+
+        var projected = MailKitMailboxSession.ProjectMessage(1, message, internalDate);
+
+        projected.SentAtUtc.Should().Be(internalDate.ToUniversalTime());
+    }
+
+    [Fact]
+    public void Project_message_keeps_date_unknown_when_header_and_internal_date_are_missing()
+    {
+        var message = new MimeMessage();
+        message.Headers.Remove(HeaderId.Date);
+
+        var projected = MailKitMailboxSession.ProjectMessage(1, message, null);
+
+        ((DateTimeOffset?)projected.SentAtUtc).Should().BeNull();
+    }
+
+    [Fact]
     public void Project_message_falls_back_to_html_body_with_tags_removed()
     {
         var message = new MimeMessage();
@@ -928,13 +965,61 @@ public sealed class MailKitMailboxSessionPureTests
     }
 
     [Fact]
-    public void Build_search_query_treats_negative_uid_as_no_valid_uid_cursor_and_keeps_since_date_only()
+    public void Build_search_query_does_not_use_since_date_as_a_server_utc_filter()
     {
         var sinceDate = new DateOnly(2026, 9, 24);
 
         var query = MailKitMailboxSession.BuildSearchQuery(new MailboxSearchCriteria(-1, sinceDate));
 
-        DescribeSearchQuery(query).Should().Be(DescribeSearchQuery(ExpectedDateOnlyQuery(sinceDate)));
+        DescribeSearchQuery(query).Should().Be(DescribeSearchQuery(SearchQuery.All));
+    }
+
+    [Fact]
+    public void Build_search_query_does_not_apply_server_date_filter_before_shanghai_local_filtering()
+    {
+        var query = MailKitMailboxSession.BuildSearchQuery(new MailboxSearchCriteria(
+            null, new DateOnly(2026, 6, 10)));
+
+        DescribeSearchQuery(query).Should().Be(DescribeSearchQuery(SearchQuery.All));
+    }
+
+    [Fact]
+    public void Date_window_uses_shanghai_local_day_and_retains_unknown_dates()
+    {
+        var criteria = new MailboxSearchCriteria(null, new DateOnly(2026, 6, 10), new DateOnly(2026, 6, 11));
+
+        MailKitMailboxSession.IsInDateWindow(
+            new DateTimeOffset(2026, 6, 9, 16, 0, 0, TimeSpan.Zero), criteria).Should().BeTrue();
+        MailKitMailboxSession.IsInDateWindow(
+            new DateTimeOffset(2026, 6, 9, 15, 59, 59, TimeSpan.Zero), criteria).Should().BeFalse();
+        MailKitMailboxSession.IsInDateWindow(
+            new DateTimeOffset(2026, 6, 11, 16, 0, 0, TimeSpan.Zero), criteria).Should().BeFalse();
+        MailKitMailboxSession.IsInDateWindow(null, criteria).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Date_summary_filter_preserves_uid_order_and_keeps_unknown_after_out_of_range_messages()
+    {
+        var uids = Enumerable.Range(1, 5).Select(value => new UniqueId((uint)value)).ToArray();
+        var summaries = new[]
+        {
+            new MailboxMessageDateSummary(uids[0],
+                new DateTimeOffset(2026, 6, 9, 16, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 6, 9, 0, 0, 0, TimeSpan.Zero)),
+            new MailboxMessageDateSummary(uids[1],
+                new DateTimeOffset(2026, 6, 9, 15, 59, 59, TimeSpan.Zero),
+                new DateTimeOffset(2026, 6, 10, 0, 0, 0, TimeSpan.Zero)),
+            new MailboxMessageDateSummary(uids[2], null,
+                new DateTimeOffset(2026, 6, 11, 16, 0, 0, TimeSpan.Zero)),
+            new MailboxMessageDateSummary(uids[3], null, null),
+            new MailboxMessageDateSummary(uids[4],
+                new DateTimeOffset(2026, 6, 10, 4, 0, 0, TimeSpan.Zero), null),
+        };
+        var criteria = new MailboxSearchCriteria(null, new DateOnly(2026, 6, 10), new DateOnly(2026, 6, 11));
+
+        MailKitMailboxSession.FilterUidsByDateWindow(uids, summaries, criteria)
+            .Select(uid => uid.Id)
+            .Should().Equal(1u, 4u, 5u);
     }
 
     [Fact]
@@ -988,12 +1073,6 @@ public sealed class MailKitMailboxSessionPureTests
 
         FilterUidsAfterCursor(uids, null).Select(static uid => uid.Id).Should().Equal(104u, 105u);
         FilterUidsAfterCursor(uids, -1).Select(static uid => uid.Id).Should().Equal(104u, 105u);
-    }
-
-    private static SearchQuery ExpectedDateOnlyQuery(DateOnly sinceDate)
-    {
-        var sinceDateUtc = sinceDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-        return SearchQuery.All.And(SearchQuery.DeliveredOn(sinceDateUtc).Or(SearchQuery.DeliveredAfter(sinceDateUtc)));
     }
 
     private static IReadOnlyList<MailKit.UniqueId> FilterUidsAfterCursor(IReadOnlyList<MailKit.UniqueId> uids, long? sinceUid)

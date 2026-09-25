@@ -49,7 +49,9 @@ public sealed record RunFinalizationRequest(
     IReadOnlyList<CandidateProcessResult> CandidateResults,
     RunFailure? RunFailure,
     IReadOnlyList<RunFailure> FinalizerFailures,
-    DateTimeOffset CompletedAtUtc);
+    DateTimeOffset CompletedAtUtc,
+    string? ReportPath = null,
+    string? ReportContentHash = null);
 
 public sealed class RunCoordinator : IRunCoordinator
 {
@@ -188,6 +190,22 @@ public sealed class RunCoordinator : IRunCoordinator
                 $"Finalization called before barrier reached for run '{request.RunId}'.");
         }
 
+        if ((request.ReportPath is null) != (request.ReportContentHash is null))
+        {
+            throw new ArgumentException("Report path and content hash must be supplied together.", nameof(request));
+        }
+        if (request.ReportPath is not null)
+        {
+            decision = decision with
+            {
+                Summary = decision.Summary with
+                {
+                    ReportPath = request.ReportPath,
+                    ReportContentHash = request.ReportContentHash,
+                },
+            };
+        }
+
         await using var uow = await _uowFactory.BeginAsync(TransactionPurpose.TerminalCommit, cancellationToken).ConfigureAwait(false);
 
         // Audit the terminal transition (an extra event appended *after*
@@ -226,12 +244,13 @@ public sealed class RunCoordinator : IRunCoordinator
             TerminalReasonCode: decision.ReasonCode,
             LastEventSequence: terminalSequence,
             EndedAtUtc: request.CompletedAtUtc,
-            CancellationRequestedAtUtc: existing?.CancellationRequestedAtUtc);
+            CancellationRequestedAtUtc: existing?.CancellationRequestedAtUtc,
+            Summary: decision.Summary);
         await _lifecycleStore.UpdateTerminalStateAsync(snapshot, uow, cancellationToken).ConfigureAwait(false);
 
         await uow.CommitAsync(cancellationToken).ConfigureAwait(false);
 
-        return decision;
+        return decision with { TerminalEventSequence = terminalSequence };
     }
 
     private static bool IsTerminalState(RunLifecycleState state) =>
@@ -255,6 +274,17 @@ public sealed class RunCoordinator : IRunCoordinator
         RunStateSnapshot snapshot,
         IReadOnlyList<CandidateProcessResult> candidates)
     {
+        if (snapshot.Summary is not null)
+        {
+            return new RunTerminalDecision(
+                snapshot.RunId,
+                snapshot.Summary.TerminalStatus,
+                snapshot.Summary.TerminalReasonCode,
+                true,
+                snapshot.Summary,
+                snapshot.LastEventSequence);
+        }
+
         var counts = new Dictionary<CandidateStatus, int>();
         foreach (var c in candidates)
         {
@@ -280,7 +310,13 @@ public sealed class RunCoordinator : IRunCoordinator
             CompletedAtUtc: snapshot.EndedAtUtc ?? DateTimeOffset.UtcNow,
             ReportExportQueued: false,
             FinalizerFailures: Array.Empty<RunFailure>());
-        return new RunTerminalDecision(snapshot.RunId, status, snapshot.TerminalReasonCode ?? "", true, summary);
+        return new RunTerminalDecision(
+            snapshot.RunId,
+            status,
+            snapshot.TerminalReasonCode ?? "",
+            true,
+            summary,
+            snapshot.LastEventSequence);
     }
 
     private static RunTerminalStatus MapStatusReverse(RunLifecycleState state) => state switch

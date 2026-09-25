@@ -33,11 +33,14 @@ public sealed record ReportExportWorkItem(
     IReadOnlyList<ReportManualReviewRow> ManualReviews,
     IReadOnlyList<ReportFailureRow> Failures,
     ReportSummaryRow Summary,
-    string TemplateVersion);
+    string TemplateVersion)
+{
+    public string? OutputRoot { get; init; }
+}
 
 public sealed record ReportInvoiceRow(
     string InvoiceId,
-    DateOnly InvoiceDate,
+    DateOnly? InvoiceDate,
     string Purchaser,
     string Seller,
     decimal Amount,
@@ -48,14 +51,21 @@ public sealed record ReportInvoiceRow(
     string DocumentType,
     string? Category,
     string Confidence,
-    string ArchiveState);
+    string ArchiveState)
+{
+    public string CandidateStatus { get; init; } = string.Empty;
+    public string? RelativePath { get; init; }
+}
 
 public sealed record ReportManualReviewRow(
     string ReviewId,
     string DocumentId,
     int ProcessingRevision,
     string ReasonCode,
-    string State);
+    string State)
+{
+    public string? RelativePath { get; init; }
+}
 
 public sealed record ReportFailureRow(
     string ReasonCode,
@@ -95,7 +105,24 @@ public sealed record ReportRunData(
     IReadOnlyList<ReportManualReviewRow> ManualReviews,
     IReadOnlyDictionary<string, int> FailureReasonCounts,
     string? ExistingRelativePath,
-    string? ExistingContentHash);
+    string? ExistingContentHash,
+    ReportCandidateCounts CandidateCounts)
+{
+    public string? OutputRoot { get; init; }
+    public DateOnly DateFrom { get; init; }
+    public DateOnly DateToExclusive { get; init; }
+}
+
+public sealed record ReportCandidateCounts(
+    int ResolvedCount,
+    int DuplicateCount,
+    int RetainedCount,
+    int ManualReviewCount,
+    int UnresolvedCount,
+    int CancelledCount,
+    int QuotaExhaustedCount,
+    int AuthFailedCount,
+    int TimeoutCount);
 
 public interface IReportPathStore
 {

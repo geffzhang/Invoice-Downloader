@@ -90,7 +90,8 @@ public sealed class MailKitMailboxScanner : IMailboxScanner
             var uidValidityChanged = normalizedSinceUid.HasValue && !canReuseUidCursor;
             var criteria = new MailboxSearchCriteria(
                 canReuseUidCursor ? normalizedSinceUid : null,
-                request.SinceDate);
+                request.SinceDate,
+                request.BeforeDateExclusive);
 
             var fetchedMessages = await session.SearchAsync(criteria, cancellationToken).ConfigureAwait(false);
             var messages = new List<MailboxMessage>(fetchedMessages.Count);
