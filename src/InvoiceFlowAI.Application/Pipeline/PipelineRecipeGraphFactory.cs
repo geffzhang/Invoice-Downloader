@@ -100,6 +100,7 @@ public sealed class PipelineRun : IAsyncDisposable
         PipelineContext context,
         RunSummaryCaptureNode summaryCapture,
         RunArchiveCaptureNode archiveCapture,
+        MailboxScanCaptureNode mailboxScanCapture,
         IReadOnlyList<RunFailureCaptureNode> failureCaptures)
     {
         _scope = scope;
@@ -107,6 +108,7 @@ public sealed class PipelineRun : IAsyncDisposable
         Context = context;
         SummaryCapture = summaryCapture;
         ArchiveCapture = archiveCapture;
+        MailboxScanCapture = mailboxScanCapture;
         FailureCaptures = failureCaptures;
         var inputPort = executor.Graph.Nodes.SelectMany(node => node.InputPorts)
             .OfType<ZeroPipeline.Core.Ports.InputPort<InvoiceFlowAI.Domain.Runs.RunInput>>()
@@ -119,10 +121,12 @@ public sealed class PipelineRun : IAsyncDisposable
     public RunSummaryCaptureNode SummaryCapture { get; }
     public InvoiceFlowAI.Domain.Runs.RunSummary? CompletedSummary => SummaryCapture.Summary;
     public ArchiveBatch? ArchivedBatch => ArchiveCapture.Batch;
+    public int ScannedEmailCount => MailboxScanCapture.EmailCount;
     public IReadOnlyList<InvoiceFlowAI.Domain.Runs.RunFailure> Failures =>
         FailureCaptures.SelectMany(capture => capture.Failures).ToArray();
 
     private RunArchiveCaptureNode ArchiveCapture { get; }
+    private MailboxScanCaptureNode MailboxScanCapture { get; }
     private IReadOnlyList<RunFailureCaptureNode> FailureCaptures { get; }
 
     public void Submit(InvoiceFlowAI.Domain.Runs.RunInput input, long sequence = 1) => _runInput.Submit(input, sequence);
@@ -176,6 +180,13 @@ public sealed class PipelineRunFactory
             graph.AddNode(archiveCapture);
             graph.Connect(archivePort, archiveCapture.Input);
 
+            var mailboxPort = graph.Nodes.SelectMany(node => node.OutputPorts)
+                .OfType<OutputPort<PipelineItem<MailboxScanResult>>>()
+                .Single();
+            var mailboxScanCapture = new MailboxScanCaptureNode();
+            graph.AddNode(mailboxScanCapture);
+            graph.Connect(mailboxPort, mailboxScanCapture.Input);
+
             var failurePorts = graph.Nodes.SelectMany(node => node.OutputPorts)
                 .OfType<OutputPort<InvoiceFlowAI.Domain.Runs.RunFailure>>()
                 .ToArray();
@@ -190,7 +201,7 @@ public sealed class PipelineRunFactory
             var executor = new PipelineExecutor(graph);
             var context = new PipelineContext(cancellationToken);
             await executor.InitializeAsync(context, cancellationToken).ConfigureAwait(false);
-            return new PipelineRun(scope, executor, context, summaryCapture, archiveCapture, failureCaptures);
+            return new PipelineRun(scope, executor, context, summaryCapture, archiveCapture, mailboxScanCapture, failureCaptures);
         }
         catch
         {
@@ -289,6 +300,25 @@ public sealed class RunFailureCaptureNode : PipelineNode
             {
                 _failures.Add(packet.Payload);
             }
+        }
+        return Task.CompletedTask;
+    }
+}
+
+public sealed class MailboxScanCaptureNode : PipelineNode
+{
+    public MailboxScanCaptureNode() : base("run-mailbox-scan-capture", "Mailbox scan capture") =>
+        Input = AddInputPort<PipelineItem<MailboxScanResult>>("Messages", 1, BackpressurePolicy.Block);
+
+    public InputPort<PipelineItem<MailboxScanResult>> Input { get; }
+    public int EmailCount { get; private set; }
+
+    protected override Task OnExecuteAsync(PipelineContext context, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Input.TryReceive(out var packet) && !packet.IsEndOfStream)
+        {
+            EmailCount = packet.Payload.Payload.Messages.Count;
         }
         return Task.CompletedTask;
     }

@@ -1,0 +1,18 @@
+{
+  "cases": [
+    {
+      "caseId": "xml-invoice-core-fields",
+      "xml": "<Invoice><Header><InvoiceDate>2026-09-24</InvoiceDate><InvoiceNumber>INV-SYNTHETIC-001</InvoiceNumber><InvoiceType>Catering</InvoiceType></Header><EInvoiceData><BuyerName>Example Company</BuyerName><SellerName>Example Seller</SellerName><Amount>100.00</Amount><TaxAmount>6.00</TaxAmount><TotalAmount>106.00</TotalAmount></EInvoiceData></Invoice>",
+      "expected": {
+        "invoiceDate": "2026-09-24",
+        "purchaser": "Example Company",
+        "seller": "Example Seller",
+        "amount": "100.00",
+        "taxAmount": "6.00",
+        "totalAmount": "106.00",
+        "invoiceNumber": "INV-SYNTHETIC-001",
+        "documentType": "Catering"
+      }
+    }
+  ]
+}

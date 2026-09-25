@@ -36,6 +36,7 @@ public sealed class RunExecutionService : IDesktopRunExecutor
         IReadOnlyList<CandidateProcessResult> candidateResults = Array.Empty<CandidateProcessResult>();
         IReadOnlyList<RunFailure> finalizerFailures = Array.Empty<RunFailure>();
         RunSummary? pipelineSummary = null;
+        var scannedEmailCount = 0;
         RunFailure? runFailure = null;
         var cancellationRequested = false;
         var allCandidatesArrived = false;
@@ -71,12 +72,28 @@ public sealed class RunExecutionService : IDesktopRunExecutor
                 for (var cycle = 0; cycle < MaximumPipelineCycles && run.CompletedSummary is null; cycle++)
                 {
                     await run.ExecuteStepAsync(cancellationToken).ConfigureAwait(false);
+                    var completedCycles = cycle + 1;
+                    var progress = new RunProgressPayload(
+                        "processing",
+                        completedCycles,
+                        MaximumPipelineCycles,
+                        Math.Min(90, 5 + completedCycles * 85 / MaximumPipelineCycles),
+                        new RunProgressStats(run.ScannedEmailCount, 0, 0));
+                    await CommitAndPublishAsync(
+                        request.RunId,
+                        ++eventSequence,
+                        "run.progress",
+                        "processing",
+                        JsonSerializer.Serialize(progress),
+                        progress,
+                        cancellationToken).ConfigureAwait(false);
                 }
 
                 executionStage = "collect-pipeline-results";
                 candidateResults = run.ArchivedBatch?.Results ?? Array.Empty<CandidateProcessResult>();
                 finalizerFailures = run.ArchivedBatch?.Failures ?? Array.Empty<RunFailure>();
                 pipelineSummary = run.CompletedSummary;
+                scannedEmailCount = run.ScannedEmailCount;
                 runFailure = run.Failures.FirstOrDefault();
 
                 if (run.CompletedSummary is null && runFailure is null)
@@ -95,6 +112,9 @@ public sealed class RunExecutionService : IDesktopRunExecutor
                 }
             }
 
+            var processedCandidates = 0;
+            var candidateErrors = 0;
+            var quotaExhausted = false;
             foreach (var result in candidateResults)
             {
                 executionStage = "commit-candidate-result";
@@ -111,6 +131,27 @@ public sealed class RunExecutionService : IDesktopRunExecutor
                     candidatePayload,
                     CancellationToken.None,
                     [result]).ConfigureAwait(false);
+                processedCandidates++;
+                var isSuccessful = result.Status is CandidateStatus.Resolved or CandidateStatus.Duplicate;
+                if (!isSuccessful) candidateErrors++;
+                quotaExhausted |= result.Status == CandidateStatus.QuotaExhausted;
+                var progress = new RunProgressPayload(
+                    "archive-documents",
+                    processedCandidates,
+                    candidateResults.Count,
+                    90 + processedCandidates * 9 / candidateResults.Count,
+                    new RunProgressStats(scannedEmailCount, processedCandidates, candidateErrors),
+                    result.Failure?.ReasonCode,
+                    quotaExhausted,
+                    quotaExhausted ? "Provider quota exhausted." : null);
+                await CommitAndPublishAsync(
+                    request.RunId,
+                    ++eventSequence,
+                    "run.progress",
+                    "archive-documents",
+                    JsonSerializer.Serialize(progress),
+                    progress,
+                    CancellationToken.None).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

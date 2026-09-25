@@ -5,12 +5,19 @@ using InvoiceFlowAI.Contracts.Rpc;
 
 namespace InvoiceFlowAI.Application.Runs;
 
+using System.Text.Json;
+using System.Text.RegularExpressions;
 public sealed class DesktopRunService : IDesktopRunService
 {
     private readonly IMailboxAccountReader _accounts;
     private readonly IUserSettingsStore _settings;
     private readonly IUnitOfWorkFactory _uowFactory;
+    private const int EventReadPageSize = 200;
+    private const int MaximumProgressLogs = 100;
+    private static readonly JsonSerializerOptions EventJsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly Regex SafeCodePattern = new("^[A-Za-z0-9_-]{1,80}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private readonly IRunLifecycleStore _lifecycleStore;
+    private readonly IEventReplayStore _eventStore;
     private readonly ActiveRunRegistry _activeRuns;
     private readonly IDesktopRunExecutorLeaseFactory _executorLeaseFactory;
     private readonly TimeProvider _timeProvider;
@@ -22,6 +29,7 @@ public sealed class DesktopRunService : IDesktopRunService
         IUserSettingsStore settings,
         IUnitOfWorkFactory uowFactory,
         IRunLifecycleStore lifecycleStore,
+        IEventReplayStore eventStore,
         ActiveRunRegistry activeRuns,
         IDesktopRunExecutorLeaseFactory executorLeaseFactory,
         TimeProvider timeProvider)
@@ -30,6 +38,7 @@ public sealed class DesktopRunService : IDesktopRunService
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _uowFactory = uowFactory ?? throw new ArgumentNullException(nameof(uowFactory));
         _lifecycleStore = lifecycleStore ?? throw new ArgumentNullException(nameof(lifecycleStore));
+        _eventStore = eventStore ?? throw new ArgumentNullException(nameof(eventStore));
         _activeRuns = activeRuns ?? throw new ArgumentNullException(nameof(activeRuns));
         _executorLeaseFactory = executorLeaseFactory ?? throw new ArgumentNullException(nameof(executorLeaseFactory));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
@@ -168,22 +177,148 @@ public sealed class DesktopRunService : IDesktopRunService
         };
         var isRunning = runState is RunState.Running or RunState.Stopping;
         var stopRequested = state.CancellationRequestedAtUtc is not null;
+        var projection = await ReadProgressProjectionAsync(state, cancellationToken).ConfigureAwait(false);
+        var summary = state.Summary;
+        var stats = summary is null
+            ? projection.Stats
+            : new RunProgressStats(
+                projection.Stats.Emails,
+                summary.ResolvedCount + summary.DuplicateCount + summary.RetainedCount
+                    + summary.ManualReviewCount + summary.UnresolvedCount + summary.CancelledCount
+                    + summary.QuotaExhaustedCount + summary.AuthFailedCount + summary.TimeoutCount,
+                summary.ManualReviewCount + summary.RetainedCount + summary.UnresolvedCount
+                    + summary.CancelledCount + summary.QuotaExhaustedCount + summary.AuthFailedCount
+                    + summary.TimeoutCount);
+        var quotaExhausted = summary?.QuotaExhaustedCount > 0 || projection.QuotaExhausted;
+        var lastError = SafeCode(projection.LastError)
+            ?? (summary?.FailureReasonCounts.OrderByDescending(pair => pair.Value).Select(pair => SafeCode(pair.Key)).FirstOrDefault(code => code is not null))
+            ?? (runState == RunState.Failed ? SafeCode(state.TerminalReasonCode) : null);
         return new RunProgressSnapshot(
             runState,
             isRunning,
             isRunning && !stopRequested,
             stopRequested,
-            0,
-            state.Stage,
-            new RunProgressStats(0, 0, 0),
-            Array.Empty<RunLogEntry>(),
-            null,
-            false,
-            null,
+            isRunning ? Math.Clamp(projection.Progress, 0, 99) : 100,
+            isRunning ? SafeCode(projection.Stage) ?? SafeCode(state.Stage) ?? "processing" : runState.ToString().ToLowerInvariant(),
+            stats,
+            projection.Logs,
+            lastError,
+            quotaExhausted,
+            quotaExhausted ? "Provider quota exhausted." : null,
             null,
             null,
             null);
     }
+
+    private async Task<ProgressProjection> ReadProgressProjectionAsync(
+        RunStateSnapshot state,
+        CancellationToken cancellationToken)
+    {
+        var logs = new Queue<RunLogEntry>();
+        RunProgressPayload? latestProgress = null;
+        var candidateCount = 0;
+        var candidateErrors = 0;
+        string? lastError = null;
+        var progressPercent = 0;
+        var cursor = Math.Max(0, state.LastEventSequence - EventReadPageSize);
+
+        while (cursor < state.LastEventSequence)
+        {
+            var page = await _eventStore.ReadSinceAsync(
+                state.RunId,
+                cursor,
+                EventReadPageSize,
+                cancellationToken).ConfigureAwait(false);
+            if (page.Events.Count == 0) break;
+
+            foreach (var storedEvent in page.Events)
+            {
+                cursor = Math.Max(cursor, storedEvent.EventSequence);
+                var message = storedEvent.EventType switch
+                {
+                    "run.started" => "Run started.",
+                    "run.progress" => ProjectProgressEvent(storedEvent.PayloadJson, ref latestProgress, ref progressPercent),
+                    "run.candidate" => ProjectCandidateEvent(storedEvent.PayloadJson, ref candidateCount, ref candidateErrors, ref lastError),
+                    "run.terminal" => "Run finalized.",
+                    _ => null,
+                };
+                if (message is not null)
+                {
+                    logs.Enqueue(new RunLogEntry(storedEvent.EmittedAtUtc, "info", message));
+                    while (logs.Count > MaximumProgressLogs) logs.Dequeue();
+                }
+            }
+            if (cursor >= page.LatestSequence || page.Events.Count < EventReadPageSize) break;
+        }
+
+        var payloadStats = latestProgress?.Stats;
+        return new ProgressProjection(
+            latestProgress?.Stage ?? state.Stage,
+            progressPercent,
+            new RunProgressStats(
+                payloadStats?.Emails ?? 0,
+                payloadStats?.Invoices ?? candidateCount,
+                payloadStats?.Errors ?? candidateErrors),
+            logs.ToArray(),
+            SafeCode(latestProgress?.LastError) ?? lastError,
+            latestProgress?.QuotaExhausted ?? false,
+            latestProgress?.QuotaMessage);
+    }
+
+    private static string? ProjectProgressEvent(
+        string payloadJson,
+        ref RunProgressPayload? latestProgress,
+        ref int progressPercent)
+    {
+        try
+        {
+            latestProgress = JsonSerializer.Deserialize<RunProgressPayload>(payloadJson, EventJsonOptions);
+        }
+        catch (JsonException)
+        {
+            return "Run progress updated.";
+        }
+        progressPercent = Math.Max(progressPercent, Math.Clamp(latestProgress?.Percent ?? 0, 0, 100));
+        var stage = SafeCode(latestProgress?.Stage) ?? "processing";
+        return $"Progress: {stage} ({Math.Clamp(latestProgress?.Percent ?? 0, 0, 100)}%).";
+    }
+
+    private static string? ProjectCandidateEvent(
+        string payloadJson,
+        ref int candidateCount,
+        ref int candidateErrors,
+        ref string? lastError)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(payloadJson);
+            var root = document.RootElement;
+            var status = root.TryGetProperty("status", out var statusNode) ? SafeCode(statusNode.GetString()) : null;
+            if (status is null) return "Candidate processed.";
+            candidateCount++;
+            var isSuccess = status.Equals("Resolved", StringComparison.OrdinalIgnoreCase)
+                || status.Equals("Duplicate", StringComparison.OrdinalIgnoreCase);
+            if (!isSuccess) candidateErrors++;
+            if (root.TryGetProperty("reasonCode", out var reasonNode)) lastError = SafeCode(reasonNode.GetString()) ?? lastError;
+            return $"Candidate processed: {status}.";
+        }
+        catch (JsonException)
+        {
+            return "Candidate processed.";
+        }
+    }
+
+    private static string? SafeCode(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && SafeCodePattern.IsMatch(value) ? value : null;
+
+    private sealed record ProgressProjection(
+        string? Stage,
+        int Progress,
+        RunProgressStats Stats,
+        IReadOnlyList<RunLogEntry> Logs,
+        string? LastError,
+        bool QuotaExhausted,
+        string? QuotaMessage);
 
     public async Task<RunStopResult> StopAsync(RunStopRequest request, CancellationToken cancellationToken)
     {

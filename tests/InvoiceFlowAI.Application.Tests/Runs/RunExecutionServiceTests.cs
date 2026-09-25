@@ -17,7 +17,7 @@ namespace InvoiceFlowAI.Application.Tests.Runs;
 public sealed class RunExecutionServiceTests
 {
     [Fact]
-    public async Task Empty_mailbox_run_finalizes_once_and_publishes_only_after_commit()
+    public async Task Run_publishes_monotonic_progress_with_scanned_email_count()
     {
         var order = new List<string>();
         var services = new ServiceCollection();
@@ -49,6 +49,17 @@ public sealed class RunExecutionServiceTests
         coordinator.FinalizationRequests[0].AllCandidatesArrived.Should().BeTrue();
         coordinator.FinalizationRequests[0].CandidateResults.Should().BeEmpty();
         publisher.Events.Select(item => item.EventName).Should().ContainInOrder("run.progress", "run.terminal");
+        var progress = publisher.Events.Where(item => item.EventName == "run.progress")
+            .Select(item => item.Payload.Should().BeOfType<RunProgressPayload>().Subject.Percent)
+            .ToArray();
+        progress.Should().HaveCountGreaterThan(1);
+        progress.Should().OnlyHaveUniqueItems();
+        progress.Should().BeInAscendingOrder();
+        publisher.Events.Where(item => item.EventName == "run.progress")
+            .Select(item => item.Payload.Should().BeOfType<RunProgressPayload>().Subject.Stats)
+            .Where(stats => stats is not null)
+            .Select(stats => stats!.Emails)
+            .Should().Contain(2);
         publisher.Events.Last().Sequence.Should().Be(73);
         order.IndexOf("commit:1").Should().BeLessThan(order.IndexOf("publish:1"));
         order.IndexOf("finalize").Should().BeLessThan(order.IndexOf("publish:73"));
@@ -82,9 +93,9 @@ public sealed class RunExecutionServiceTests
         coordinator.FinalizationRequests.Should().ContainSingle();
         coordinator.FinalizationRequests[0].CandidateResults.Should().ContainSingle()
             .Which.Candidate.DocumentId.Value.Should().Be("document-1");
-        coordinator.PacketRequests.Should().HaveCount(2);
+        coordinator.PacketRequests.Should().ContainSingle(item => item.EventType == "run.candidate");
         var candidateEvent = publisher.Events.Single(item => item.EventName == "run.candidate");
-        candidateEvent.Sequence.Should().Be(2);
+        candidateEvent.Sequence.Should().Be(coordinator.PacketRequests.Single(item => item.EventType == "run.candidate").EventSequence);
         candidateEvent.Payload.Should().BeOfType<RunCandidateEventPayload>()
             .Which.DocumentId.Should().Be("document-1");
         order.IndexOf("commit:2").Should().BeLessThan(order.IndexOf("publish:2"));
@@ -107,8 +118,7 @@ public sealed class RunExecutionServiceTests
         await using var provider = services.BuildServiceProvider();
         var coordinator = new RecordingCoordinator(order)
         {
-            FailPacketSequence = 2,
-            TerminalEventSequence = 2,
+            FailPacketEventType = "run.candidate",
         };
         var publisher = new RecordingEventPublisher(order);
         var service = new RunExecutionService(
@@ -123,7 +133,7 @@ public sealed class RunExecutionServiceTests
         coordinator.FinalizationRequests[0].RunFailure.Should().NotBeNull();
         publisher.Events.Should().ContainSingle(item => item.EventName == "run.terminal");
         publisher.Events.Should().NotContain(item => item.EventName == "run.candidate");
-        publisher.Events.Single(item => item.EventName == "run.terminal").Sequence.Should().Be(2);
+        publisher.Events.Single(item => item.EventName == "run.terminal").Sequence.Should().Be(3);
     }
 
     [Fact]
@@ -201,7 +211,10 @@ public sealed class RunExecutionServiceTests
     private sealed class EmptyMailboxScanner : IMailboxScanner
     {
         public Task<MailboxScanResult> ScanAsync(MailboxScanRequest request, CancellationToken cancellationToken)
-            => Task.FromResult(new MailboxScanResult(Array.Empty<MailboxMessage>(), Array.Empty<MailboxAttachmentCandidate>(), 0, "", false));
+            => Task.FromResult(new MailboxScanResult(
+                [new MailboxMessage("INBOX", "1", 1, null, "", "", [], false),
+                 new MailboxMessage("INBOX", "2", 1, null, "", "", [], false)],
+                Array.Empty<MailboxAttachmentCandidate>(), 2, "", false));
     }
 
     private sealed class CancellingMailboxScanner(CancellationTokenSource cancellation) : IMailboxScanner
@@ -273,17 +286,19 @@ public sealed class RunExecutionServiceTests
     {
         public List<RunFinalizationRequest> FinalizationRequests { get; } = [];
         public List<PacketCommitRequest> PacketRequests { get; } = [];
-        public long TerminalEventSequence { get; set; } = 2;
-        public long? FailPacketSequence { get; set; }
+        public long? TerminalEventSequence { get; set; }
+        public string? FailPacketEventType { get; set; }
+        private long LastCommittedSequence { get; set; }
 
         public Task<RunCommitResult> CommitPacketAsync(PacketCommitRequest request, CancellationToken cancellationToken)
         {
             PacketRequests.Add(request);
             order.Add($"commit:{request.EventSequence}");
-            if (request.EventSequence == FailPacketSequence)
+            if (request.EventType == FailPacketEventType)
             {
                 return Task.FromException<RunCommitResult>(new InvalidOperationException("packet commit failed"));
             }
+            LastCommittedSequence = Math.Max(LastCommittedSequence, request.EventSequence);
             return Task.FromResult(new RunCommitResult(request.RunId, request.EventSequence,
                 request.EventSequence + 1, false, null));
         }
@@ -295,7 +310,7 @@ public sealed class RunExecutionServiceTests
             var decision = new TerminalDecisionService().Decide(
                 request.RunId, request.CandidateResults, request.RunFailure, request.CancellationRequested,
                 request.AllCandidatesArrived, request.FinalizerFailures, request.CompletedAtUtc);
-            return Task.FromResult(decision with { TerminalEventSequence = TerminalEventSequence });
+            return Task.FromResult(decision with { TerminalEventSequence = TerminalEventSequence ?? LastCommittedSequence + 1 });
         }
     }
 

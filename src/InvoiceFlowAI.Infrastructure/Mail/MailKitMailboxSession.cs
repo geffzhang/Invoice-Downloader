@@ -80,12 +80,11 @@ public sealed class MailKitMailboxSession : IMailboxSession
     {
         ArgumentNullException.ThrowIfNull(uids);
 
-        if (!sinceUid.HasValue || sinceUid.Value < 0)
-        {
-            return uids as IReadOnlyList<UniqueId> ?? uids.ToArray();
-        }
-
-        return uids.Where(uid => uid.Id > sinceUid.Value).ToArray();
+        return uids
+            .Where(uid => !sinceUid.HasValue || sinceUid.Value < 0 || uid.Id > sinceUid.Value)
+            .DistinctBy(static uid => uid.Id)
+            .OrderBy(static uid => uid.Id)
+            .ToArray();
     }
 
     public Task DisconnectAsync(CancellationToken cancellationToken)
