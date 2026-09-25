@@ -9,6 +9,7 @@
 using FluentAssertions;
 using InvoiceFlowAI.Application.Archive;
 using InvoiceFlowAI.Application.Persistence;
+using System.Text.Json;
 using Xunit;
 
 namespace InvoiceFlowAI.Infrastructure.Tests.Archive;
@@ -17,6 +18,40 @@ public sealed class ArchiveRecoveryServiceTests
 {
     private const string FinalRelativePath = "archive/final-1.bin";
     private const string FinalFilePath = "output-root/archive/final-1.bin";
+
+    [Fact]
+    public async Task Shared_recovery_matrix_matches_artifact_audit_and_pairing_states()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "archive-recovery.json");
+        var fixtures = JsonSerializer.Deserialize<ArchiveRecoveryFixtureSet>(
+            await File.ReadAllTextAsync(fixturePath),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidDataException("Archive recovery fixtures are empty.");
+
+        foreach (var fixture in fixtures.Cases)
+        {
+            var fakes = SetupPrepared(content: "archive-content");
+            ConfigureFileState(fakes.FileSystem, fixture.TempState, "temp-1.bin");
+            ConfigureFileState(fakes.FileSystem, fixture.FinalState, FinalFilePath);
+            var recovery = new ArchiveRecoveryService(
+                fakes.UowFactory, fakes.Store, fakes.FileSystem, fakes.AuditStore, fakes.PairingStore);
+
+            var entries = await recovery.ScanAsync("run-1", CancellationToken.None);
+            var decision = await recovery.ResolveAsync(entries[0], CancellationToken.None);
+            var snapshots = await fakes.Store.ListByRunAsync("run-1", CancellationToken.None);
+
+            decision.ResolvedState.ToString().Should().Be(fixture.ExpectedState, fixture.CaseId);
+            (decision.ReasonCode ?? string.Empty).Should().Be(fixture.ExpectedReason, fixture.CaseId);
+            snapshots.Should().ContainSingle().Which.State.ToString().Should().Be(fixture.ExpectedState, fixture.CaseId);
+            fakes.AuditStore.Count.Should().Be(fixture.ExpectedAuditCount, fixture.CaseId);
+            (await fakes.FileSystem.FileExistsAsync(FinalFilePath, CancellationToken.None))
+                .Should().Be(fixture.ExpectedFinalExists, fixture.CaseId);
+            (await fakes.FileSystem.FileExistsAsync("temp-1.bin", CancellationToken.None))
+                .Should().Be(fixture.ExpectedTempExists, fixture.CaseId);
+            fakes.PairingStore.ReconciledSnapshots.Should().ContainSingle()
+                .Which.State.ToString().Should().Be(fixture.ExpectedState, fixture.CaseId);
+        }
+    }
 
     [Fact]
     public async Task Final_present_with_matching_hash_commits()
@@ -157,6 +192,35 @@ public sealed class ArchiveRecoveryServiceTests
                 FinalFilePath: FinalFilePath));
         return fakes;
     }
+
+    private static void ConfigureFileState(FakeArchiveFileSystem fileSystem, string state, string path)
+    {
+        if (state == "missing")
+        {
+            fileSystem.DeleteAsync(path, CancellationToken.None).GetAwaiter().GetResult();
+            return;
+        }
+
+        if (state is "valid" or "mismatch")
+        {
+            fileSystem.WriteFile(path, state == "valid" ? "archive-content" : "tampered-bytes");
+            return;
+        }
+
+        throw new InvalidDataException($"Unknown archive recovery fixture state '{state}'.");
+    }
+
+    private sealed record ArchiveRecoveryFixtureSet(IReadOnlyList<ArchiveRecoveryFixture> Cases);
+
+    private sealed record ArchiveRecoveryFixture(
+        string CaseId,
+        string TempState,
+        string FinalState,
+        string ExpectedState,
+        string ExpectedReason,
+        int ExpectedAuditCount,
+        bool ExpectedFinalExists,
+        bool ExpectedTempExists);
 
     private static string Sha256Hex(string value)
     {

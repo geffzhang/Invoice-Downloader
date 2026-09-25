@@ -15,8 +15,7 @@
            Version="1.0.0"
            Manufacturer="InvoiceFlowAI"
            UpgradeCode="B7A1F2E4-9C4D-4F2E-9C42-7A1234567890"
-           Scope="perMachine"
-           Platform="x64">
+           Scope="perMachine">
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of InvoiceFlowAI is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
@@ -33,22 +32,22 @@
       <ComponentGroupRef Id="LicenseFiles" />
     </Feature>
 
-    <StandardDirectory Id="INSTALLFOLDER">
-      <Directory Id="INSTALLFOLDER.Manifests" Name="manifests" />
-      <Directory Id="INSTALLFOLDER.Licenses" Name="licenses" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="InvoiceFlowAI">
+        <Directory Id="INSTALLFOLDER.Manifests" Name="manifests" />
+        <Directory Id="INSTALLFOLDER.Licenses" Name="licenses" />
+      </Directory>
     </StandardDirectory>
 
   </Package>
 
   <!--
-    PublishedFiles: every binary the publish pipeline emitted,
-    harvested from the manifest. The manifest is the source of
-    truth — if a file isn't in the manifest, it's not in the MSI.
+    PublishedFiles: every file emitted by the publish pipeline,
+    excluding manifests and licenses handled by dedicated groups.
   -->
   <Fragment>
     <ComponentGroup Id="PublishedFiles" Directory="INSTALLFOLDER">
-      <Files Include="..\publish\win-x64\**">
-        <SourceDir>..\publish\win-x64</SourceDir>
+      <Files Include="..\..\publish\win-x64\**">
         <Exclude Files="manifests\**" />
         <Exclude Files="licenses\**" />
       </Files>
@@ -64,11 +63,11 @@
     <ComponentGroup Id="ManifestFiles" Directory="INSTALLFOLDER.Manifests">
       <File Id="ModelManifestFile"
             Name="model.json"
-            Source="..\publish\win-x64\manifests\model.json"
+            Source="publish\win-x64\manifests\model.json"
             KeyPath="yes" />
       <File Id="ReleaseManifestFile"
             Name="release.json"
-            Source="..\publish\win-x64\manifests\release.json"
+            Source="publish\win-x64\manifests\release.json"
             KeyPath="yes" />
     </ComponentGroup>
   </Fragment>
@@ -81,7 +80,7 @@
     <ComponentGroup Id="LicenseFiles" Directory="INSTALLFOLDER.Licenses">
       <File Id="ThirdPartyNotices"
             Name="THIRD-PARTY-NOTICES.txt"
-            Source="..\..\licenses\THIRD-PARTY-NOTICES.txt"
+            Source="licenses\THIRD-PARTY-NOTICES.txt"
             KeyPath="yes" />
     </ComponentGroup>
   </Fragment>

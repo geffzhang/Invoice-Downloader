@@ -17,6 +17,12 @@
         return { settings, accounts };
     }
 
+    function needsInitialSetup({ settings, accounts }) {
+        return !String(settings.companyName || "").trim()
+            || !String(settings.lastOutputDirectory || "").trim()
+            || !(accounts.items || []).some((account) => String(account.emailAddress || "").trim());
+    }
+
     function saveAccount(rpcClient, account, draft) {
         return rpcClient.call("account.save", {
             account: draft,
@@ -53,6 +59,7 @@
 
     return {
         load,
+        needsInitialSetup,
         saveAccount,
         saveSettings,
         setSecret,

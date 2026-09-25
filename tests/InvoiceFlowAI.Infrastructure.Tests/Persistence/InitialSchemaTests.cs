@@ -128,7 +128,9 @@ public sealed class InitialSchemaTests : IClassFixture<SqliteTestFixture>
             "20260923_InitialSchema",
             "20260924_AddMailboxDefaultMailbox",
             "20260925003448_PersistArchivePaths",
-            "20260925120000_AddUserSettingsCompanyAndOutputDirectory");
+            "20260925120000_AddUserSettingsCompanyAndOutputDirectory",
+            "20260925130000_AddArchivedArtifactSourceFileName",
+            "20260925133000_AddLegacyArchiveInventory");
     }
 
     [Fact]

@@ -30,6 +30,34 @@ public sealed class DirectInvoiceArtifactSelectorTests
     }
 
     [Fact]
+    public void Shared_artifact_kind_fixtures_match_direct_selector_contract()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "direct-artifact-selection.json");
+        var fixtures = System.Text.Json.JsonSerializer.Deserialize<DirectSelectionFixtureSet>(
+            File.ReadAllText(fixturePath),
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidDataException("Direct artifact selection fixtures are empty.");
+
+        foreach (var fixture in fixtures.Cases)
+        {
+            var captures = fixture.Artifacts.Select(item => Artifact(
+                Enum.Parse<RecoveredArtifactKind>(item.Kind, ignoreCase: true), item.Fields)).ToArray();
+            if (fixture.ExpectedFailure.Length > 0)
+            {
+                var act = () => DirectInvoiceArtifactSelector.Select(fixture.ExpectedFields, captures);
+                act.Should().Throw<UrlRecoveryException>()
+                    .Which.ReasonCode.Should().Be(fixture.ExpectedFailure, fixture.CaseId);
+                continue;
+            }
+
+            var result = DirectInvoiceArtifactSelector.Select(fixture.ExpectedFields, captures);
+            result.SelectedArtifactIndex.Should().Be(fixture.ExpectedSelectedIndex, fixture.CaseId);
+            result.SelectedArtifact!.Kind.ToString().Should().Be(fixture.ExpectedSelectedKind, fixture.CaseId);
+            result.SelectedArtifact.MatchReasonCode.Should().Be(fixture.ExpectedMatchReason, fixture.CaseId);
+        }
+    }
+
+    [Fact]
     public void Allows_only_one_xml_without_conflicting_expected_fields()
     {
         var xml = Artifact(RecoveredArtifactKind.Xml, "seller", "Acme Ltd");
@@ -101,12 +129,31 @@ public sealed class DirectInvoiceArtifactSelectorTests
     }
 
     private static CapturedUrlArtifact Artifact(RecoveredArtifactKind kind, string fieldName, string fieldValue)
+        => Artifact(kind, new Dictionary<string, string> { [fieldName] = fieldValue });
+
+    private static CapturedUrlArtifact Artifact(RecoveredArtifactKind kind, IReadOnlyDictionary<string, string> fields)
     {
-        var bytes = kind == RecoveredArtifactKind.Pdf
-            ? Encoding.ASCII.GetBytes("%PDF-1.7 fixture")
-            : Encoding.UTF8.GetBytes("<?xml version=\"1.0\"?><invoice />");
+        var bytes = kind switch
+        {
+            RecoveredArtifactKind.Pdf => Encoding.ASCII.GetBytes("%PDF-1.7 fixture"),
+            RecoveredArtifactKind.Xml => Encoding.UTF8.GetBytes("<?xml version=\"1.0\"?><invoice />"),
+            _ => Encoding.ASCII.GetBytes("synthetic-ofd"),
+        };
         return new CapturedUrlArtifact(kind, kind == RecoveredArtifactKind.Pdf ? "application/pdf" : "application/xml",
             bytes, 0, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), null,
-            new Dictionary<string, string> { [fieldName] = fieldValue }, null, "CAPTURED");
+            fields, null, "CAPTURED");
     }
+
+    private sealed record DirectSelectionFixtureSet(IReadOnlyList<DirectSelectionFixture> Cases);
+
+    private sealed record DirectSelectionFixture(
+        string CaseId,
+        IReadOnlyDictionary<string, string> ExpectedFields,
+        IReadOnlyList<DirectSelectionArtifact> Artifacts,
+        int? ExpectedSelectedIndex,
+        string ExpectedSelectedKind,
+        string ExpectedMatchReason,
+        string ExpectedFailure);
+
+    private sealed record DirectSelectionArtifact(string Kind, IReadOnlyDictionary<string, string> Fields);
 }

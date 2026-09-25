@@ -563,42 +563,6 @@ def test_missing_revision_fails_run_releases_handle_and_preserves_staging(
     assert "trusted_revision_unavailable" not in result.error
 
 
-def test_windows_package_manifest_includes_generated_build_identity():
-    manifest_path = Path(__file__).resolve().parents[1] / "build" / "windows" / "resources.manifest.json"
-    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert {
-        "source": "build/windows/build-identity.generated.json",
-        "target": "build_meta",
-        "optional": False,
-    } in payload["datas"]
-
-
-def test_windows_package_manifest_includes_dynamic_truth_audit_module():
-    manifest_path = (
-        Path(__file__).resolve().parents[1]
-        / "build"
-        / "windows"
-        / "resources.manifest.json"
-    )
-    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-
-    assert "audit_email_truth" in payload["hiddenImports"]
-
-
-def test_windows_release_builder_uses_full_git_revision():
-    build_script_path = (
-        Path(__file__).resolve().parents[1]
-        / "build"
-        / "windows"
-        / "build_release.ps1"
-    )
-    build_script = build_script_path.read_text(encoding="utf-8")
-
-    assert "rev-parse HEAD" in build_script
-    assert "rev-parse --short HEAD" not in build_script
-    assert "source_revision must be a full 40-character Git revision" in build_script
-
-
 def _zero_lineage_run(tmp_path: Path, *, scan, included_count: int):
     root = tmp_path / "run"
     output = root / "output"

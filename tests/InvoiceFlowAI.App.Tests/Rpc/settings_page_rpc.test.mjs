@@ -34,6 +34,18 @@ test("loads settings and mailbox accounts through typed RPC", async () => {
     assert.deepEqual(rpc.calls.map(({ method }) => method), ["settings.get", "account.list"]);
 });
 
+test("opens initial setup only while required persisted settings are incomplete", () => {
+    const configured = {
+        settings: { companyName: "Buyer", lastOutputDirectory: "C:/Invoices" },
+        accounts: { items: [{ emailAddress: "buyer@qq.com" }] },
+    };
+
+    assert.equal(settingsRpc.needsInitialSetup({ settings: {}, accounts: { items: [] } }), true);
+    assert.equal(settingsRpc.needsInitialSetup({ ...configured, settings: { companyName: "Buyer" } }), true);
+    assert.equal(settingsRpc.needsInitialSetup({ ...configured, accounts: { items: [] } }), true);
+    assert.equal(settingsRpc.needsInitialSetup(configured), false);
+});
+
 test("saves revisioned non-secret settings and mailbox account", async () => {
     const rpc = createRpcClient();
     await settingsRpc.saveAccount(rpc, null, {
