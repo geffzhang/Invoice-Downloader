@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FluentAssertions;
 using InvoiceFlowAI.Application.Mail;
 using InvoiceFlowAI.Application.Persistence;
@@ -6,6 +7,7 @@ using InvoiceFlowAI.Contracts.Accounts;
 using InvoiceFlowAI.Contracts.Errors;
 using InvoiceFlowAI.Contracts.Rpc;
 using InvoiceFlowAI.Contracts.Settings;
+using InvoiceFlowAI.Domain.Runs;
 using Xunit;
 
 namespace InvoiceFlowAI.Application.Tests.Runs;
@@ -105,6 +107,76 @@ public sealed class DesktopRunServiceTests
         terminal.ErrorCode.Should().Be(RpcErrorCodes.RunNotCancellable);
     }
 
+    [Fact]
+    public async Task Progress_projects_durable_metrics_safe_logs_and_stop_state()
+    {
+        var fixture = new ServiceFixture();
+        fixture.Lifecycle.Seed(new RunStateSnapshot(
+            "run-progress", RunLifecycleState.Running, "extract-documents", null, 3, null,
+            DateTimeOffset.Parse("2026-09-25T10:00:00Z")));
+        fixture.Events.Seed(
+            new StoredRunEventRecord("run-progress", 1, "run.started", "{\"stage\":\"initializing\"}", DateTimeOffset.Parse("2026-09-25T10:00:00Z"), null),
+            new StoredRunEventRecord("run-progress", 2, "run.progress", "{\"stage\":\"extract-documents\",\"completed\":3,\"total\":8,\"percent\":38,\"stats\":{\"emails\":4,\"invoices\":2,\"errors\":1},\"lastError\":\"OCR_FAILED\",\"quotaExhausted\":true,\"quotaMessage\":\"Provider quota exhausted.\"}", DateTimeOffset.Parse("2026-09-25T10:00:02Z"), null),
+            new StoredRunEventRecord("run-progress", 3, "run.candidate", "{\"status\":\"ManualReview\",\"reasonCode\":\"OCR_FAILED\",\"credential\":\"SECRET_FIXTURE\"}", DateTimeOffset.Parse("2026-09-25T10:00:03Z"), null));
+
+        var progress = await fixture.Service.GetProgressAsync("run-progress", CancellationToken.None);
+
+        progress.RunState.Should().Be(RunState.Running);
+        progress.Progress.Should().Be(38);
+        progress.StatusText.Should().Be("extract-documents");
+        progress.Stats.Should().BeEquivalentTo(new RunProgressStats(4, 2, 1));
+        progress.LastError.Should().Be("OCR_FAILED");
+        progress.QuotaExhausted.Should().BeTrue();
+        progress.QuotaMessage.Should().Be("Provider quota exhausted.");
+        progress.StopRequested.Should().BeTrue();
+        progress.Logs.Should().HaveCount(3);
+        progress.Logs.Select(log => log.TimestampUtc).Should().BeInAscendingOrder();
+        string.Join(" ", progress.Logs.Select(log => log.Message)).Should().NotContain("SECRET_FIXTURE");
+    }
+
+    [Fact]
+    public async Task Progress_keeps_only_the_latest_hundred_safe_event_logs()
+    {
+        var fixture = new ServiceFixture();
+        fixture.Lifecycle.Seed(new RunStateSnapshot("run-many-events", RunLifecycleState.Running,
+            "processing", null, 150, null, null));
+        fixture.Events.Seed(Enumerable.Range(1, 150).Select(sequence => new StoredRunEventRecord(
+            "run-many-events",
+            sequence,
+            "run.progress",
+            JsonSerializer.Serialize(new RunProgressPayload("processing", sequence, 150, sequence * 100 / 150)),
+            DateTimeOffset.UnixEpoch.AddSeconds(sequence),
+            null)).ToArray());
+
+        var progress = await fixture.Service.GetProgressAsync("run-many-events", CancellationToken.None);
+
+        progress.Progress.Should().Be(99);
+        progress.Logs.Should().HaveCount(100);
+        progress.Logs.Select(log => log.TimestampUtc).Should().BeInAscendingOrder();
+        progress.Logs[0].TimestampUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(51));
+    }
+
+    [Fact]
+    public async Task Terminal_progress_uses_persisted_summary_and_safe_failure_reason()
+    {
+        var fixture = new ServiceFixture();
+        var summary = new RunSummary("run-terminal", RunTerminalStatus.PartialSuccess, "RUN_PARTIAL",
+            2, 1, 1, 1, 2, 0, 1, 0, 0,
+            new Dictionary<string, int> { ["OCR_FAILED"] = 3 }, null, null,
+            DateTimeOffset.UtcNow, false, Array.Empty<RunFailure>());
+        fixture.Lifecycle.Seed(new RunStateSnapshot("run-terminal", RunLifecycleState.PartialSuccess,
+            "lifecycle", "RUN_PARTIAL", 0, summary.CompletedAtUtc, null, summary));
+
+        var progress = await fixture.Service.GetProgressAsync("run-terminal", CancellationToken.None);
+
+        progress.RunState.Should().Be(RunState.Completed);
+        progress.Progress.Should().Be(100);
+        progress.Stats.Should().BeEquivalentTo(new RunProgressStats(0, 8, 5));
+        progress.LastError.Should().Be("OCR_FAILED");
+        progress.QuotaExhausted.Should().BeTrue();
+        progress.QuotaMessage.Should().Be("Provider quota exhausted.");
+    }
+
     private static RunStartRequest NewRequest(string runId) => new(
         runId,
         "account-1",
@@ -117,6 +189,7 @@ public sealed class DesktopRunServiceTests
     private sealed class ServiceFixture
     {
         public FakeLifecycleStore Lifecycle { get; } = new();
+        public FakeEventReplayStore Events { get; } = new();
         public ActiveRunRegistry Registry { get; } = new();
         public FakeExecutor Executor { get; } = new();
         public FakeExecutorLease ExecutorLease { get; }
@@ -135,9 +208,27 @@ public sealed class DesktopRunServiceTests
                     false, "default", 1, "fingerprint", DateTimeOffset.UtcNow, "Example Co", Path.GetTempPath())),
                 new FakeUnitOfWorkFactory(),
                 Lifecycle,
+                Events,
                 Registry,
                 new FakeExecutorLeaseFactory(ExecutorLease),
                 TimeProvider.System);
+        }
+    }
+
+    private sealed class FakeEventReplayStore : IEventReplayStore
+    {
+        private readonly List<StoredRunEventRecord> _events = [];
+
+        public void Seed(params StoredRunEventRecord[] events) => _events.AddRange(events);
+
+        public Task AppendAsync(StoredRunEventRecord record, IUnitOfWork transaction, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<EventReplayResultRecord> ReadSinceAsync(string runId, long afterSequence, int limit, CancellationToken cancellationToken)
+        {
+            var events = _events.Where(item => item.RunId == runId && item.EventSequence > afterSequence)
+                .OrderBy(item => item.EventSequence).Take(limit).ToArray();
+            return Task.FromResult(new EventReplayResultRecord(events, events.LastOrDefault()?.EventSequence ?? afterSequence, false));
         }
     }
 

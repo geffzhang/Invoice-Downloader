@@ -1,0 +1,17 @@
+{
+  "cases": [
+    {
+      "caseId": "mailbox-message-and-source-order",
+      "messages": ["uid-1", "uid-2"],
+      "attachments": [
+        { "uid": "uid-1", "fileName": "first.pdf" },
+        { "uid": "uid-2", "fileName": "second.pdf" }
+      ],
+      "urlCandidates": [
+        { "uid": "uid-1", "sequence": 1 }
+      ],
+      "expectedCandidateNames": ["first.pdf", "invoice-url.pdf", "second.pdf"],
+      "expectedSequences": [0, 1, 2]
+    }
+  ]
+}

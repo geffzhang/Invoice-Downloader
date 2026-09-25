@@ -1,0 +1,68 @@
+{
+  "cases": [
+    {
+      "caseId": "chinatax-direct-xml",
+      "url": "https://dppt.beijing.chinatax.gov.cn/kpfw/fpjfzz/v1/exportdzfpwjewm?Fphm=12345678901234567890&Wjgs=xml",
+      "subject": "发票号码：12345678901234567890",
+      "body": "开票日期：2026-09-24 请下载附件",
+      "expectedFamily": "chinatax_direct_invoice",
+      "expectedFields": { "invoice_number": "12345678901234567890", "invoice_date": "2026-09-24", "preferred_kind": "xml" }
+    },
+    {
+      "caseId": "bwjf-signed-pdf",
+      "url": "https://fp.bwjf.cn/downsigninvoice?Fphm=22345678901234567890&Wjgs=pdf",
+      "subject": "发票号码：22345678901234567890",
+      "body": "开票日期：2026-09-24",
+      "expectedFamily": "bwjf_signed_invoice",
+      "expectedFields": { "invoice_number": "22345678901234567890", "invoice_date": "2026-09-24", "preferred_kind": "pdf" }
+    },
+    {
+      "caseId": "fpyun-direct-ofd",
+      "url": "https://sdapi.fpyun.com.cn/invoice/qd/download/getinvoicefile?Fphm=32345678901234567890&Wjgs=ofd",
+      "subject": "",
+      "body": "",
+      "expectedFamily": "fpyun_direct_invoice",
+      "expectedFields": { "invoice_number": "32345678901234567890", "preferred_kind": "ofd" }
+    },
+    {
+      "caseId": "nuonuo-scan-short-link",
+      "url": "https://nnfp.jss.com.cn/scan-invoice/printqrcode?Fphm=42345678901234567890&Wjgs=xml",
+      "subject": "",
+      "body": "",
+      "expectedFamily": "nuonuo_scan_invoice",
+      "expectedFields": { "invoice_number": "42345678901234567890", "preferred_kind": "xml" }
+    },
+    {
+      "caseId": "pdd-direct-pdf",
+      "url": "https://files.pdd-fapiao.com/invoice/fixture/pdf/invoice.pdf?Fphm=52345678901234567890",
+      "subject": "",
+      "body": "",
+      "expectedFamily": "pdd_direct_invoice",
+      "expectedFields": { "invoice_number": "52345678901234567890", "preferred_kind": "pdf" }
+    },
+    {
+      "caseId": "jdcloud-direct-xml",
+      "url": "https://eicore-invoice-fixture.s3.cn-north-1.jdcloud-oss.com/digital-invoice/fixture.xml?Fphm=62345678901234567890",
+      "subject": "",
+      "body": "",
+      "expectedFamily": "jdcloud_direct_invoice",
+      "expectedFields": { "invoice_number": "62345678901234567890", "preferred_kind": "xml" }
+    },
+    {
+      "caseId": "kpbyd-direct-ofd",
+      "url": "https://etd.kpbyd.com/hub/files/download?fileCode=fixture_ofd&Fphm=72345678901234567890",
+      "subject": "",
+      "body": "",
+      "expectedFamily": "kpbyd_direct_invoice",
+      "expectedFields": { "invoice_number": "72345678901234567890", "preferred_kind": "ofd" }
+    },
+    {
+      "caseId": "baiwang-body-fields",
+      "url": "https://pis.baiwang.com/previewinvoice?fileCode=fixture_pdf",
+      "subject": "电子发票下载",
+      "body": "Synthetic Seller为您开具了电子发票 发票号码：82345678901234567890 开票日期：2026-09-24 发票金额：123.45",
+      "expectedFamily": "baiwang",
+      "expectedFields": { "seller": "Synthetic Seller", "invoice_number": "82345678901234567890", "invoice_date": "2026-09-24", "amount": "123.45" }
+    }
+  ]
+}

@@ -37,6 +37,19 @@
       "expectedAmbiguityCount": 0
     },
     {
+      "caseId": "ride-global-assignment-is-deterministic-and-single-use",
+      "family": "ride",
+      "invoices": [
+        { "id": "ride-invoice-preferred", "amount": 100.00, "businessDate": "2026-06-01", "provider": "didi", "merchantTokens": [], "sourceMessageUid": "shared-uid" },
+        { "id": "ride-invoice-lower-score", "amount": 100.40, "businessDate": "2026-06-01", "provider": "didi", "merchantTokens": [], "sourceMessageUid": "other-uid" }
+      ],
+      "companions": [
+        { "id": "ride-itinerary-shared", "amount": 103.00, "businessDate": "2026-06-01", "provider": "didi", "merchantTokens": [], "sourceMessageUid": "shared-uid" }
+      ],
+      "expectedPairs": [["ride-invoice-preferred", "ride-itinerary-shared"]],
+      "expectedAmbiguityCount": 0
+    },
+    {
       "caseId": "equal-score-membership-is-ambiguous",
       "family": "hotel",
       "invoices": [

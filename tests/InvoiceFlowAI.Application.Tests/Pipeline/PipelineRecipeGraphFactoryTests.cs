@@ -37,8 +37,8 @@ public sealed class PipelineRecipeGraphFactoryTests
         await using var provider = services.BuildServiceProvider();
         var factory = provider.GetRequiredService<PipelineRunFactory>();
         await using var run = await factory.CreateAsync(CreateRecipe(), CancellationToken.None);
-        run.Executor.Graph.NodeCount.Should().Be(18);
-        run.Executor.Graph.ConnectionCount.Should().Be(17);
+        run.Executor.Graph.NodeCount.Should().Be(19);
+        run.Executor.Graph.ConnectionCount.Should().Be(18);
 
         run.Submit(new RunInput(
             "run-42",
@@ -61,7 +61,7 @@ public sealed class PipelineRecipeGraphFactoryTests
             new[]
             {
                 "ValidateRequestNode", "ScanMailboxNode", "CollectCandidatesNode", "RecoverUrlsNode",
-                "ExtractDocumentsNode", "PairArtifactsNode", "ArchiveDocumentsNode", "ExportReportNode",
+                "MailboxScanCaptureNode", "ExtractDocumentsNode", "PairArtifactsNode", "ArchiveDocumentsNode", "ExportReportNode",
             });
     }
 

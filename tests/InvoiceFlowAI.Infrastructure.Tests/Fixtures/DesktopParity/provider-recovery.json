@@ -1,0 +1,19 @@
+{
+  "cases": [
+    {
+      "caseId": "baiwang-matched-xml-selects-related-pdf-and-rejects-wrapper",
+      "expectedFields": { "invoice_number": "12345678901234567890" },
+      "captures": [
+        { "kind": "Pdf", "sourceUrlOrdinal": 0, "fields": {}, "captureReason": "BAIWANG_WRAPPER_DETECTED" },
+        { "kind": "Xml", "sourceUrlOrdinal": 1, "fields": { "invoice_number": "12345678901234567890" }, "captureReason": "CAPTURED" },
+        { "kind": "Pdf", "sourceUrlOrdinal": 1, "fields": {}, "captureReason": "CAPTURED" },
+        { "kind": "Pdf", "sourceUrlOrdinal": 2, "fields": { "invoice_number": "99999999999999999999" }, "captureReason": "CAPTURED" }
+      ],
+      "expectedSelectedIndex": 2,
+      "expectedSelectedKind": "Pdf",
+      "expectedSourceUrlOrdinal": 1,
+      "expectedMatchReason": "xml_then_pdf_same_source",
+      "expectedWrapperMatch": false
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using FluentAssertions;
 using InvoiceFlowAI.Application.Archive;
 using InvoiceFlowAI.Application.Pairing;
@@ -244,6 +245,58 @@ public sealed class DocumentArchivingStageTests
         }
     }
 
+    [Fact]
+    public async Task Archive_status_golden_fixtures_match_routing_and_safe_failure_codes()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "archive-routing.json");
+        var fixtures = JsonSerializer.Deserialize<ArchiveRoutingFixtureSet>(File.ReadAllText(fixturePath), JsonOptions)
+            ?? throw new InvalidDataException("Archive routing parity fixtures are empty.");
+
+        foreach (var fixture in fixtures.Cases)
+        {
+            var source = fixture.SourceAvailable ? CreateSource($"{fixture.CaseId}.pdf", "synthetic archive bytes") : string.Empty;
+            try
+            {
+                var stage = CreateStage(out var coordinator, out _, out _);
+                var result = NewResult(fixture.CaseId, source, InvoiceDocumentType.AirTicket,
+                    Enum.Parse<CandidateStatus>(fixture.Status, ignoreCase: true));
+                if (fixture.ReasonCode is not null)
+                {
+                    result = result with
+                    {
+                        Failure = new CandidateFailure(fixture.ReasonCode, FailureScope.Candidate,
+                            FailureCategory.Validation, Retryable: false, SafeMessage: "Synthetic review case."),
+                    };
+                }
+
+                var batch = await stage.ExecuteAsync(
+                    new ArchiveStageRequest(fixture.CaseId, TempRoot, NewBatch(result)), CancellationToken.None);
+
+                batch.Artifacts.Should().HaveCount(fixture.ExpectedArtifactCount, fixture.CaseId);
+                if (fixture.ExpectedState is null)
+                {
+                    batch.Artifacts.Should().BeEmpty(fixture.CaseId);
+                }
+                else
+                {
+                    batch.Artifacts.Select(outcome => outcome.State.ToString())
+                        .Should().OnlyContain(state => state == fixture.ExpectedState, fixture.CaseId);
+                }
+                if (fixture.ExpectedPathSegment is not null)
+                {
+                    batch.Artifacts.Should().OnlyContain(outcome =>
+                        outcome.RelativePath!.Contains($"/{fixture.ExpectedPathSegment}/", StringComparison.Ordinal), fixture.CaseId);
+                }
+                coordinator.Requests.Should().HaveCount(fixture.ExpectedArtifactCount, fixture.CaseId);
+                batch.Results.Single().Failure?.ReasonCode.Should().Be(fixture.ExpectedFailureCode, fixture.CaseId);
+            }
+            finally
+            {
+                DeleteSource(source);
+            }
+        }
+    }
+
     private static DocumentArchivingStage CreateStage(
         out RecordingCoordinator coordinator,
         out RecordingPairingStore pairStore,
@@ -312,6 +365,20 @@ public sealed class DocumentArchivingStageTests
     }
 
     private static string TempRoot => Path.Combine(Path.GetTempPath(), $"invoice-flow-output-{Guid.NewGuid():N}");
+
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    private sealed record ArchiveRoutingFixtureSet(IReadOnlyList<ArchiveRoutingCase> Cases);
+
+    private sealed record ArchiveRoutingCase(
+        string CaseId,
+        string Status,
+        bool SourceAvailable,
+        string? ReasonCode,
+        int ExpectedArtifactCount,
+        string? ExpectedPathSegment,
+        string? ExpectedState,
+        string? ExpectedFailureCode);
 
     private sealed class HashingFileSystem : IArchiveFileSystem
     {

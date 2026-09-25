@@ -5,4 +5,8 @@ public sealed record RunProgressPayload(
     string Stage,
     int Completed,
     int Total,
-    int Percent);
+    int Percent,
+    RunProgressStats? Stats = null,
+    string? LastError = null,
+    bool QuotaExhausted = false,
+    string? QuotaMessage = null);
