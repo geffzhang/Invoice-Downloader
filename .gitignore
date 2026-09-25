@@ -63,3 +63,4 @@ Thumbs.db
 # Local worktree metadata
 .claude/worktrees/
 .gstack/
+/publish

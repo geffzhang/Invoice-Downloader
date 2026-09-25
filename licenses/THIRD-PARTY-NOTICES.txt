@@ -45,9 +45,16 @@ MailKit 4.18.0
 Sdcb.SimdPaddleOCR 1.4.2
 ------------------------------------------------------------------------
   Copyright (c) Sdcb and contributors.
-  Licensed under the MIT License.
-  Bundled OCR model weights are redistributed under their respective
-  upstream licenses (see manifests/model.json for hashes).
+  Licensed under the Apache License, Version 2.0.
+
+------------------------------------------------------------------------
+Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny 1.0.0
+------------------------------------------------------------------------
+  Copyright and model attribution as distributed by Sdcb and PaddleOCR.
+  Licensed under the Apache License, Version 2.0.
+  The package embeds PP-OCRv6 Tiny DET/REC, text-orientation CLS, and
+  dictionary assets in Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll.
+  The shipped model assembly SHA-256 is recorded in manifests/model.json.
 
 ------------------------------------------------------------------------
 PDFiumCore 155.0.8057

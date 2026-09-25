@@ -9,6 +9,7 @@ using InvoiceFlowAI.Infrastructure.Persistence.Stores;
 using InvoiceFlowAI.Infrastructure.Ai;
 using InvoiceFlowAI.Infrastructure.Ocr;
 using InvoiceFlowAI.Infrastructure.Parsers;
+using InvoiceFlowAI.Infrastructure.Pipeline;
 using InvoiceFlowAI.Infrastructure.Url;
 using InvoiceFlowAI.Infrastructure.Url.Worker;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,6 +23,10 @@ public static class InvoiceFlowAIInfrastructureServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         services.AddScoped<IChatCompletionService>(serviceProvider =>
             new DeepSeekChatCompletionService(serviceProvider.GetRequiredService<ISecretStore>()));
+        services.AddScoped<InvoiceNormalizer>();
+        services.AddScoped<IInvoiceAcceptanceService, InvoiceAcceptanceService>();
+        services.AddScoped<AiAuthenticationFailureGate>();
+        services.AddScoped<IInvoiceFieldExtractor, InvoiceFieldExtractor>();
         services.AddScoped<ICandidateIdentityKeyProvider, SecretStoreCandidateIdentityKeyProvider>();
         services.AddScoped<ICandidateIdentityFactory, CandidateIdentityFactory>();
         services.AddScoped<ICandidateHistoryReader, EfCandidateHistoryReader>();
@@ -37,6 +42,12 @@ public static class InvoiceFlowAIInfrastructureServiceCollectionExtensions
         services.AddScoped<IParser, CitsGbtParser>();
         services.AddScoped<IParser, ForeignInvoiceParser>();
         services.AddScoped<IParserRegistry>(serviceProvider => new ParserRegistry(serviceProvider.GetServices<IParser>()));
+        services.AddScoped<IDocumentExtractionStage>(serviceProvider => new DocumentExtractionStage(
+            serviceProvider.GetServices<IParser>(),
+            serviceProvider.GetRequiredService<IInvoiceFieldExtractor>(),
+            serviceProvider.GetRequiredService<InvoiceNormalizer>(),
+            serviceProvider.GetRequiredService<IInvoiceAcceptanceService>(),
+            serviceProvider.GetRequiredService<InvoiceExtractionRules>()));
         services.AddSingleton<IPdfPageRenderer, PdfiumPageRenderer>();
         services.AddSingleton<IOcrFallback, SimdPaddleOcrFallback>();
         services.AddUrlRecoveryStrategies();

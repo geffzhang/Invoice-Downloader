@@ -19,6 +19,7 @@
     <PackageReference Include="PdfPig" />
     <PackageReference Include="SkiaSharp" />
     <PackageReference Include="Sdcb.SimdPaddleOCR" />
+    <PackageReference Include="Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny" />
     <PackageReference Include="Microsoft.Extensions.AI" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
     <PackageReference Include="Microsoft.Playwright" />

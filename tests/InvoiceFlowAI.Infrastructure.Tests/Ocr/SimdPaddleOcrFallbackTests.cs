@@ -1,7 +1,11 @@
 using FluentAssertions;
 using InvoiceFlowAI.Application.Extraction;
+using InvoiceFlowAI.Contracts.Release;
+using InvoiceFlowAI.Contracts.Serialization;
 using InvoiceFlowAI.Domain.Candidates;
 using InvoiceFlowAI.Infrastructure.Ocr;
+using System.Security.Cryptography;
+using System.Text.Json;
 using Xunit;
 
 namespace InvoiceFlowAI.Infrastructure.Tests.Ocr;
@@ -14,6 +18,14 @@ public sealed class SimdPaddleOcrFallbackTests
         var options = new SimdPaddleOcrOptions("det", "cls", "rec", "dict", MaximumConcurrency: 8);
 
         options.EffectiveMaximumConcurrency.Should().Be(2);
+    }
+
+    [Fact]
+    public void Production_default_uses_the_embedded_chinese_v6_tiny_model_bundle()
+    {
+        var options = SimdPaddleOcrOptions.FromBaseDirectory(AppContext.BaseDirectory);
+
+        options.UseEmbeddedModels.Should().BeTrue();
     }
 
     [Fact]
@@ -62,5 +74,62 @@ public sealed class SimdPaddleOcrFallbackTests
             DocumentIdentity.Create("ocr-3"), [page], CancellationToken.None));
 
         exception.Message.Should().NotContain(modelSentinel);
+    }
+
+    [Fact]
+    public async Task Recognize_rejects_missing_embedded_model_manifest_with_stable_error()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"invoiceflow-model-manifest-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        await using var fallback = new SimdPaddleOcrFallback(new SimdPaddleOcrOptions(
+            "det", "cls", "rec", "dict", UseEmbeddedModels: true,
+            ModelManifestPath: Path.Combine(root, "missing-model.json")));
+        var page = new RenderedPage(1, 1, 1, "image/png", new byte[] { 137, 80, 78, 71 });
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => fallback.RecognizeAsync(
+            DocumentIdentity.Create("ocr-manifest"), [page], CancellationToken.None));
+
+        exception.Message.Should().Be("OCR model manifest is unavailable or invalid.");
+        Directory.Delete(root, recursive: true);
+    }
+
+    [Fact]
+    public async Task Embedded_chinese_v6_tiny_bundle_initializes_offline_before_image_decode()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"invoiceflow-model-smoke-{Guid.NewGuid():N}");
+        var modelRoot = Path.Combine(root, "models");
+        var modelDirectory = Path.Combine(modelRoot, "ocr");
+        var manifestDirectory = Path.Combine(root, "manifests");
+        Directory.CreateDirectory(modelDirectory);
+        Directory.CreateDirectory(manifestDirectory);
+        try
+        {
+            var packageAssembly = AppDomain.CurrentDomain.GetAssemblies()
+                .Single(assembly => assembly.GetName().Name == "Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny");
+            const string relativePath = "ocr/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll";
+            var stagedAssembly = Path.Combine(modelRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            File.Copy(packageAssembly.Location, stagedAssembly);
+            var bytes = await File.ReadAllBytesAsync(stagedAssembly);
+            var asset = new ModelManifestAsset(relativePath, bytes.LongLength,
+                Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), "model-bundle", "1.0.0", null);
+            var manifest = new ModelManifest(1, "Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny", [asset], "fixture");
+            var manifestPath = Path.Combine(manifestDirectory, "model.json");
+            await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, InvoiceJsonOptions.Strict));
+            await using var fallback = new SimdPaddleOcrFallback(new SimdPaddleOcrOptions(
+                "det", "cls", "rec", "dict", UseEmbeddedModels: true, ModelManifestPath: manifestPath));
+
+            var act = () => fallback.RecognizeAsync(
+                DocumentIdentity.Create("offline-model-smoke"),
+                [new RenderedPage(1, 1, 1, "image/png", new byte[] { 137, 80, 78, 71 })],
+                CancellationToken.None);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(act);
+
+            exception.Message.Should().Be("OCR recognition failed.");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 }
