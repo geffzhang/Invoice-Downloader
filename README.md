@@ -316,6 +316,6 @@ flowchart TD
 
 Made with ❤️ by **EthanYoQ / Yong Qi**
 
-[报告问题](https://github.com/EthanYoQ/Invoice-Downloader/issues) · [智谱AI开放平台](https://open.bigmodel.cn/) · [163邮箱帮助](https://help.mail.163.com/) · [QQ邮箱帮助](https://service.mail.qq.com/detail/0/339)
+[报告问题](https://github.com/EthanYoQ/Invoice-Downloader/issues) · [DeepSeek 开放平台](https://platform.deepseek.com/) · [163邮箱帮助](https://help.mail.163.com/) · [QQ邮箱帮助](https://service.mail.qq.com/detail/0/339)
 
 </div>

@@ -316,6 +316,6 @@ Licensed under the [Apache License 2.0](LICENSE). Commercial use, modification, 
 
 Made with ❤️ by **EthanYoQ / Yong Qi**
 
-[Report Issues](https://github.com/EthanYoQ/Invoice-Downloader/issues) · [Zhipu AI Open Platform](https://open.bigmodel.cn/) · [163 Mailbox Help](https://help.mail.163.com/) · [QQ Mailbox Help](https://service.mail.qq.com/detail/0/339)
+[Report Issues](https://github.com/EthanYoQ/Invoice-Downloader/issues) · [DeepSeek Open Platform](https://platform.deepseek.com/) · [163 Mailbox Help](https://help.mail.163.com/) · [QQ Mailbox Help](https://service.mail.qq.com/detail/0/339)
 
 </div>
