@@ -22,7 +22,8 @@ public sealed record ArchiveCommitRequest(
     string SourceFilePath,
     string FinalFilePath,
     string FinalRelativePath,
-    string FileName);
+    string FileName,
+    string? SourceFileName = null);
 
 public sealed record ArchiveCommitResult(
     string ArtifactId,
@@ -77,9 +78,26 @@ public sealed record ArchiveRecoveryDecision(
     string? ReasonCode,
     string? SafeMessage);
 
+public sealed record LegacyArchiveRecoveryDecision(
+    string InventoryId,
+    LegacyArchiveInventoryState ResolvedState,
+    string? ReasonCode);
+
+public sealed record ArchiveStartupRecoveryResult(
+    IReadOnlyList<ArchiveRecoveryDecision> Artifacts,
+    IReadOnlyList<LegacyArchiveRecoveryDecision> LegacyItems);
+
 public interface IArchiveRecoveryService
 {
     Task<IReadOnlyList<ArchiveRecoveryEntry>> ScanAsync(string runId, CancellationToken cancellationToken);
 
     Task<ArchiveRecoveryDecision> ResolveAsync(ArchiveRecoveryEntry entry, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<LegacyArchiveRecoveryDecision>> ReconcileLegacyAsync(
+        string outputRoot,
+        CancellationToken cancellationToken);
+
+    Task<ArchiveStartupRecoveryResult> ReconcileBeforeRunAsync(
+        string outputRoot,
+        CancellationToken cancellationToken);
 }

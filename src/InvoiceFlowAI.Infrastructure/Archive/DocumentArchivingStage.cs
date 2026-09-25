@@ -390,7 +390,8 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
             result.ArtifactPath,
             finalPath,
             relativePath,
-            Path.GetFileName(relativePath)), cancellationToken).ConfigureAwait(false);
+                Path.GetFileName(relativePath),
+                SourceName(result)), cancellationToken).ConfigureAwait(false);
         var outcome = new ArchiveArtifactOutcome(
             result.Candidate.DocumentId.Value,
             commit.State,

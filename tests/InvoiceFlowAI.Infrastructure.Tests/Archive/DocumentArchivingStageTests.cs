@@ -420,6 +420,9 @@ public sealed class DocumentArchivingStageTests
 
     private sealed class HashingFileSystem : IArchiveFileSystem
     {
+        public Task<IReadOnlyList<string>> EnumerateDirectChildFilesAsync(string directoryPath, CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>([]);
+
         public async Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken)
         {
             var bytes = await File.ReadAllBytesAsync(path, cancellationToken);

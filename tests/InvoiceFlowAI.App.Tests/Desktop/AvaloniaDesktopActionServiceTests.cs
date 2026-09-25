@@ -239,6 +239,10 @@ public sealed class AvaloniaDesktopActionServiceTests
             IUnitOfWork transaction, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListByRunAsync(string runId, CancellationToken cancellationToken)
             => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(Artifacts.Where(item => item.Key.RunId == runId).ToArray());
+        public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListCommittedForInventoryAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(Artifacts.Where(item => item.State == ArchiveArtifactState.Committed).ToArray());
+        public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListRecoverableAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(Artifacts.Where(item => item.State is ArchiveArtifactState.Prepared or ArchiveArtifactState.RecoveryRequired).ToArray());
     }
 
     private sealed class FakeReportApplicationService(string reportPath, string contentHash) : IReportApplicationService

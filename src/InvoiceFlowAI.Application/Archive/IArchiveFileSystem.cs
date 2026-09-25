@@ -7,6 +7,8 @@ namespace InvoiceFlowAI.Application.Archive;
 
 public interface IArchiveFileSystem
 {
+    Task<IReadOnlyList<string>> EnumerateDirectChildFilesAsync(string directoryPath, CancellationToken cancellationToken);
+
     Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken);
 
     Task<bool> FileExistsAsync(string path, CancellationToken cancellationToken);

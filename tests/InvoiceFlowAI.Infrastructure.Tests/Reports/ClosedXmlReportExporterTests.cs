@@ -257,6 +257,9 @@ public sealed class ClosedXmlReportExporterTests
 
     private sealed class NopFileSystem : InvoiceFlowAI.Application.Archive.IArchiveFileSystem
     {
+        public Task<IReadOnlyList<string>> EnumerateDirectChildFilesAsync(string directoryPath, CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>([]);
+
         public Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<bool> FileExistsAsync(string path, CancellationToken cancellationToken) => Task.FromResult(File.Exists(path));
         public Task<string> CopyToSiblingTempAsync(string sourcePath, string finalFilePath, CancellationToken cancellationToken) => throw new NotImplementedException();

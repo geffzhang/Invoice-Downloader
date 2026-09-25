@@ -76,6 +76,10 @@ namespace InvoiceFlowAI.Infrastructure.Persistence.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("SourceFileName")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("TempFilePath")
                         .HasMaxLength(1024)
                         .HasColumnType("TEXT");
@@ -411,6 +415,65 @@ namespace InvoiceFlowAI.Infrastructure.Persistence.Migrations
                     b.HasKey("ImportId");
 
                     b.ToTable("LegacyImportState", (string)null);
+                });
+
+            modelBuilder.Entity("InvoiceFlowAI.Infrastructure.Persistence.Entities.LegacyArchiveInventoryRow", b =>
+                {
+                    b.Property<string>("InventoryId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RootKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OriginalRelativePath")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CurrentRelativePath")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceFileName")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ContentHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReviewRunId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("InventoryId");
+
+                    b.HasIndex("RootKey", "OriginalRelativePath", "ContentHash")
+                        .IsUnique();
+
+                    b.HasIndex("RootKey", "State");
+
+                    b.ToTable("LegacyArchiveInventory", (string)null);
                 });
 
             modelBuilder.Entity("InvoiceFlowAI.Infrastructure.Persistence.Entities.MailboxAccountRow", b =>

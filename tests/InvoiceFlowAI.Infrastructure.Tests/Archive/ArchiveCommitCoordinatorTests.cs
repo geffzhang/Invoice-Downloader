@@ -196,6 +196,9 @@ public sealed class ArchiveCommitCoordinatorTests
         public string? TamperFinalPath { get; set; }
         public bool ThrowOnMove { get; set; }
 
+        public Task<IReadOnlyList<string>> EnumerateDirectChildFilesAsync(string directoryPath, CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>([]);
+
         public async Task WriteTempAsync(string path, string content)
         {
             _files[path] = System.Text.Encoding.UTF8.GetBytes(content);
@@ -304,6 +307,12 @@ public sealed class ArchiveCommitCoordinatorTests
 
         public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListByRunAsync(string runId, CancellationToken cancellationToken)
             => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(_byRun.Where(s => s.Key.RunId == runId).ToList());
+
+        public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListCommittedForInventoryAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(_byHash.Values.Where(s => s.State == ArchiveArtifactState.Committed).ToArray());
+
+        public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListRecoverableAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(_byHash.Values.Where(s => s.State is ArchiveArtifactState.Prepared or ArchiveArtifactState.RecoveryRequired).ToArray());
     }
 
     private sealed class FakeAuditStore : IAuditEventStore

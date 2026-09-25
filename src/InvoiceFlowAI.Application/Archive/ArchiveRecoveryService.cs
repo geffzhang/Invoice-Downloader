@@ -16,19 +16,22 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
     private readonly IArchiveFileSystem _fileSystem;
     private readonly IAuditEventStore _auditStore;
     private readonly IPairingStore? _pairingStore;
+    private readonly ILegacyArchiveInventoryStore? _legacyInventoryStore;
 
     public ArchiveRecoveryService(
         IUnitOfWorkFactory uowFactory,
         IArchiveArtifactStore store,
         IArchiveFileSystem fileSystem,
         IAuditEventStore auditStore,
-        IPairingStore? pairingStore = null)
+        IPairingStore? pairingStore = null,
+        ILegacyArchiveInventoryStore? legacyInventoryStore = null)
     {
         _uowFactory = uowFactory ?? throw new ArgumentNullException(nameof(uowFactory));
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
         _auditStore = auditStore ?? throw new ArgumentNullException(nameof(auditStore));
         _pairingStore = pairingStore;
+        _legacyInventoryStore = legacyInventoryStore;
     }
 
     public async Task<IReadOnlyList<ArchiveRecoveryEntry>> ScanAsync(string runId, CancellationToken cancellationToken)
@@ -125,6 +128,104 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
             "Unknown recovery state — leaving row as RecoveryRequired.", cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<IReadOnlyList<LegacyArchiveRecoveryDecision>> ReconcileLegacyAsync(
+        string outputRoot,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputRoot);
+        var store = _legacyInventoryStore
+            ?? throw new InvalidOperationException("Legacy archive inventory recovery is not configured.");
+        var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputRoot));
+        var rootKey = ArchiveInventoryPath.CreateRootKey(fullRoot);
+        var entries = await store.ListByRootAsync(rootKey, cancellationToken).ConfigureAwait(false);
+        var decisions = new List<LegacyArchiveRecoveryDecision>();
+
+        foreach (var entry in entries.Where(item => item.State == LegacyArchiveInventoryState.RecoveryRequired))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var hasCurrent = ArchiveInventoryPath.TryResolveUnderRoot(fullRoot, entry.CurrentRelativePath, out var currentPath)
+                && await _fileSystem.FileExistsAsync(currentPath, cancellationToken).ConfigureAwait(false);
+            var hasOriginal = ArchiveInventoryPath.TryResolveUnderRoot(fullRoot, entry.OriginalRelativePath, out var originalPath)
+                && await _fileSystem.FileExistsAsync(originalPath, cancellationToken).ConfigureAwait(false);
+
+            if (hasCurrent && hasOriginal && !PathsEqual(currentPath, originalPath))
+            {
+                decisions.Add(new LegacyArchiveRecoveryDecision(
+                    entry.InventoryId, LegacyArchiveInventoryState.RecoveryRequired, "LEGACY_ARCHIVE_LOCATION_AMBIGUOUS"));
+                continue;
+            }
+
+            var evidencePath = hasCurrent ? currentPath : hasOriginal ? originalPath : null;
+            if (evidencePath is null)
+            {
+                decisions.Add(new LegacyArchiveRecoveryDecision(
+                    entry.InventoryId, LegacyArchiveInventoryState.RecoveryRequired, "LEGACY_ARCHIVE_FILE_MISSING"));
+                continue;
+            }
+
+            var actualHash = await _fileSystem.ComputeSha256Async(evidencePath, cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(actualHash, entry.ContentHash, StringComparison.OrdinalIgnoreCase))
+            {
+                decisions.Add(new LegacyArchiveRecoveryDecision(
+                    entry.InventoryId, LegacyArchiveInventoryState.RecoveryRequired, "LEGACY_ARCHIVE_HASH_MISMATCH"));
+                continue;
+            }
+
+            var resolvedState = hasCurrent && !PathsEqual(currentPath, originalPath)
+                ? LegacyArchiveInventoryState.Review
+                : LegacyArchiveInventoryState.Discovered;
+            var relativePath = resolvedState == LegacyArchiveInventoryState.Review
+                ? entry.CurrentRelativePath
+                : entry.OriginalRelativePath;
+            await using var transaction = await _uowFactory
+                .BeginAsync(TransactionPurpose.ArchiveCommit, cancellationToken).ConfigureAwait(false);
+            await store.UpdateLocationAsync(
+                entry.InventoryId,
+                relativePath,
+                resolvedState,
+                resolvedState == LegacyArchiveInventoryState.Review ? entry.ReviewRunId : null,
+                transaction,
+                cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            decisions.Add(new LegacyArchiveRecoveryDecision(entry.InventoryId, resolvedState, null));
+        }
+
+        return decisions;
+    }
+
+    public async Task<ArchiveStartupRecoveryResult> ReconcileBeforeRunAsync(
+        string outputRoot,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputRoot);
+        var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputRoot));
+        var recoverable = await _store.ListRecoverableAsync(cancellationToken).ConfigureAwait(false);
+        var artifactDecisions = new List<ArchiveRecoveryDecision>();
+        foreach (var artifact in recoverable.OrderBy(item => item.Key.RunId, StringComparer.Ordinal)
+                     .ThenBy(item => item.ArtifactId, StringComparer.Ordinal))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!ArchiveInventoryPath.TryResolveUnderRoot(fullRoot, artifact.FinalFilePath ?? artifact.FinalRelativePath, out var finalPath)
+                || !ArchiveInventoryPath.TryResolveUnderRoot(fullRoot, artifact.TempFilePath, out var tempPath))
+            {
+                continue;
+            }
+
+            artifactDecisions.Add(await ResolveAsync(new ArchiveRecoveryEntry(
+                artifact.ArtifactId,
+                artifact.Key,
+                tempPath,
+                artifact.FinalRelativePath,
+                artifact.FileName,
+                artifact.ExpectedContentHash,
+                artifact.State,
+                finalPath), cancellationToken).ConfigureAwait(false));
+        }
+
+        var legacyDecisions = await ReconcileLegacyAsync(fullRoot, cancellationToken).ConfigureAwait(false);
+        return new ArchiveStartupRecoveryResult(artifactDecisions, legacyDecisions);
+    }
+
     private async Task<ArchiveRecoveryDecision> MarkRecoveryAsync(
         ArchiveRecoveryEntry entry,
         string reasonCode,
@@ -147,6 +248,10 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
         await _pairingStore.ReconcileArchiveStateAsync(runId, artifacts, transaction, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    private static bool PathsEqual(string left, string right)
+        => string.Equals(Path.GetFullPath(left), Path.GetFullPath(right),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     private static string Sha256Hex(string value)
     {
