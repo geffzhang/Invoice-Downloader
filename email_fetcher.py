@@ -1339,6 +1339,8 @@ class EmailFetcher:
             attempt["raw_bytes_len"] = len(raw_bytes)
             if not raw_bytes:
                 attempt["error"] = "uid_fetch_no_payload"
+        except MailboxScanError:
+            raise
         except Exception as exc:
             attempt["status"] = "EXCEPTION"
             attempt["error"] = type(exc).__name__
@@ -2505,6 +2507,8 @@ class EmailFetcher:
                     else:
                         email_diag["terminal_status"] = "no_attachment_parts_detected"
 
+                except MailboxScanError:
+                    raise
                 except Exception as exc:
                     exception_type, exception_fingerprint = _safe_exception_identity(exc)
                     uid_hash = hashlib.sha256(e_id).hexdigest()[:12]

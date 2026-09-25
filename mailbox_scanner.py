@@ -4,7 +4,9 @@ import datetime as dt
 import email
 import email.utils
 import hashlib
+import imaplib
 import re
+import ssl
 from dataclasses import dataclass
 from typing import Callable, Iterable
 from zoneinfo import ZoneInfo
@@ -238,7 +240,7 @@ class MailboxScanner:
                     return response
                 last_error_type = "fetch_status"
             except Exception as exc:
-                if isinstance(exc, (TimeoutError, ConnectionError)):
+                if isinstance(exc, (TimeoutError, ConnectionError, imaplib.IMAP4.abort, ssl.SSLEOFError, ssl.SSLZeroReturnError)):
                     raise MailboxScanError("IMAP FETCH connection failed") from exc
                 last_error_type = type(exc).__name__
         self._emit(

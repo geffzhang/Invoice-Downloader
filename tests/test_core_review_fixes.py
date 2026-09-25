@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+import errno
 import json
 import shutil
 import socket
@@ -341,6 +342,7 @@ def test_downloaded_url_passes_preflight_archive_and_cleanup_with_pdf_intact(tmp
     assert report.manual_count == 1
     retained = Path(report.outcomes[0].archive_path)
     assert retained.read_bytes() == downloaded.read_bytes()
+    assert api._preserved_staging_dir is None
     api._cleanup_temp_folders(staging_dir=staging)
     assert retained.read_bytes() == b"%PDF-1.4\nsynthetic receipt"
     assert not staging.exists()
@@ -390,7 +392,37 @@ def test_downloaded_url_manual_copy_failure_cannot_complete(tmp_path, monkeypatc
     assert not list((output / "待人工复核").glob("*.json"))
 
 
-def test_manual_copy_failure_keeps_downloaded_original_after_desktop_finalizer(tmp_path, monkeypatch):
+def test_later_manual_copy_success_does_not_clear_earlier_original_protection(tmp_path, monkeypatch):
+    api = InvoiceAppAPI()
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    first = staging / "first.pdf"
+    second = staging / "second.pdf"
+    first.write_bytes(b"first original")
+    second.write_bytes(b"second original")
+    api._active_staging_path = lambda: str(staging)
+    output = tmp_path / "output"
+    original_copy2 = shutil.copy2
+    attempts = 0
+
+    def fail_first_copy(source, target):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("first copy failed")
+        return original_copy2(source, target)
+
+    monkeypatch.setattr(shutil, "copy2", fail_first_copy)
+    with pytest.raises(OSError, match="first copy failed"):
+        api._send_to_manual_check(str(output), str(first), "NEEDS_REVIEW", is_url=True)
+    copied = api._send_to_manual_check(str(output), str(second), "NEEDS_REVIEW", is_url=True)
+    assert Path(copied).read_bytes() == b"second original"
+    api._cleanup_temp_folders(staging_dir=staging)
+    assert first.read_bytes() == b"first original"
+
+
+@pytest.mark.parametrize("failure", ["copy2", "mkdir_eacces", "mkdir_enospc", "success"])
+def test_manual_review_copy_outcome_survives_desktop_finalizer(tmp_path, monkeypatch, failure):
     from run_coordinator import RunCoordinator, RunRequest
     from run_lifecycle import RunState
 
@@ -420,9 +452,26 @@ def test_manual_copy_failure_keeps_downloaded_original_after_desktop_finalizer(t
     deps.archive = lambda outcomes, _request: ArchiveService(
         archive_operation=adapter.archive_operation
     ).archive(outcomes, output)
-    monkeypatch.setattr(shutil, "copy2", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("copy failed")))
+    if failure == "copy2":
+        monkeypatch.setattr(shutil, "copy2", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("copy failed")))
+    elif failure != "success":
+        original_makedirs = app_api.os.makedirs
+        error_number = errno.EACCES if failure == "mkdir_eacces" else errno.ENOSPC
+
+        def fail_manual_dir(path, *args, **kwargs):
+            if Path(path) == output / "待人工复核":
+                raise OSError(error_number, "manual review directory unavailable")
+            return original_makedirs(path, *args, **kwargs)
+
+        monkeypatch.setattr(app_api.os, "makedirs", fail_manual_dir)
 
     result = RunCoordinator(api._run_lifecycle, api._run_state_store, deps).run(request, handle=handle)
+    if failure == "success":
+        assert result.state is RunState.COMPLETED
+        assert not source.exists()
+        assert api._preserved_staging_dir is None
+        assert next((output / "待人工复核").glob("*.pdf")).read_bytes() == original
+        return
     assert result.state is RunState.FAILED
     assert result.reason_code == "ARCHIVE_INCOMPLETE"
     assert source.read_bytes() == original

@@ -3087,7 +3087,24 @@ class InvoiceAppAPI:
         import uuid
 
         manual_dir = os.path.join(save_path, MANUAL_REVIEW_FOLDER)
-        os.makedirs(manual_dir, exist_ok=True)
+        has_local_file = bool(source_path and os.path.isfile(source_path))
+        is_url_placeholder = is_url and not has_local_file
+        if is_url_placeholder and not str(source_path).startswith(("http://", "https://")):
+            raise FileNotFoundError("Downloaded manual-review artifact is missing")
+        if is_url and has_local_file:
+            staging = os.path.realpath(self._active_staging_path())
+            source = os.path.realpath(source_path)
+            if os.path.commonpath((staging, source)) != staging:
+                raise ValueError("Downloaded manual-review artifact is outside run staging")
+            was_preserved = self._preserved_staging_dir == staging
+            self._preserved_staging_dir = staging
+
+        try:
+            os.makedirs(manual_dir, exist_ok=True)
+        except OSError:
+            if is_url and has_local_file:
+                self._append_log("错误", f"人工复核副本保存失败，下载原件已保留：{source}", "text-error")
+            raise
         runtime_metadata = dict(metadata or {})
         safe_metadata = self._sanitize_url_persistence_payload(runtime_metadata)
 
@@ -3099,16 +3116,6 @@ class InvoiceAppAPI:
                 target_path = os.path.join(manual_dir, filename_local)
                 filename = filename_local
             return target_path
-
-        has_local_file = bool(source_path and os.path.isfile(source_path))
-        is_url_placeholder = is_url and not has_local_file
-        if is_url_placeholder and not str(source_path).startswith(("http://", "https://")):
-            raise FileNotFoundError("Downloaded manual-review artifact is missing")
-        if is_url and has_local_file:
-            staging = os.path.realpath(self._active_staging_path())
-            source = os.path.realpath(source_path)
-            if os.path.commonpath((staging, source)) != staging:
-                raise ValueError("Downloaded manual-review artifact is outside run staging")
 
         if is_url_placeholder:
             url_evidence = build_url_evidence(source_path, reason)
@@ -3131,7 +3138,6 @@ class InvoiceAppAPI:
                 shutil.copy2(source_path, target_path)
             except OSError:
                 if is_url and has_local_file:
-                    self._preserved_staging_dir = staging
                     self._append_log(
                         "错误",
                         f"人工复核副本保存失败，下载原件已保留：{source}",
@@ -3143,6 +3149,8 @@ class InvoiceAppAPI:
                     except OSError:
                         pass
                 raise
+            if is_url and has_local_file and not was_preserved:
+                self._preserved_staging_dir = None
 
         sidecar = f"{target_path}.json"
         payload = {
