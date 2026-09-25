@@ -72,6 +72,8 @@ public static class InvoiceFlowAIInfrastructureServiceCollectionExtensions
                 relativePath)));
         services.AddScoped<IReportApplicationService, ReportApplicationService>();
         services.AddScoped<IArchiveArtifactStore, EfArchiveArtifactStore>();
+        services.AddScoped<ILegacyArchiveInventoryStore, EfLegacyArchiveInventoryStore>();
+        services.AddScoped<ICwtArchiveInventory, CwtArchiveInventory>();
         services.AddSingleton<IArchiveFileSystem, PhysicalArchiveFileSystem>();
         services.AddSingleton<IArchiveNamingPolicy, ArchiveNamingPolicy>();
         services.AddScoped<IArchiveCommitCoordinator, ArchiveCommitCoordinator>();

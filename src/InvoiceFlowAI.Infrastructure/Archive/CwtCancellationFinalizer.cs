@@ -17,6 +17,8 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
         TimeSpan.FromMilliseconds(100));
     private readonly IArchiveNamingPolicy _namingPolicy;
     private readonly IArchiveArtifactStore _artifactStore;
+    private readonly ILegacyArchiveInventoryStore _legacyStore;
+    private readonly ICwtArchiveInventory _inventory;
     private readonly IArchiveFileSystem _fileSystem;
     private readonly IManualReviewItemStore _reviewStore;
     private readonly IUnitOfWorkFactory _unitOfWorkFactory;
@@ -30,10 +32,14 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
         IManualReviewItemStore reviewStore,
         IUnitOfWorkFactory unitOfWorkFactory,
         IPairingStore pairingStore,
-        IAuditEventStore auditStore)
+        IAuditEventStore auditStore,
+        ILegacyArchiveInventoryStore legacyStore,
+        ICwtArchiveInventory inventory)
     {
         _namingPolicy = namingPolicy ?? throw new ArgumentNullException(nameof(namingPolicy));
         _artifactStore = artifactStore ?? throw new ArgumentNullException(nameof(artifactStore));
+        _legacyStore = legacyStore ?? throw new ArgumentNullException(nameof(legacyStore));
+        _inventory = inventory ?? throw new ArgumentNullException(nameof(inventory));
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
         _reviewStore = reviewStore ?? throw new ArgumentNullException(nameof(reviewStore));
         _unitOfWorkFactory = unitOfWorkFactory ?? throw new ArgumentNullException(nameof(unitOfWorkFactory));
@@ -53,47 +59,37 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
         cancellationToken.ThrowIfCancellationRequested();
 
         var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputRoot));
-        var snapshots = await _artifactStore.ListByRunAsync(runId, cancellationToken).ConfigureAwait(false);
-        var reconciliationSnapshots = snapshots.ToList();
+        var inventoryItems = await _inventory.ListAsync(fullRoot, cancellationToken).ConfigureAwait(false);
         var cancellationCandidates = candidates
             .Where(IsCwtCancellation)
             .OrderBy(static candidate => candidate.Candidate.Sequence)
             .ToArray();
-        var confirmationCandidates = candidates
-            .OrderBy(static candidate => candidate.Candidate.Sequence)
-            .ToArray();
-        var matchedDocuments = new HashSet<string>(StringComparer.Ordinal);
+        var matchedInventoryIds = new HashSet<string>(StringComparer.Ordinal);
         var matches = new List<string>();
         var updatedPaths = new Dictionary<string, string>(StringComparer.Ordinal);
         var failures = new List<CwtCancellationFinalizationFailure>();
+        var affectedArtifactRuns = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var cancellation in cancellationCandidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!TryExtractPersonName(SourceName(cancellation), out var personName)) continue;
 
-            foreach (var confirmation in confirmationCandidates)
+            foreach (var item in inventoryItems)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var documentId = confirmation.Candidate.DocumentId.Value;
-                var snapshot = reconciliationSnapshots
-                    .Where(snapshot => snapshot.State == ArchiveArtifactState.Committed
-                        && snapshot.Key.DocumentId == documentId
-                        && snapshot.Key.ProcessingRevision == confirmation.Candidate.ProcessingRevision
-                        && !snapshot.FinalRelativePath.Replace('\\', '/').Contains("/review/", StringComparison.Ordinal))
-                    .OrderBy(snapshot => snapshot.Key.Role, StringComparer.Ordinal)
-                    .ThenBy(snapshot => snapshot.ArtifactId, StringComparer.Ordinal)
-                    .FirstOrDefault();
-                if (matchedDocuments.Contains(documentId)
-                    || documentId == cancellation.Candidate.DocumentId.Value
-                    || !IsNameMatch(personName, SourceName(confirmation))
-                    || snapshot is null)
+                var matchId = item.DocumentId ?? item.InventoryId;
+                if (matchedInventoryIds.Contains(item.InventoryId)
+                    || item.DocumentId == cancellation.Candidate.DocumentId.Value
+                    || !IsNameMatch(personName, item.SourceFileName)
+                    || item.ArtifactState is not null && item.ArtifactState != ArchiveArtifactState.Committed
+                    || item.LegacyState is not null && item.LegacyState != LegacyArchiveInventoryState.Discovered)
                 {
                     continue;
                 }
 
                 var failure = await MoveToReviewAsync(
-                    fullRoot, runId, cancellation, confirmation, snapshot, cancellationToken).ConfigureAwait(false);
+                    fullRoot, runId, cancellation, item, cancellationToken).ConfigureAwait(false);
                 if (failure is not null)
                 {
                     failures.Add(failure);
@@ -101,30 +97,23 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
                 }
 
                 var relativePath = _namingPolicy.BuildReviewRelativePath(
-                    runId, documentId, SourceName(confirmation), "CWT_CANCELLATION_MATCH");
-                var finalPath = ResolveUnderRoot(fullRoot, relativePath);
-                var updatedSnapshot = snapshot with
-                {
-                    FinalRelativePath = relativePath,
-                    FinalFilePath = finalPath,
-                    FileName = Path.GetFileName(finalPath),
-                };
-                var snapshotIndex = reconciliationSnapshots.FindIndex(item => item.ArtifactId == snapshot.ArtifactId);
-                if (snapshotIndex >= 0) reconciliationSnapshots[snapshotIndex] = updatedSnapshot;
-                matchedDocuments.Add(documentId);
-                matches.Add(documentId);
-                updatedPaths[documentId] = relativePath;
+                    runId, matchId, item.SourceFileName, "CWT_CANCELLATION_MATCH");
+                matchedInventoryIds.Add(item.InventoryId);
+                matches.Add(matchId);
+                updatedPaths[matchId] = relativePath;
+                if (item.ArtifactRunId is not null) affectedArtifactRuns.Add(item.ArtifactRunId);
             }
         }
 
-        if (matches.Count > 0)
+        foreach (var artifactRunId in affectedArtifactRuns.OrderBy(value => value, StringComparer.Ordinal))
         {
             try
             {
+                var runSnapshots = await _artifactStore.ListByRunAsync(artifactRunId, cancellationToken).ConfigureAwait(false);
                 await using var transaction = await _unitOfWorkFactory
                     .BeginAsync(TransactionPurpose.ArchiveCommit, cancellationToken).ConfigureAwait(false);
                 await _pairingStore.ReconcileArchiveStateAsync(
-                    runId, reconciliationSnapshots, transaction, cancellationToken).ConfigureAwait(false);
+                    artifactRunId, runSnapshots, transaction, cancellationToken).ConfigureAwait(false);
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -134,7 +123,7 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
             catch
             {
                 failures.Add(new CwtCancellationFinalizationFailure(
-                    matches[^1], "CWT_PAIRING_RECONCILIATION_FAILED", "The matched archive requires pairing reconciliation."));
+                    artifactRunId, "CWT_PAIRING_RECONCILIATION_FAILED", "The matched archive requires pairing reconciliation."));
             }
         }
 
@@ -145,14 +134,13 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
         string outputRoot,
         string runId,
         CandidateProcessResult cancellation,
-        CandidateProcessResult confirmation,
-        ArchiveArtifactSnapshot snapshot,
+        CwtArchiveInventoryItem item,
         CancellationToken cancellationToken)
     {
-        var documentId = confirmation.Candidate.DocumentId.Value;
-        var sourcePath = ResolveUnderRoot(outputRoot, snapshot.FinalRelativePath);
+        var subjectId = item.DocumentId ?? item.InventoryId;
+        var sourcePath = ResolveUnderRoot(outputRoot, item.RelativePath);
         var relativePath = _namingPolicy.BuildReviewRelativePath(
-            runId, documentId, SourceName(confirmation), "CWT_CANCELLATION_MATCH");
+            runId, subjectId, item.SourceFileName, "CWT_CANCELLATION_MATCH");
         var targetPath = ResolveUnderRoot(outputRoot, relativePath);
         var sidecarPath = $"{targetPath}.json";
         var moved = false;
@@ -162,14 +150,14 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
             if (await _fileSystem.FileExistsAsync(targetPath, cancellationToken).ConfigureAwait(false))
             {
                 return new CwtCancellationFinalizationFailure(
-                    documentId, "CWT_MATCH_DESTINATION_EXISTS", "The matched hotel confirmation destination already exists.");
+                    subjectId, "CWT_MATCH_DESTINATION_EXISTS", "The matched hotel confirmation destination already exists.");
             }
 
             await _fileSystem.AtomicMoveAsync(sourcePath, targetPath, cancellationToken).ConfigureAwait(false);
             moved = true;
             await _fileSystem.FlushToDiskAsync(targetPath, cancellationToken).ConfigureAwait(false);
             var actualHash = await _fileSystem.ComputeSha256Async(targetPath, cancellationToken).ConfigureAwait(false);
-            if (!string.Equals(actualHash, snapshot.ExpectedContentHash, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(actualHash, item.ContentHash, StringComparison.OrdinalIgnoreCase))
             {
                 throw new CwtFinalizationException("CWT_MATCH_HASH_MISMATCH", "The matched hotel confirmation failed its content hash check.");
             }
@@ -178,35 +166,49 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
             var sidecar = JsonSerializer.Serialize(new CwtRelationshipSidecar(
                 "CWT_CANCELLATION_MATCH",
                 cancellation.Candidate.DocumentId.Value,
-                documentId,
-                snapshot.ArtifactId,
-                snapshot.ExpectedContentHash,
+                item.InventoryId,
+                item.DocumentId,
+                item.ArtifactId,
+                item.ContentHash,
                 capturedAtUtc));
             await _fileSystem.WriteTextAtomicAsync(sidecarPath, sidecar, cancellationToken).ConfigureAwait(false);
             sidecarWritten = true;
 
             await using var transaction = await _unitOfWorkFactory
                 .BeginAsync(TransactionPurpose.ArchiveCommit, cancellationToken).ConfigureAwait(false);
-            await _artifactStore.UpdateCommittedLocationAsync(
-                snapshot.ArtifactId, relativePath, targetPath, Path.GetFileName(targetPath), transaction, cancellationToken).ConfigureAwait(false);
-            await _reviewStore.UpsertOpenAsync(
-                runId, documentId, confirmation.Candidate.ProcessingRevision,
-                "CWT_CANCELLATION_MATCH", transaction, cancellationToken).ConfigureAwait(false);
+            if (item.Kind == CwtArchiveInventoryItemKind.ArchivedArtifact)
+            {
+                await _artifactStore.UpdateCommittedLocationAsync(
+                    item.ArtifactId!, relativePath, targetPath, Path.GetFileName(targetPath), transaction, cancellationToken).ConfigureAwait(false);
+                await _reviewStore.UpsertOpenAsync(
+                    item.ArtifactRunId ?? runId, item.DocumentId!, item.ProcessingRevision!.Value,
+                    "CWT_CANCELLATION_MATCH", transaction, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await _legacyStore.UpdateLocationAsync(
+                    item.InventoryId, relativePath, LegacyArchiveInventoryState.Review, runId,
+                    transaction, cancellationToken).ConfigureAwait(false);
+            }
             var payload = JsonSerializer.Serialize(new
             {
                 cancellationDocumentId = cancellation.Candidate.DocumentId.Value,
-                confirmationDocumentId = documentId,
-                artifactId = snapshot.ArtifactId,
+                inventoryId = item.InventoryId,
+                documentId = item.DocumentId,
+                artifactId = item.ArtifactId,
+                contentHash = item.ContentHash,
+                reason = "CWT_CANCELLATION_MATCH",
+                capturedAtUtc,
             });
             await _auditStore.AppendAsync(new AuditEventRecord(
-                $"audit-{runId}-cwt-match-{documentId}",
+                $"audit-{runId}-cwt-match-{item.InventoryId}",
                 runId,
                 0,
                 "archive.cwt_match",
                 "archive",
                 "archive",
-                documentId,
-                confirmation.Candidate.ProcessingRevision,
+                item.DocumentId,
+                item.ProcessingRevision,
                 "CWT_CANCELLATION_MATCH",
                 payload,
                 Sha256Hex(payload),
@@ -218,7 +220,7 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
         {
             var recoveryRequired = await RollbackFileMoveAsync(sourcePath, targetPath, sidecarPath, moved, sidecarWritten).ConfigureAwait(false);
             if (recoveryRequired)
-                await RecordRelocationRecoveryAsync(runId, confirmation, snapshot, relativePath, targetPath).ConfigureAwait(false);
+                await RecordRelocationRecoveryAsync(runId, item, relativePath, targetPath).ConfigureAwait(false);
             throw;
         }
         catch (CwtFinalizationException exception)
@@ -226,21 +228,21 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
             var recoveryRequired = await RollbackFileMoveAsync(sourcePath, targetPath, sidecarPath, moved, sidecarWritten).ConfigureAwait(false);
             if (recoveryRequired)
             {
-                await RecordRelocationRecoveryAsync(runId, confirmation, snapshot, relativePath, targetPath).ConfigureAwait(false);
-                return new CwtCancellationFinalizationFailure(documentId, "CWT_MATCH_RECOVERY_REQUIRED", "The matched archive requires recovery.");
+                await RecordRelocationRecoveryAsync(runId, item, relativePath, targetPath).ConfigureAwait(false);
+                return new CwtCancellationFinalizationFailure(subjectId, "CWT_MATCH_RECOVERY_REQUIRED", "The matched archive requires recovery.");
             }
-            return new CwtCancellationFinalizationFailure(documentId, exception.ReasonCode, exception.Message);
+            return new CwtCancellationFinalizationFailure(subjectId, exception.ReasonCode, exception.Message);
         }
         catch
         {
             var recoveryRequired = await RollbackFileMoveAsync(sourcePath, targetPath, sidecarPath, moved, sidecarWritten).ConfigureAwait(false);
             if (recoveryRequired)
             {
-                await RecordRelocationRecoveryAsync(runId, confirmation, snapshot, relativePath, targetPath).ConfigureAwait(false);
-                return new CwtCancellationFinalizationFailure(documentId, "CWT_MATCH_RECOVERY_REQUIRED", "The matched archive requires recovery.");
+                await RecordRelocationRecoveryAsync(runId, item, relativePath, targetPath).ConfigureAwait(false);
+                return new CwtCancellationFinalizationFailure(subjectId, "CWT_MATCH_RECOVERY_REQUIRED", "The matched archive requires recovery.");
             }
             return new CwtCancellationFinalizationFailure(
-                documentId, "CWT_MATCH_RELOCATION_FAILED", "The matched hotel confirmation could not be moved to manual review.");
+                subjectId, "CWT_MATCH_RELOCATION_FAILED", "The matched hotel confirmation could not be moved to manual review.");
         }
     }
 
@@ -277,25 +279,40 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
 
     private async Task RecordRelocationRecoveryAsync(
         string runId,
-        CandidateProcessResult confirmation,
-        ArchiveArtifactSnapshot snapshot,
+        CwtArchiveInventoryItem item,
         string relativePath,
         string targetPath)
     {
-        var safePayload = JsonSerializer.Serialize(new { artifactId = snapshot.ArtifactId, reason = "CWT_MATCH_RECOVERY_REQUIRED" });
+        var safePayload = JsonSerializer.Serialize(new
+        {
+            inventoryId = item.InventoryId,
+            artifactId = item.ArtifactId,
+            contentHash = item.ContentHash,
+            reason = "CWT_MATCH_RECOVERY_REQUIRED",
+            capturedAtUtc = DateTimeOffset.UtcNow,
+        });
         await using var transaction = await _unitOfWorkFactory
             .BeginAsync(TransactionPurpose.ArchiveCommit, CancellationToken.None).ConfigureAwait(false);
-        await _artifactStore.UpdateCommittedLocationAsync(
-            snapshot.ArtifactId, relativePath, targetPath, Path.GetFileName(targetPath), transaction, CancellationToken.None).ConfigureAwait(false);
-        await _artifactStore.MarkRecoveryRequiredAsync(
-            snapshot.ArtifactId, "CWT_MATCH_RECOVERY_REQUIRED", transaction, CancellationToken.None).ConfigureAwait(false);
-        await _reviewStore.UpsertOpenAsync(
-            runId, confirmation.Candidate.DocumentId.Value, confirmation.Candidate.ProcessingRevision,
-            "CWT_CANCELLATION_MATCH", transaction, CancellationToken.None).ConfigureAwait(false);
+        if (item.Kind == CwtArchiveInventoryItemKind.ArchivedArtifact)
+        {
+            await _artifactStore.UpdateCommittedLocationAsync(
+                item.ArtifactId!, relativePath, targetPath, Path.GetFileName(targetPath), transaction, CancellationToken.None).ConfigureAwait(false);
+            await _artifactStore.MarkRecoveryRequiredAsync(
+                item.ArtifactId!, "CWT_MATCH_RECOVERY_REQUIRED", transaction, CancellationToken.None).ConfigureAwait(false);
+            await _reviewStore.UpsertOpenAsync(
+                item.ArtifactRunId ?? runId, item.DocumentId!, item.ProcessingRevision!.Value,
+                "CWT_CANCELLATION_MATCH", transaction, CancellationToken.None).ConfigureAwait(false);
+        }
+        else
+        {
+            await _legacyStore.UpdateLocationAsync(
+                item.InventoryId, relativePath, LegacyArchiveInventoryState.RecoveryRequired, runId,
+                transaction, CancellationToken.None).ConfigureAwait(false);
+        }
         await _auditStore.AppendAsync(new AuditEventRecord(
-            $"audit-{runId}-cwt-recovery-{snapshot.ArtifactId}", runId, 0,
-            "archive.cwt_recovery_required", "archive", "archive", confirmation.Candidate.DocumentId.Value,
-            confirmation.Candidate.ProcessingRevision, "CWT_MATCH_RECOVERY_REQUIRED", safePayload,
+            $"audit-{runId}-cwt-recovery-{item.InventoryId}", runId, 0,
+            "archive.cwt_recovery_required", "archive", "archive", item.DocumentId,
+            item.ProcessingRevision, "CWT_MATCH_RECOVERY_REQUIRED", safePayload,
             Sha256Hex(safePayload), DateTimeOffset.UtcNow), transaction, CancellationToken.None).ConfigureAwait(false);
         await transaction.CommitAsync(CancellationToken.None).ConfigureAwait(false);
     }
@@ -348,8 +365,9 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
     private sealed record CwtRelationshipSidecar(
         string Reason,
         string CancellationDocumentId,
-        string ConfirmationDocumentId,
-        string ArtifactId,
+        string InventoryId,
+        string? DocumentId,
+        string? ArtifactId,
         string ContentHash,
         DateTimeOffset CapturedAtUtc);
 

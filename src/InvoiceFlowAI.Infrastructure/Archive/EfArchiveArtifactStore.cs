@@ -47,6 +47,7 @@ public sealed class EfArchiveArtifactStore : IArchiveArtifactStore
             TempFilePath = snapshot.TempFilePath,
             FinalFilePath = snapshot.FinalFilePath,
             FileName = snapshot.FileName,
+            SourceFileName = snapshot.SourceFileName,
             ContentHash = snapshot.ExpectedContentHash,
             State = "Prepared",
             AlreadyExisted = false,
@@ -122,10 +123,53 @@ public sealed class EfArchiveArtifactStore : IArchiveArtifactStore
             .Where(a => a.RunId == runId)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
-        return rows.Select(ToSnapshot).ToList();
+        return rows.Select(row => ToSnapshot(row)).ToList();
     }
 
-    private static ArchiveArtifactSnapshot ToSnapshot(ArchivedArtifactRow row) =>
+    public async Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListCommittedForInventoryAsync(CancellationToken cancellationToken)
+    {
+        var rows = await _context.ArchivedArtifacts.AsNoTracking()
+            .Where(artifact => artifact.State == "Committed")
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        if (rows.Count == 0) return [];
+
+        var documentIds = rows.Select(row => row.DocumentId).Distinct().ToArray();
+        var documentNames = await _context.Documents.AsNoTracking()
+            .Where(document => documentIds.Contains(document.DocumentId))
+            .Select(document => new { document.DocumentId, document.SourceFileName })
+            .ToDictionaryAsync(document => document.DocumentId, document => document.SourceFileName, cancellationToken)
+            .ConfigureAwait(false);
+        var revisions = rows.Select(row => new { row.DocumentId, row.ProcessingRevision }).Distinct().ToArray();
+        var invoices = await _context.Invoices.AsNoTracking()
+            .Where(invoice => documentIds.Contains(invoice.DocumentId))
+            .Select(invoice => new { invoice.DocumentId, invoice.ProcessingRevision, invoice.DocumentType })
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        var types = invoices
+            .Where(invoice => revisions.Any(revision => revision.DocumentId == invoice.DocumentId
+                && revision.ProcessingRevision == invoice.ProcessingRevision))
+            .GroupBy(invoice => (invoice.DocumentId, invoice.ProcessingRevision))
+            .ToDictionary(group => group.Key, group => group.First().DocumentType);
+
+        return rows.Select(row =>
+        {
+            documentNames.TryGetValue(row.DocumentId, out var sourceName);
+            types.TryGetValue((row.DocumentId, row.ProcessingRevision), out var documentType);
+            return ToSnapshot(row, row.SourceFileName ?? sourceName, documentType);
+        }).ToArray();
+    }
+
+    public async Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListRecoverableAsync(CancellationToken cancellationToken)
+    {
+        var rows = await _context.ArchivedArtifacts.AsNoTracking()
+            .Where(artifact => artifact.State == "Prepared" || artifact.State == "RecoveryRequired")
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        return rows.Select(row => ToSnapshot(row)).ToArray();
+    }
+
+    private static ArchiveArtifactSnapshot ToSnapshot(
+        ArchivedArtifactRow row,
+        string? sourceFileName = null,
+        string? documentType = null) =>
         new(
             ArtifactId: row.ArtifactId,
             Key: new ArchiveArtifactKey(row.RunId, row.DocumentId, row.ProcessingRevision, row.Role, row.ContentHash),
@@ -136,7 +180,9 @@ public sealed class EfArchiveArtifactStore : IArchiveArtifactStore
             State: ParseState(row.State),
             CreatedAtUtc: row.CreatedAtUtc,
             CommittedAtUtc: row.CommittedAtUtc,
-            FinalFilePath: row.FinalFilePath ?? row.RelativePath);
+            FinalFilePath: row.FinalFilePath ?? row.RelativePath,
+            SourceFileName: sourceFileName ?? row.SourceFileName,
+            DocumentType: documentType);
 
     private static ArchiveArtifactState ParseState(string state) => state switch
     {

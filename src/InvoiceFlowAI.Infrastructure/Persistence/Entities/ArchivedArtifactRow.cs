@@ -17,6 +17,7 @@ public sealed class ArchivedArtifactRow
     public string? TempFilePath { get; set; }
     public string? FinalFilePath { get; set; }
     public string FileName { get; set; } = string.Empty;
+    public string? SourceFileName { get; set; }
     public string ContentHash { get; set; } = string.Empty;
     public string State { get; set; } = "Prepared";
     public bool AlreadyExisted { get; set; }

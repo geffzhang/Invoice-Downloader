@@ -7,6 +7,43 @@ namespace InvoiceFlowAI.Infrastructure.Tests.Archive;
 public sealed class PhysicalArchiveFileSystemTests
 {
     [Fact]
+    public async Task Direct_child_enumeration_excludes_directories_nested_files_and_reparse_points()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"invoiceflow-archive-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var directPath = Path.Combine(root, "hotel.pdf");
+            var nestedDirectory = Path.Combine(root, "nested");
+            Directory.CreateDirectory(nestedDirectory);
+            await File.WriteAllTextAsync(directPath, "direct");
+            await File.WriteAllTextAsync(Path.Combine(nestedDirectory, "nested.pdf"), "nested");
+
+            var linkedPath = Path.Combine(root, "linked-directory");
+            try
+            {
+                Directory.CreateSymbolicLink(linkedPath, nestedDirectory);
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+            {
+            }
+
+            var fileSystem = new PhysicalArchiveFileSystem();
+            var files = await fileSystem.EnumerateDirectChildFilesAsync(root, CancellationToken.None);
+
+            files.Should().ContainSingle().Which.Should().Be(Path.GetFullPath(directPath));
+            files.Should().OnlyContain(path =>
+                string.Equals(Path.GetDirectoryName(path), Path.GetFullPath(root),
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
+            files.Should().NotContain(path => path.Contains("nested", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Sibling_copy_can_be_moved_without_changing_source_bytes()
     {
         var root = Path.Combine(Path.GetTempPath(), $"invoiceflow-archive-{Guid.NewGuid():N}");

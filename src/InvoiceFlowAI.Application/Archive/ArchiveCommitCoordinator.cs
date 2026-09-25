@@ -104,7 +104,8 @@ public sealed class ArchiveCommitCoordinator : IArchiveCommitCoordinator
                 State: ArchiveArtifactState.Prepared,
                 CreatedAtUtc: now,
                 CommittedAtUtc: null,
-                FinalFilePath: request.FinalFilePath);
+                FinalFilePath: request.FinalFilePath,
+                SourceFileName: request.SourceFileName);
 
             await using var txA = await _uowFactory.BeginAsync(TransactionPurpose.ArchivePrepare, cancellationToken).ConfigureAwait(false);
             var current = await _store.FindByKeyAsync(key, cancellationToken).ConfigureAwait(false);

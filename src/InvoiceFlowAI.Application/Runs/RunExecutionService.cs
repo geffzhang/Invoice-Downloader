@@ -1,5 +1,6 @@
 using System.Text.Json;
 using InvoiceFlowAI.Application.Configuration;
+using InvoiceFlowAI.Application.Archive;
 using InvoiceFlowAI.Application.Pipeline;
 using InvoiceFlowAI.Contracts.Rpc;
 using InvoiceFlowAI.Domain.Candidates;
@@ -15,19 +16,22 @@ public sealed class RunExecutionService : IDesktopRunExecutor
     private readonly IRunCoordinator _coordinator;
     private readonly IRunEventPublisher _eventPublisher;
     private readonly TimeProvider _timeProvider;
+    private readonly IArchiveRecoveryService? _archiveRecoveryService;
 
     public RunExecutionService(
         RecipeRegistry recipeRegistry,
         PipelineRunFactory pipelineRunFactory,
         IRunCoordinator coordinator,
         IRunEventPublisher eventPublisher,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IArchiveRecoveryService? archiveRecoveryService = null)
     {
         _recipeRegistry = recipeRegistry ?? throw new ArgumentNullException(nameof(recipeRegistry));
         _pipelineRunFactory = pipelineRunFactory ?? throw new ArgumentNullException(nameof(pipelineRunFactory));
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _eventPublisher = eventPublisher ?? throw new ArgumentNullException(nameof(eventPublisher));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _archiveRecoveryService = archiveRecoveryService;
     }
 
     public async Task ExecuteAsync(RunStartRequest request, CancellationToken cancellationToken)
@@ -45,6 +49,14 @@ public sealed class RunExecutionService : IDesktopRunExecutor
 
         try
         {
+            if (_archiveRecoveryService is not null)
+            {
+                executionStage = "archive-recovery";
+                await _archiveRecoveryService
+                    .ReconcileBeforeRunAsync(request.OutputDirectory, cancellationToken).ConfigureAwait(false);
+            }
+
+            executionStage = "run-started-event";
             await CommitAndPublishAsync(
                 request.RunId,
                 ++eventSequence,

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FluentAssertions;
+using InvoiceFlowAI.Application.Archive;
 using InvoiceFlowAI.Application.Mail;
 using InvoiceFlowAI.Application.Pairing;
 using InvoiceFlowAI.Application.Persistence;
@@ -16,6 +17,36 @@ namespace InvoiceFlowAI.Application.Tests.Runs;
 
 public sealed class RunExecutionServiceTests
 {
+    [Fact]
+    public async Task Archive_recovery_runs_for_output_root_before_run_started_is_committed()
+    {
+        var order = new List<string>();
+        var services = new ServiceCollection();
+        services.AddInvoiceFlowApplication();
+        services.AddSingleton<IMailboxScanner, EmptyMailboxScanner>();
+        services.AddSingleton<ICandidateCollectionStage, EmptyCandidateStage>();
+        services.AddSingleton<IUrlRecoveryStage, PassThroughRecoveryStage>();
+        services.AddSingleton<IDocumentExtractionStage, EmptyExtractionStage>();
+        services.AddSingleton<IArtifactPairingStage, EmptyPairingStage>();
+        services.AddSingleton<IDocumentArchivingStage, EmptyArchiveStage>();
+        services.AddSingleton<IReportExportStage, CompletedReportStage>();
+        await using var provider = services.BuildServiceProvider();
+        var coordinator = new RecordingCoordinator(order);
+        var publisher = new RecordingEventPublisher(order);
+        var recovery = new RecordingArchiveRecoveryService(order);
+        var service = new RunExecutionService(
+            provider.GetRequiredService<InvoiceFlowAI.Application.Configuration.RecipeRegistry>(),
+            provider.GetRequiredService<PipelineRunFactory>(), coordinator, publisher, TimeProvider.System, recovery);
+        var outputRoot = Path.Combine(Path.GetTempPath(), "invoice-flow-output");
+
+        await service.ExecuteAsync(new RunStartRequest(
+            "run-recovery", "account-1", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30),
+            outputRoot, "Example Co", "standard"), CancellationToken.None);
+
+        recovery.OutputRoots.Should().ContainSingle().Which.Should().Be(outputRoot);
+        order.IndexOf("archive-recovery").Should().BeLessThan(order.IndexOf("commit:1"));
+    }
+
     [Fact]
     public async Task Run_publishes_monotonic_progress_with_scanned_email_count()
     {
@@ -342,6 +373,27 @@ public sealed class RunExecutionServiceTests
         {
             order.Add($"publish:{eventSequence}");
             Events.Add((eventName, payload, runId, eventSequence));
+        }
+    }
+
+    private sealed class RecordingArchiveRecoveryService(List<string> order) : IArchiveRecoveryService
+    {
+        public List<string> OutputRoots { get; } = [];
+
+        public Task<IReadOnlyList<ArchiveRecoveryEntry>> ScanAsync(string runId, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<ArchiveRecoveryDecision> ResolveAsync(ArchiveRecoveryEntry entry, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<LegacyArchiveRecoveryDecision>> ReconcileLegacyAsync(string outputRoot, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<ArchiveStartupRecoveryResult> ReconcileBeforeRunAsync(string outputRoot, CancellationToken cancellationToken)
+        {
+            order.Add("archive-recovery");
+            OutputRoots.Add(outputRoot);
+            return Task.FromResult(new ArchiveStartupRecoveryResult([], []));
         }
     }
 }

@@ -104,9 +104,12 @@ public sealed class DocumentArchivingStageIntegrationTests : IClassFixture<Sqlit
             var archiveStore = new EfArchiveArtifactStore(context);
             var pairingStore = new EfPairingStore(context);
             var auditStore = new EfAuditStore(context);
+            var legacyInventoryStore = new EfLegacyArchiveInventoryStore(context);
+            var cwtInventory = new CwtArchiveInventory(archiveStore, legacyInventoryStore, fileSystem, uowFactory);
             var finalizer = new CwtCancellationFinalizer(
                 new ArchiveNamingPolicy(), archiveStore, fileSystem,
-                new EfManualReviewItemStore(context), uowFactory, pairingStore, auditStore);
+                new EfManualReviewItemStore(context), uowFactory, pairingStore, auditStore,
+                legacyInventoryStore, cwtInventory);
             var coordinator = new ArchiveCommitCoordinator(uowFactory, archiveStore, fileSystem, auditStore);
             var stage = new DocumentArchivingStage(
                 new ArchiveNamingPolicy(), coordinator, fileSystem, pairingStore,
@@ -128,6 +131,11 @@ public sealed class DocumentArchivingStageIntegrationTests : IClassFixture<Sqlit
             result.Artifacts.Single(item => item.DocumentId == "cwt-hotel").RelativePath.Should().Contain("/review/");
             await using var queryContext = _fixture.CreateContext();
             var hotelArtifact = await queryContext.ArchivedArtifacts.AsNoTracking().SingleAsync(row => row.DocumentId == "cwt-hotel");
+            var sourceFileName = await queryContext.ArchivedArtifacts.AsNoTracking()
+                .Where(row => row.DocumentId == "cwt-hotel")
+                .Select(row => EF.Property<string?>(row, "SourceFileName"))
+                .SingleAsync();
+            sourceFileName.Should().Be(Path.GetFileName(hotelSource));
             hotelArtifact.State.Should().Be("Committed");
             hotelArtifact.RelativePath.Should().Contain("/review/");
             hotelArtifact.ContentHash.Should().Be(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(hotelContent))).ToLowerInvariant());

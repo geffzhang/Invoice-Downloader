@@ -11,6 +11,45 @@ namespace InvoiceFlowAI.Infrastructure.Archive;
 
 public sealed class PhysicalArchiveFileSystem : IArchiveFileSystem
 {
+    public Task<IReadOnlyList<string>> EnumerateDirectChildFilesAsync(string directoryPath, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(directoryPath);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var rootPath = Path.GetFullPath(directoryPath);
+        if (!Directory.Exists(rootPath))
+        {
+            return Task.FromResult<IReadOnlyList<string>>([]);
+        }
+
+        if ((File.GetAttributes(rootPath) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new IOException("Archive inventory root cannot be a reparse point.");
+        }
+
+        var files = new List<string>();
+        foreach (var entry in Directory.EnumerateFileSystemEntries(rootPath, "*", SearchOption.TopDirectoryOnly))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var fullPath = Path.GetFullPath(entry);
+            if (!string.Equals(Path.GetDirectoryName(fullPath), rootPath,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var attributes = File.GetAttributes(fullPath);
+            if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+            {
+                continue;
+            }
+
+            files.Add(fullPath);
+        }
+
+        return Task.FromResult<IReadOnlyList<string>>(files);
+    }
+
     public async Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken)
     {
         await using var stream = File.OpenRead(path);

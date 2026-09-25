@@ -49,8 +49,10 @@ public sealed class CwtCancellationFinalizerTests
             var pairings = new FakePairingStore();
             var audits = new FakeAuditEventStore();
             var fileSystem = new PhysicalArchiveFileSystem();
+            var inventory = InventoryFor(store.Snapshots);
             var finalizer = new CwtCancellationFinalizer(
-                new ArchiveNamingPolicy(), store, fileSystem, reviews, new FakeUnitOfWorkFactory(), pairings, audits);
+                new ArchiveNamingPolicy(), store, fileSystem, reviews, new FakeUnitOfWorkFactory(), pairings, audits,
+                new FakeLegacyArchiveInventoryStore(), inventory);
             var candidates = new[]
             {
                 Candidate("doc-cancel", "酒店预定取消知会-张三-20260610入住-上海.pdf", InvoiceDocumentType.AccommodationConfirmation,
@@ -108,9 +110,10 @@ public sealed class CwtCancellationFinalizerTests
             var snapshot = Snapshot("artifact-inventory-hotel", "doc-inventory-hotel", relativePath, fullPath,
                 fileName, Hash(content), "standalone");
             var store = new FakeArchiveArtifactStore(snapshot);
+            var inventory = InventoryFor(store.Snapshots);
             var finalizer = new CwtCancellationFinalizer(new ArchiveNamingPolicy(), store,
                 new PhysicalArchiveFileSystem(), new FakeManualReviewItemStore(), new FakeUnitOfWorkFactory(),
-                new FakePairingStore(), new FakeAuditEventStore());
+                new FakePairingStore(), new FakeAuditEventStore(), new FakeLegacyArchiveInventoryStore(), inventory);
             var candidates = new[]
             {
                 Candidate("doc-cancel", "酒店预定取消知会-张三-20260610入住-上海.pdf", InvoiceDocumentType.AccommodationConfirmation,
@@ -146,8 +149,10 @@ public sealed class CwtCancellationFinalizerTests
                 fileName, Hash(content), "standalone");
             var fileSystem = new RollbackFailingArchiveFileSystem();
             var store = new FakeArchiveArtifactStore(snapshot) { ThrowOnLocationUpdate = true };
+            var inventory = InventoryFor(store.Snapshots);
             var finalizer = new CwtCancellationFinalizer(new ArchiveNamingPolicy(), store, fileSystem,
-                new FakeManualReviewItemStore(), new FakeUnitOfWorkFactory(), new FakePairingStore(), new FakeAuditEventStore());
+                new FakeManualReviewItemStore(), new FakeUnitOfWorkFactory(), new FakePairingStore(), new FakeAuditEventStore(),
+                new FakeLegacyArchiveInventoryStore(), inventory);
             var candidates = new[]
             {
                 Candidate("doc-cancel", "酒店预定取消知会-张三-20260610入住-上海.pdf", InvoiceDocumentType.Other,
@@ -165,6 +170,82 @@ public sealed class CwtCancellationFinalizerTests
             File.Exists(sourcePath).Should().BeFalse();
             File.Exists(current.Single().FinalFilePath!).Should().BeTrue();
             File.Exists(current.Single().FinalFilePath + ".json").Should().BeTrue();
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Existing_legacy_review_destination_is_not_overwritten()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"invoice-flow-cwt-collision-{Guid.NewGuid():N}");
+        const string fileName = "20260610_住宿确认单_张三酒店.pdf";
+        const string inventoryId = "a31d15f28eea4ea583174fac3b654adc";
+        var sourcePath = Path.Combine(root, "住宿发票", fileName);
+        var destination = new ArchiveNamingPolicy().BuildReviewRelativePath(
+            "run-cwt", inventoryId, fileName, "CWT_CANCELLATION_MATCH");
+        var targetPath = Path.Combine(root, destination.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+        await File.WriteAllTextAsync(sourcePath, "source bytes");
+        await File.WriteAllTextAsync(targetPath, "pre-existing review bytes");
+        try
+        {
+            var item = LegacyItem(inventoryId, "住宿发票/" + fileName, sourcePath, fileName, Hash("source bytes"));
+            var finalizer = CreateFinalizer(new FakeArchiveArtifactStore(), new FakeCwtArchiveInventory([item]));
+
+            var result = await finalizer.FinalizeAsync(
+                "run-cwt", root,
+                [Cancellation("doc-cancel", "酒店预定取消知会-张三-20260610入住-上海.pdf")],
+                CancellationToken.None);
+
+            result.Matches.Should().BeEmpty();
+            result.Failures.Should().ContainSingle().Which.ReasonCode.Should().Be("CWT_MATCH_DESTINATION_EXISTS");
+            (await File.ReadAllTextAsync(sourcePath)).Should().Be("source bytes");
+            (await File.ReadAllTextAsync(targetPath)).Should().Be("pre-existing review bytes");
+            File.Exists($"{targetPath}.json").Should().BeFalse();
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Same_source_name_from_distinct_paths_gets_distinct_review_destinations()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"invoice-flow-cwt-same-name-{Guid.NewGuid():N}");
+        const string fileName = "20260610_住宿确认单_张三酒店.pdf";
+        const string firstId = "a31d15f28eea4ea583174fac3b654adc";
+        const string secondId = "b42e26a39ffb4fb6942850bd4c765bed";
+        var firstPath = Path.Combine(root, "source-a", fileName);
+        var secondPath = Path.Combine(root, "source-b", fileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(firstPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(secondPath)!);
+        await File.WriteAllTextAsync(firstPath, "first source bytes");
+        await File.WriteAllTextAsync(secondPath, "second source bytes");
+        try
+        {
+            var items = new[]
+            {
+                LegacyItem(firstId, "source-a/" + fileName, firstPath, fileName, Hash("first source bytes")),
+                LegacyItem(secondId, "source-b/" + fileName, secondPath, fileName, Hash("second source bytes")),
+            };
+            var finalizer = CreateFinalizer(new FakeArchiveArtifactStore(), new FakeCwtArchiveInventory(items));
+
+            var result = await finalizer.FinalizeAsync(
+                "run-cwt", root,
+                [Cancellation("doc-cancel", "酒店预定取消知会-张三-20260610入住-上海.pdf")],
+                CancellationToken.None);
+
+            result.Matches.Should().Equal(firstId, secondId);
+            result.UpdatedRelativePaths.Values.Should().OnlyHaveUniqueItems();
+            File.Exists(firstPath).Should().BeFalse();
+            File.Exists(secondPath).Should().BeFalse();
+            result.UpdatedRelativePaths.Values.Select(path => Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar)))
+                .Should().OnlyContain(path => File.Exists(path));
         }
         finally
         {
@@ -193,6 +274,46 @@ public sealed class CwtCancellationFinalizerTests
     private static string Hash(string value)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
+    private static FakeCwtArchiveInventory InventoryFor(IReadOnlyList<ArchiveArtifactSnapshot> snapshots)
+        => new(snapshots
+            .Where(snapshot => snapshot.State == ArchiveArtifactState.Committed)
+            .GroupBy(snapshot => snapshot.FinalFilePath ?? snapshot.FinalRelativePath,
+                OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
+            .Select(group => group.First())
+            .Select(snapshot => new CwtArchiveInventoryItem(
+                snapshot.ArtifactId,
+                snapshot.ArtifactId,
+                snapshot.Key.DocumentId,
+                snapshot.Key.ProcessingRevision,
+                snapshot.SourceFileName ?? snapshot.FileName,
+                snapshot.FinalRelativePath,
+                snapshot.FinalFilePath ?? snapshot.FinalRelativePath,
+                snapshot.ExpectedContentHash,
+                CwtArchiveInventoryItemKind.ArchivedArtifact,
+                snapshot.State,
+                null,
+                snapshot.Key.RunId)));
+
+    private static CwtArchiveInventoryItem LegacyItem(
+        string inventoryId,
+        string relativePath,
+        string fullPath,
+        string sourceFileName,
+        string hash)
+        => new(inventoryId, null, null, null, sourceFileName, relativePath, fullPath, hash,
+            CwtArchiveInventoryItemKind.LegacyFile, null, LegacyArchiveInventoryState.Discovered);
+
+    private static CandidateProcessResult Cancellation(string documentId, string fileName)
+        => Candidate(documentId, fileName, InvoiceDocumentType.AccommodationConfirmation,
+            new Dictionary<string, string> { ["source_is_cwt"] = "true" });
+
+    private static CwtCancellationFinalizer CreateFinalizer(
+        FakeArchiveArtifactStore store,
+        FakeCwtArchiveInventory inventory)
+        => new(new ArchiveNamingPolicy(), store, new PhysicalArchiveFileSystem(), new FakeManualReviewItemStore(),
+            new FakeUnitOfWorkFactory(), new FakePairingStore(), new FakeAuditEventStore(),
+            new FakeLegacyArchiveInventoryStore(), inventory);
+
     private sealed class FakeArchiveArtifactStore(params ArchiveArtifactSnapshot[] snapshots) : IArchiveArtifactStore
     {
         private readonly List<ArchiveArtifactSnapshot> _snapshots = [.. snapshots];
@@ -212,6 +333,10 @@ public sealed class CwtCancellationFinalizerTests
         }
         public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListByRunAsync(string runId, CancellationToken cancellationToken)
             => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(_snapshots.Where(snapshot => snapshot.Key.RunId == runId).ToArray());
+        public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListCommittedForInventoryAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(_snapshots.Where(snapshot => snapshot.State == ArchiveArtifactState.Committed).ToArray());
+        public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListRecoverableAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(_snapshots.Where(snapshot => snapshot.State is ArchiveArtifactState.Prepared or ArchiveArtifactState.RecoveryRequired).ToArray());
         public Task UpdateCommittedLocationAsync(string artifactId, string relativePath, string finalPath, string fileName,
             IUnitOfWork transaction, CancellationToken cancellationToken)
         {
@@ -226,10 +351,36 @@ public sealed class CwtCancellationFinalizerTests
         }
     }
 
+    private sealed class FakeCwtArchiveInventory(IEnumerable<CwtArchiveInventoryItem> items) : ICwtArchiveInventory
+    {
+        private readonly CwtArchiveInventoryItem[] _items = items.ToArray();
+
+        public Task<IReadOnlyList<CwtArchiveInventoryItem>> ListAsync(string outputRoot, CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<CwtArchiveInventoryItem>>(_items
+                .Where(item => File.Exists(item.AbsolutePath))
+                .ToArray());
+    }
+
+    private sealed class FakeLegacyArchiveInventoryStore : ILegacyArchiveInventoryStore
+    {
+        public Task<LegacyArchiveInventorySnapshot> DiscoverAsync(string rootKey, string originalRelativePath,
+            string sourceFileName, string contentHash, IUnitOfWork transaction, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<LegacyArchiveInventorySnapshot>> ListByRootAsync(string rootKey, CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<LegacyArchiveInventorySnapshot>>([]);
+
+        public Task UpdateLocationAsync(string inventoryId, string currentRelativePath, LegacyArchiveInventoryState state,
+            string? reviewRunId, IUnitOfWork transaction, CancellationToken cancellationToken)
+            => Task.CompletedTask;
+    }
+
     private sealed class RollbackFailingArchiveFileSystem : IArchiveFileSystem
     {
         private readonly PhysicalArchiveFileSystem _inner = new();
         private string? _movedTarget;
+        public Task<IReadOnlyList<string>> EnumerateDirectChildFilesAsync(string directoryPath, CancellationToken cancellationToken)
+            => _inner.EnumerateDirectChildFilesAsync(directoryPath, cancellationToken);
         public Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken) => _inner.ComputeSha256Async(path, cancellationToken);
         public Task<bool> FileExistsAsync(string path, CancellationToken cancellationToken) => _inner.FileExistsAsync(path, cancellationToken);
         public Task<string> CopyToSiblingTempAsync(string sourcePath, string finalFilePath, CancellationToken cancellationToken)

@@ -29,6 +29,7 @@ public sealed class InvoiceFlowDbContext : DbContext
     public DbSet<InvoiceItemRow> InvoiceItems => Set<InvoiceItemRow>();
     public DbSet<PairingRow> Pairings => Set<PairingRow>();
     public DbSet<ArchivedArtifactRow> ArchivedArtifacts => Set<ArchivedArtifactRow>();
+    public DbSet<LegacyArchiveInventoryRow> LegacyArchiveInventory => Set<LegacyArchiveInventoryRow>();
     public DbSet<RunCheckpointRow> RunCheckpoints => Set<RunCheckpointRow>();
     public DbSet<MailboxCursorRow> MailboxCursors => Set<MailboxCursorRow>();
     public DbSet<MailboxAccountRow> MailboxAccounts => Set<MailboxAccountRow>();
@@ -156,10 +157,29 @@ public sealed class InvoiceFlowDbContext : DbContext
             b.Property(x => x.TempFilePath).HasMaxLength(1024);
             b.Property(x => x.FinalFilePath).HasMaxLength(1024);
             b.Property(x => x.FileName).HasMaxLength(256).IsRequired();
+            b.Property(x => x.SourceFileName).HasMaxLength(256);
             b.Property(x => x.ContentHash).HasMaxLength(64).IsRequired();
             b.Property(x => x.State).HasMaxLength(16).IsRequired();
             b.Property(x => x.CreatedAtUtc).IsRequired();
             b.HasIndex(x => new { x.RunId, x.DocumentId, x.ProcessingRevision, x.Role, x.ContentHash }).IsUnique();
+        });
+
+        modelBuilder.Entity<LegacyArchiveInventoryRow>(b =>
+        {
+            b.ToTable("LegacyArchiveInventory");
+            b.HasKey(x => x.InventoryId);
+            b.Property(x => x.InventoryId).HasMaxLength(64).IsRequired();
+            b.Property(x => x.RootKey).HasMaxLength(64).IsRequired();
+            b.Property(x => x.OriginalRelativePath).HasMaxLength(512).IsRequired();
+            b.Property(x => x.CurrentRelativePath).HasMaxLength(512).IsRequired();
+            b.Property(x => x.SourceFileName).HasMaxLength(256).IsRequired();
+            b.Property(x => x.ContentHash).HasMaxLength(64).IsRequired();
+            b.Property(x => x.State).HasMaxLength(24).IsRequired();
+            b.Property(x => x.ReviewRunId).HasMaxLength(64);
+            b.Property(x => x.CreatedAtUtc).IsRequired();
+            b.Property(x => x.UpdatedAtUtc).IsRequired();
+            b.HasIndex(x => new { x.RootKey, x.OriginalRelativePath, x.ContentHash }).IsUnique();
+            b.HasIndex(x => new { x.RootKey, x.State });
         });
 
         modelBuilder.Entity<RunCheckpointRow>(b =>

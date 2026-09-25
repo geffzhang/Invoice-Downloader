@@ -25,6 +25,10 @@ public interface IArchiveArtifactStore
         CancellationToken cancellationToken);
 
     Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListByRunAsync(string runId, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListCommittedForInventoryAsync(CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListRecoverableAsync(CancellationToken cancellationToken);
 }
 
 public sealed record ArchiveArtifactSnapshot(
@@ -37,4 +41,6 @@ public sealed record ArchiveArtifactSnapshot(
     ArchiveArtifactState State,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset? CommittedAtUtc,
-    string? FinalFilePath = null);
+    string? FinalFilePath = null,
+    string? SourceFileName = null,
+    string? DocumentType = null);

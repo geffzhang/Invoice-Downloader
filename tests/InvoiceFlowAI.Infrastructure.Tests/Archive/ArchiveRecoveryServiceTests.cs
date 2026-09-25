@@ -213,6 +213,9 @@ public sealed class ArchiveRecoveryServiceTests
     {
         private readonly Dictionary<string, byte[]> _files = new();
 
+        public Task<IReadOnlyList<string>> EnumerateDirectChildFilesAsync(string directoryPath, CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>([]);
+
         public void WriteFile(string path, string content) =>
             _files[path] = System.Text.Encoding.UTF8.GetBytes(content);
 
@@ -309,6 +312,11 @@ public sealed class ArchiveRecoveryServiceTests
 
         public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListByRunAsync(string runId, CancellationToken cancellationToken)
             => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(_byId.Values.Where(s => s.Key.RunId == runId).ToList());
+        public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListCommittedForInventoryAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(_byId.Values.Where(s => s.State == ArchiveArtifactState.Committed).ToArray());
+
+        public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListRecoverableAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(_byId.Values.Where(s => s.State is ArchiveArtifactState.Prepared or ArchiveArtifactState.RecoveryRequired).ToArray());
 
         private static string KeyOf(ArchiveArtifactKey k) =>
             $"{k.RunId}|{k.DocumentId}|{k.ProcessingRevision}|{k.Role}";

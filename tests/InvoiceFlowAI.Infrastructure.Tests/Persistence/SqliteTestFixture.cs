@@ -80,6 +80,7 @@ public sealed class SqliteTestFixture : IAsyncLifetime
             DELETE FROM MailboxAccounts;
             DELETE FROM RuleSets;
             DELETE FROM LegacyImportState;
+            DELETE FROM LegacyArchiveInventory;
             DELETE FROM __EFMigrationsHistory;
             INSERT INTO __EFMigrationsHistory (MigrationId, ProductVersion)
                 VALUES ('20260923_InitialSchema', '10.0.12');
@@ -89,6 +90,10 @@ public sealed class SqliteTestFixture : IAsyncLifetime
                 VALUES ('20260925003448_PersistArchivePaths', '10.0.12');
             INSERT INTO __EFMigrationsHistory (MigrationId, ProductVersion)
                 VALUES ('20260925120000_AddUserSettingsCompanyAndOutputDirectory', '10.0.12');
+            INSERT INTO __EFMigrationsHistory (MigrationId, ProductVersion)
+                VALUES ('20260925130000_AddArchivedArtifactSourceFileName', '10.0.12');
+            INSERT INTO __EFMigrationsHistory (MigrationId, ProductVersion)
+                VALUES ('20260925133000_AddLegacyArchiveInventory', '10.0.12');
             CREATE TRIGGER AuditEvents_NoUpdate
                 BEFORE UPDATE ON AuditEvents
                 BEGIN
