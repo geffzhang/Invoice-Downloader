@@ -9,6 +9,8 @@ namespace InvoiceFlowAI.Application.Persistence;
 
 public interface IRunLifecycleStore
 {
+    Task<IReadOnlyList<string>> ListOutputRootsAsync(CancellationToken cancellationToken);
+
     Task<RunStateSnapshot?> FindAsync(string runId, CancellationToken cancellationToken);
 
     Task<bool> TryCreateAsync(

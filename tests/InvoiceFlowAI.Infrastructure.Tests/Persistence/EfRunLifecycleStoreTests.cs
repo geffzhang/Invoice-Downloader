@@ -16,6 +16,24 @@ public sealed class EfRunLifecycleStoreTests : IClassFixture<SqliteTestFixture>
     public EfRunLifecycleStoreTests(SqliteTestFixture fixture) => _fixture = fixture;
 
     [Fact]
+    public async Task ListOutputRoots_returns_unique_nonempty_registered_roots()
+    {
+        await _fixture.ResetAsync();
+        await using var context = _fixture.CreateContext();
+        context.Runs.AddRange(
+            NewRunRow("run-a", "C:\\Invoices\\A"),
+            NewRunRow("run-b", "D:\\Invoices\\B"),
+            NewRunRow("run-c", "C:\\Invoices\\A"),
+            NewRunRow("run-no-root", null),
+            NewRunRow("run-empty-root", string.Empty));
+        await context.SaveChangesAsync(CancellationToken.None);
+
+        var roots = await new EfRunLifecycleStore(context).ListOutputRootsAsync(CancellationToken.None);
+
+        roots.Should().Equal("C:\\Invoices\\A", "D:\\Invoices\\B");
+    }
+
+    [Fact]
     public async Task TryCreate_persists_run_context_and_created_state()
     {
         await _fixture.ResetAsync();
@@ -208,4 +226,16 @@ public sealed class EfRunLifecycleStoreTests : IClassFixture<SqliteTestFixture>
         ConfigurationFingerprint: "fingerprint",
         RecipeVersion: "1.0.0",
         StartedAtUtc: DateTimeOffset.Parse("2026-09-28T12:00:00Z"));
+
+    private static RunRow NewRunRow(string runId, string? outputRoot) => new()
+    {
+        RunId = runId,
+        State = "Completed",
+        Stage = "complete",
+        DateFrom = new DateOnly(2026, 9, 1),
+        DateToExclusive = new DateOnly(2026, 10, 1),
+        OutputRoot = outputRoot,
+        StartedAtUtc = DateTimeOffset.UtcNow,
+        CreatedAtUtc = DateTimeOffset.UtcNow,
+    };
 }

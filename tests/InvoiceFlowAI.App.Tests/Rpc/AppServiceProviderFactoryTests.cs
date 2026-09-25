@@ -1,6 +1,7 @@
 using System.Text.Json;
 using FluentAssertions;
 using InvoiceFlowAI.App.Rpc;
+using InvoiceFlowAI.Application.Archive;
 using InvoiceFlowAI.Application.Persistence;
 using InvoiceFlowAI.Application.Pipeline;
 using InvoiceFlowAI.Application.Runs;
@@ -16,11 +17,41 @@ using Microsoft.EntityFrameworkCore;
 using Xunit;
 using InvoiceFlowAI.Infrastructure.Reports;
 using InvoiceFlowAI.Application.Mail;
+using InvoiceFlowAI.Infrastructure.Persistence.Entities;
 
 namespace InvoiceFlowAI.App.Tests.Rpc;
 
 public sealed class AppServiceProviderFactoryTests
 {
+    [Fact]
+    public async Task Create_reconciles_archive_inventory_before_returning_provider()
+    {
+        var appDataDirectory = Path.Combine(Path.GetTempPath(), $"invoiceflow-startup-recovery-{Guid.NewGuid():N}");
+        var recovery = new RecordingArchiveRecoveryService();
+        try
+        {
+            await using (var initialProvider = AppServiceProviderFactory.Create(appDataDirectory))
+            await using (var scope = initialProvider.CreateAsyncScope())
+            {
+                var context = scope.ServiceProvider.GetRequiredService<InvoiceFlowAI.Infrastructure.Persistence.InvoiceFlowDbContext>();
+                context.Runs.AddRange(
+                    NewRun("prior-run-a", @"C:\Invoices\A"),
+                    NewRun("prior-run-b", @"D:\Invoices\B"));
+                await context.SaveChangesAsync();
+            }
+
+            await using var provider = AppServiceProviderFactory.Create(
+                appDataDirectory,
+                services => services.AddSingleton<IArchiveRecoveryService>(recovery));
+
+            recovery.Calls.Should().Be(1);
+        }
+        finally
+        {
+            if (Directory.Exists(appDataDirectory)) Directory.Delete(appDataDirectory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Create_applies_test_service_overrides_before_building_provider()
     {
@@ -213,5 +244,40 @@ public sealed class AppServiceProviderFactoryTests
     private sealed class TestMailboxSessionFactory : IMailboxSessionFactory
     {
         public IMailboxSession Create() => throw new NotSupportedException();
+    }
+
+    private static RunRow NewRun(string runId, string outputRoot) => new()
+    {
+        RunId = runId,
+        State = "Completed",
+        Stage = "complete",
+        DateFrom = new DateOnly(2026, 9, 1),
+        DateToExclusive = new DateOnly(2026, 10, 1),
+        OutputRoot = outputRoot,
+        StartedAtUtc = DateTimeOffset.UtcNow,
+        CreatedAtUtc = DateTimeOffset.UtcNow,
+    };
+
+    private sealed class RecordingArchiveRecoveryService : IArchiveRecoveryService
+    {
+        public int Calls { get; private set; }
+
+        public Task<ArchiveStartupRecoveryResult> ReconcileAllKnownRootsAsync(CancellationToken cancellationToken)
+        {
+            Calls++;
+            return Task.FromResult(new ArchiveStartupRecoveryResult([], []));
+        }
+
+        public Task<IReadOnlyList<ArchiveRecoveryEntry>> ScanAsync(string runId, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<ArchiveRecoveryDecision> ResolveAsync(ArchiveRecoveryEntry entry, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<LegacyArchiveRecoveryDecision>> ReconcileLegacyAsync(string outputRoot, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<ArchiveStartupRecoveryResult> ReconcileBeforeRunAsync(string outputRoot, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
     }
 }

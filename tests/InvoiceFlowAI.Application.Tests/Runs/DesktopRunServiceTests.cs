@@ -307,6 +307,9 @@ public sealed class DesktopRunServiceTests
         private readonly Dictionary<string, RunStateSnapshot> _runs = new(StringComparer.Ordinal);
         public int TryCreateCalls { get; private set; }
 
+        public Task<IReadOnlyList<string>> ListOutputRootsAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>([]);
+
         public Task<RunStateSnapshot?> FindAsync(string runId, CancellationToken cancellationToken)
             => Task.FromResult(_runs.GetValueOrDefault(runId));
 

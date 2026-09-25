@@ -16,6 +16,15 @@ public sealed class EfRunLifecycleStore : IRunLifecycleStore
 
     public EfRunLifecycleStore(InvoiceFlowDbContext context) => _context = context;
 
+    public async Task<IReadOnlyList<string>> ListOutputRootsAsync(CancellationToken cancellationToken)
+        => await _context.Runs.AsNoTracking()
+            .Where(run => run.OutputRoot != null && run.OutputRoot != string.Empty)
+            .Select(run => run.OutputRoot!)
+            .Distinct()
+            .OrderBy(root => root)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
     public async Task<RunStateSnapshot?> FindAsync(string runId, CancellationToken cancellationToken)
     {
         var row = await _context.Runs
