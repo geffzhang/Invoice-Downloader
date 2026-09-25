@@ -46,6 +46,8 @@
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
     <Content Include="..\..\templates\index_app.js" Link="Web\index_app.js"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
+    <Content Include="..\..\templates\index_app.compiled.js" Link="Web\index_app.compiled.js"
+         CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
     <Content Include="..\..\templates\rpc_client.js" Link="Web\rpc_client.js"
            CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
         <Content Include="..\..\templates\settings_rpc.js" Link="Web\settings_rpc.js"

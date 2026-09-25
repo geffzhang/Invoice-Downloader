@@ -64,7 +64,7 @@ const APP_VISIBLE_COPY = {
     githubUrl: "https://github.com/EthanYoQ/Invoice-Downloader",
 };
 
-const ZHIPU_PLATFORM_URL = "https://bigmodel.cn/pricing";
+const DEEPSEEK_API_KEYS_URL = "https://platform.deepseek.com/api_keys";
 const EMAIL_DOMAIN_OPTIONS = [
     { value: "qq.com", label: "qq.com" },
     { value: "163.com", label: "163.com" },
@@ -1131,12 +1131,12 @@ function SettingsPage({ onOpenDisclaimer }) {
 
                     <div className="settings-column">
                         <section className="surface-card">
-                            <SectionHeader icon="psychology" title="智能处理引擎" indicator={<StatusPill tone="success" icon="auto_awesome">GLM</StatusPill>} />
+                            <SectionHeader icon="psychology" title="智能处理引擎" indicator={<StatusPill tone="success" icon="auto_awesome">DeepSeek</StatusPill>} />
                             <div className="card-stack card-stack--compact">
                                 <div className="field-block">
                                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                                        <label className="field-label">GLM API Key</label>
-                                        <a className="field-inline-action" href={ZHIPU_PLATFORM_URL} target="_blank" rel="noreferrer"><span className="material-symbols-outlined" style={{ fontSize: 14 }}>open_in_new</span><span>购买 API / 获取额度</span></a>
+                                        <label className="field-label">DeepSeek API Key</label>
+                                        <a className="field-inline-action" href={DEEPSEEK_API_KEYS_URL} target="_blank" rel="noreferrer"><span className="material-symbols-outlined" style={{ fontSize: 14 }}>open_in_new</span><span>获取 API Key</span></a>
                                     </div>
                                     <div className="field-row">
                                         <div className="field-shell" style={{ flex: 1 }}>

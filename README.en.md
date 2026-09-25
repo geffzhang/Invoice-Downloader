@@ -180,28 +180,20 @@ flowchart TD
 
 ---
 
-### Step 3 · Obtain Zhipu GLM API Key
+### Step 3 · Get a DeepSeek API Key
 
 <details>
-<summary>📖 Click to expand GLM API configuration steps</summary>
+<summary>📖 Click to expand DeepSeek API configuration steps</summary>
 
-The system uses **GLM-4.5V** (multimodal vision) and **GLM-OCR** to recognize invoice content.
+The desktop settings interface requires a **DeepSeek API Key**. Check the DeepSeek platform for current API usage and pricing.
 
 **Steps**
 
-1. Visit [open.bigmodel.cn](https://open.bigmodel.cn/) and register an account
-2. Go to Console → **API Keys** → **Create API Key**
-3. Copy and save the Key (format: `xxxxxxxx.xxxxxxxxxxxxxxxx`)
+1. Visit the [DeepSeek platform](https://platform.deepseek.com/) and create an account
+2. Open the **API Keys** page and create an API Key
+3. Copy and store the key securely, then enter it in the first-launch settings interface
 
-**Cost Reference**
-
-| Scenario | Description |
-|----------|-------------|
-| 🎁 New User Bonus | 5 million GLM-4 tokens gifted (valid for 30 days) |
-| 💰 Recommended Top-up | **Under 5 yuan**, pay-as-you-go |
-| 📊 Usage Estimate | Each invoice consumes approximately 1,000–3,000 tokens; for 200 invoices/month, 5 yuan lasts about 12 months |
-
-📚 [Zhipu AI Open Platform](https://open.bigmodel.cn/)
+📚 [DeepSeek API Keys](https://platform.deepseek.com/api_keys)
 
 </details>
 
@@ -213,7 +205,7 @@ The system uses **GLM-4.5V** (multimodal vision) and **GLM-OCR** to recognize in
 
 1. Installer: run `InvoiceFlowAI-*-windows-x64-setup.msi`. Portable: extract `InvoiceFlowAI-*-windows-x64-portable.zip` to a regular folder (avoid cloud-sync directories) and preserve the archive's directory structure.
 2. Double-click `InvoiceFlowAI.exe`; the settings interface appears on first launch.
-3. Enter your email address and authorization code (QQ or 163) and GLM API Key, then click "Start Scanning". Invoices are archived to the "Invoice Organizer" folder on your desktop.
+3. Enter your email address and authorization code (QQ or 163) and DeepSeek API Key, then click "Start Scanning". Invoices are archived to the "Invoice Organizer" folder on your desktop.
 
 ---
 
@@ -267,9 +259,9 @@ Invoice Organizer/
 </details>
 
 <details>
-<summary>Q: GLM API reports insufficient balance?</summary>
+<summary>Q: DeepSeek API reports insufficient quota?</summary>
 
-Log in to [open.bigmodel.cn](https://open.bigmodel.cn/) → Billing Center → Top Up. Recommended top-up of **5 yuan**, pay-as-you-go.
+Log in to the [DeepSeek platform](https://platform.deepseek.com/) to review API usage, account balance, and available services.
 
 </details>
 
@@ -300,7 +292,7 @@ By using this software, you acknowledge and accept the following terms.
 
 **Accuracy & Compliance** · The author does not warrant the accuracy, completeness, legality, tax compliance, financial compliance, or accounting compliance of any invoice data or generated results. Users must independently verify all invoices, reimbursements, tax filings, accounting records, and compliance outcomes before relying on them.
 
-**Data** · When calling the GLM API, invoice images are sent to Zhipu AI servers for recognition, subject to the [Zhipu AI Privacy Policy](https://www.zhipuai.cn/zh/privacy). Original email content is never sent.
+**Data** · When the DeepSeek API is used to extract invoice information, invoice text and extraction prompts are sent to DeepSeek. When visual fallback is enabled, the relevant invoice page images are also sent. The original email content is not sent. See the [DeepSeek Privacy Policy](https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html).
 
 **Liability** · The author is not liable for any losses, omissions, errors, failed reimbursements, tax risks, compliance issues, or data loss arising from use of this software.
 
