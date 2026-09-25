@@ -20,13 +20,13 @@ public sealed class BaiwangRecoveryStrategyTests
             Response(HttpStatusCode.OK, Encoding.UTF8.GetBytes("{\"success\":true}"), "application/json"),
             Response(HttpStatusCode.OK, Encoding.UTF8.GetBytes("<?xml version=\"1.0\"?><Invoice><InvoiceNumber>12345678</InvoiceNumber></Invoice>"), "application/xml"),
             Response(HttpStatusCode.OK, Encoding.ASCII.GetBytes("%PDF-1.7 fixture"), "application/pdf"),
-            Response(HttpStatusCode.NotFound, [], "text/plain"));
+            Response(HttpStatusCode.OK, [0x50, 0x4B, 0x03, 0x04, 0x6F, 0x66, 0x64], "application/vnd.ofd"));
         var strategy = NewStrategy(transport);
 
         var result = await strategy.RecoverAsync(Group(), CancellationToken.None);
 
         result.Artifacts.Select(artifact => artifact.Kind)
-            .Should().Equal(RecoveredArtifactKind.Xml, RecoveredArtifactKind.Pdf);
+            .Should().Equal(RecoveredArtifactKind.Xml, RecoveredArtifactKind.Pdf, RecoveredArtifactKind.Ofd);
         result.SelectedArtifact!.Kind.Should().Be(RecoveredArtifactKind.Pdf);
         result.SelectedArtifact.ExpectedMatch.Should().BeTrue();
         result.SelectedArtifact.MatchReasonCode.Should().Be("xml_then_pdf_same_source");
@@ -35,6 +35,8 @@ public sealed class BaiwangRecoveryStrategyTests
         transport.Requests[1].ContentType.Should().Be("application/json; charset=utf-8");
         transport.Requests[1].Url.Url.Host.Should().Be("pis.baiwang.com");
         transport.Requests[2].Url.Url.Query.Should().Contain("formatType=XML");
+        transport.Requests.Select(request => request.Url.Url.Query)
+            .Should().Contain(query => query.Contains("formatType=OFD", StringComparison.Ordinal));
     }
 
     [Fact]

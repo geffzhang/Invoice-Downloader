@@ -49,6 +49,7 @@ public sealed class InvoiceFieldExtractor : IInvoiceFieldExtractor
 
         IReadOnlyList<RenderedPage> pages = Array.Empty<RenderedPage>();
         var text = request.EmbeddedText ?? string.Empty;
+        var trainEvidenceText = text;
         var route = string.IsNullOrWhiteSpace(request.EmbeddedText) ? ExtractionRoute.OcrText : ExtractionRoute.OcrText;
         var trackAStatus = "NOT_RUN";
         var trackBStatus = "NOT_RUN";
@@ -64,7 +65,15 @@ public sealed class InvoiceFieldExtractor : IInvoiceFieldExtractor
                     request.Rules.RenderOptions ?? new PdfRenderOptions(),
                     cancellationToken).ConfigureAwait(false);
                 var ocrOutcome = await _ocr.RecognizeAsync(request.Candidate.DocumentId, pages, cancellationToken).ConfigureAwait(false);
-                text = string.Join("\n", ocrOutcome.Lines.OrderBy(line => line.PageNumber).ThenBy(line => line.Bounds.Y).ThenBy(line => line.Bounds.X).Select(line => line.Text));
+                var orderedLines = ocrOutcome.Lines
+                    .OrderBy(line => line.PageNumber)
+                    .ThenBy(line => line.Bounds.Y)
+                    .ThenBy(line => line.Bounds.X)
+                    .ToArray();
+                text = string.Join("\n", orderedLines.Select(line => line.Text));
+                trainEvidenceText = string.Join("\n", orderedLines
+                    .Where(line => line.PageNumber == 1)
+                    .Select(line => line.Text));
             }
             catch (OperationCanceledException)
             {
@@ -83,7 +92,10 @@ public sealed class InvoiceFieldExtractor : IInvoiceFieldExtractor
                 var response = await _chat.CompleteTextAsync(
                     InvoiceExtractionPrompt.CreateTrackA(text, request.Rules), cancellationToken).ConfigureAwait(false);
                 responseFingerprint = Fingerprint(response.Text);
-                var fields = ApplyCorrections(InvoiceResponseSchema.Parse(response.Text), request.DeterministicCorrections);
+                var fields = ApplyStrongTrainEvidence(
+                    ApplyCorrections(InvoiceResponseSchema.Parse(response.Text), request.DeterministicCorrections),
+                    request,
+                    trainEvidenceText);
                 var document = ToDocument(fields, request, response.Model);
                 trackAResult = _acceptance.Evaluate(new InvoiceAcceptanceRequest(
                     request.Candidate,
@@ -159,7 +171,10 @@ public sealed class InvoiceFieldExtractor : IInvoiceFieldExtractor
             var response = await _chat.CompleteVisionAsync(
                 InvoiceExtractionPrompt.CreateTrackB(request.Rules), images, cancellationToken).ConfigureAwait(false);
             responseFingerprint = Fingerprint(response.Text);
-            var fields = ApplyCorrections(InvoiceResponseSchema.Parse(response.Text), request.DeterministicCorrections);
+            var fields = ApplyStrongTrainEvidence(
+                ApplyCorrections(InvoiceResponseSchema.Parse(response.Text), request.DeterministicCorrections),
+                request,
+                trainEvidenceText);
             var document = ToDocument(fields, request, response.Model);
             var acceptance = _acceptance.Evaluate(new InvoiceAcceptanceRequest(
                 request.Candidate,
@@ -206,6 +221,48 @@ public sealed class InvoiceFieldExtractor : IInvoiceFieldExtractor
             Route = corrections.Route ?? fields.Route,
             Items = corrections.Items ?? fields.Items,
         };
+
+    private static InvoiceResponseFields ApplyStrongTrainEvidence(
+        InvoiceResponseFields fields,
+        FieldExtractionRequest request,
+        string previewText)
+    {
+        if (fields.DocumentType is not (InvoiceDocumentType.AirTicket or InvoiceDocumentType.FlightTicket))
+            return fields;
+
+        var seller = CompactEvidenceText(fields.Seller);
+        var railway = CompactEvidenceText("中国铁路");
+        var hasRailwaySeller = seller.Contains(railway, StringComparison.Ordinal);
+        var departureCity = fields.Route?.DepartureCity ?? string.Empty;
+        var destinationCity = fields.Route?.DestinationCity ?? string.Empty;
+        var hasRoute = !string.IsNullOrWhiteSpace(departureCity)
+            && !string.IsNullOrWhiteSpace(destinationCity);
+        var evidenceTokens = new[] { "铁路电子客票", "火车", "铁路", "高铁", "12306" }
+            .Select(CompactEvidenceText)
+            .ToArray();
+        var candidate = request.Candidate;
+        var metadata = candidate.Metadata;
+        var context = CompactEvidenceText(string.Join(" ", new[]
+        {
+            candidate.OriginalFileName,
+            request.Source.Subject,
+            MetadataValue(metadata, "attachment_name"),
+            MetadataValue(metadata, "original_filename"),
+        }));
+        var hasRailwayContext = hasRoute && evidenceTokens.Any(token => context.Contains(token, StringComparison.Ordinal));
+        var compactPreview = CompactEvidenceText(previewText);
+        var hasRailwayPreview = hasRoute && evidenceTokens.Any(token => compactPreview.Contains(token, StringComparison.Ordinal));
+
+        return hasRailwaySeller || hasRailwayContext || hasRailwayPreview
+            ? fields with { DocumentType = InvoiceDocumentType.TrainTicket, Category = "TrainTicket" }
+            : fields;
+    }
+
+    private static string MetadataValue(IReadOnlyDictionary<string, string>? metadata, string key) =>
+        metadata is not null && metadata.TryGetValue(key, out var value) ? value : string.Empty;
+
+    private static string CompactEvidenceText(string? value) =>
+        string.Concat((value ?? string.Empty).Where(character => !char.IsWhiteSpace(character))).ToLowerInvariant();
 
     private static InvoiceDocument ToDocument(InvoiceResponseFields fields, FieldExtractionRequest request, string model)
     {

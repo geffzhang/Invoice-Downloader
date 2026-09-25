@@ -92,6 +92,7 @@ public sealed class RunExecutionServiceTests
             .Select(stats => stats!.Emails)
             .Should().Contain(2);
         publisher.Events.Last().Sequence.Should().Be(73);
+        publisher.Events.Last().EventName.Should().Be("run.terminal");
         order.IndexOf("commit:1").Should().BeLessThan(order.IndexOf("publish:1"));
         order.IndexOf("finalize").Should().BeLessThan(order.IndexOf("publish:73"));
     }
@@ -119,7 +120,11 @@ public sealed class RunExecutionServiceTests
         var services = new ServiceCollection();
         services.AddInvoiceFlowApplication();
         services.AddSingleton<IMailboxScanner, EmptyMailboxScanner>();
-        services.AddSingleton<ICandidateCollectionStage>(new OneResultCandidateStage(candidateResult));
+        var secondCandidate = NewCandidateResult() with
+        {
+            Candidate = NewCandidateResult().Candidate with { DocumentId = DocumentIdentity.Create("document-2") },
+        };
+        services.AddSingleton<ICandidateCollectionStage>(new MultipleResultCandidateStage(candidateResult, secondCandidate));
         services.AddSingleton<IUrlRecoveryStage, PassThroughRecoveryStage>();
         services.AddSingleton<IDocumentExtractionStage, CandidateExtractionStage>();
         services.AddSingleton<IArtifactPairingStage, EmptyPairingStage>();
@@ -137,18 +142,26 @@ public sealed class RunExecutionServiceTests
             Path.GetTempPath(), "Example Co", "standard"), CancellationToken.None);
 
         coordinator.FinalizationRequests.Should().ContainSingle();
-        coordinator.FinalizationRequests[0].CandidateResults.Should().ContainSingle()
-            .Which.Candidate.DocumentId.Value.Should().Be("document-1");
-        coordinator.PacketRequests.Should().ContainSingle(item => item.EventType == "run.candidate");
-        var candidateEvent = publisher.Events.Single(item => item.EventName == "run.candidate");
-        candidateEvent.Sequence.Should().Be(coordinator.PacketRequests.Single(item => item.EventType == "run.candidate").EventSequence);
+        coordinator.FinalizationRequests[0].CandidateResults.Select(result => result.Candidate.DocumentId.Value)
+            .Should().Equal("document-1", "document-2");
+        coordinator.PacketRequests.Where(item => item.EventType == "run.candidate").Should().HaveCount(2);
+        var candidateEvent = publisher.Events.Single(item => item.EventName == "run.candidate"
+            && item.Payload.Should().BeOfType<RunCandidateEventPayload>().Subject.DocumentId == "document-1");
+        candidateEvent.Sequence.Should().Be(coordinator.PacketRequests.Single(item => item.EventType == "run.candidate"
+            && item.EventPayloadJson.Contains("document-1", StringComparison.Ordinal)).EventSequence);
         candidateEvent.Payload.Should().BeOfType<RunCandidateEventPayload>()
             .Which.DocumentId.Should().Be("document-1");
-        var durablePayload = coordinator.PacketRequests.Single(item => item.EventType == "run.candidate").EventPayloadJson;
+        var durablePayload = coordinator.PacketRequests.Single(item => item.EventType == "run.candidate"
+            && item.EventPayloadJson.Contains("document-1", StringComparison.Ordinal)).EventPayloadJson;
         durablePayload.Should().Contain("document-1").And.Contain("Unresolved").And.Contain("URL_RECOVERY_WORKER_FAILED");
         durablePayload.Should().NotContain("capability-segment").And.NotContain("QUERY-SECRET")
             .And.NotContain("SENDER-SECRET").And.NotContain("MAILBOX-SUBJECT-SECRET")
             .And.NotContain("INVOICE-NUMBER-SECRET").And.NotContain("LOG-EXCEPTION-SECRET");
+        publisher.Events.Where(item => item.EventName == "run.progress")
+            .Select(item => item.Payload.Should().BeOfType<RunProgressPayload>().Subject)
+            .Where(progress => progress.Stage == "archive-documents")
+            .Select(progress => progress.Total)
+            .Should().Equal(2, 2);
         order.IndexOf("commit:2").Should().BeLessThan(order.IndexOf("publish:2"));
         JsonSerializer.Serialize(candidateEvent.Payload).Should().NotContain("TOP_SECRET");
     }
@@ -287,6 +300,12 @@ public sealed class RunExecutionServiceTests
     {
         public Task<CandidateBatch> ExecuteAsync(MailboxScanResult input, CancellationToken cancellationToken)
             => Task.FromResult(new CandidateBatch(Array.Empty<CandidateWorkItem>(), [result]));
+    }
+
+    private sealed class MultipleResultCandidateStage(params CandidateProcessResult[] results) : ICandidateCollectionStage
+    {
+        public Task<CandidateBatch> ExecuteAsync(MailboxScanResult input, CancellationToken cancellationToken)
+            => Task.FromResult(new CandidateBatch(Array.Empty<CandidateWorkItem>(), results));
     }
 
     private sealed class ThrowingCandidateStage : ICandidateCollectionStage

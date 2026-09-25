@@ -100,6 +100,35 @@ public sealed class DesktopParityFixtureTests
     }
 
     [Fact]
+    public async Task Xml_layout_and_partial_field_fixtures_match_python_projection()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "xml-extraction.json");
+        var fixtures = JsonSerializer.Deserialize<XmlExtractionFixtureSet>(File.ReadAllText(fixturePath), JsonOptions)
+            ?? throw new InvalidDataException("XML extraction parity fixtures are empty.");
+        var parser = new XmlInvoiceParser();
+
+        foreach (var fixture in fixtures.Cases)
+        {
+            var identity = DocumentIdentity.Create(fixture.CaseId);
+            var content = Encoding.UTF8.GetBytes(fixture.Xml);
+            var candidate = new DocumentCandidate(identity, 1, "correlation-fixture", "uid-fixture",
+                "invoice.xml", "application/xml", content.Length, 0, "xml");
+            var outcome = await parser.ParseAsync(new ParserWorkItem(candidate, identity.Value, "xml", content), CancellationToken.None);
+
+            outcome.Disposition.ToString().Should().Be(fixture.ExpectedCSharpDisposition, fixture.CaseId);
+            outcome.MissingFields.Should().Equal(fixture.ExpectedCSharpMissingFields, fixture.CaseId);
+            var invoice = outcome.Invoice ?? throw new InvalidDataException($"Fixture '{fixture.CaseId}' produced no invoice.");
+            invoice.InvoiceNumber.Should().Be(fixture.Expected.InvoiceNumber, fixture.CaseId);
+            invoice.InvoiceDate?.ToString("yyyy-MM-dd").Should().Be(fixture.Expected.InvoiceDate, fixture.CaseId);
+            invoice.Purchaser.Should().Be(fixture.Expected.Purchaser, fixture.CaseId);
+            invoice.Seller.Should().Be(fixture.Expected.Seller, fixture.CaseId);
+            invoice.Amount?.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture).Should().Be(fixture.Expected.Amount, fixture.CaseId);
+            invoice.TaxAmount?.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture).Should().Be(fixture.Expected.TaxAmount == "" ? null : fixture.Expected.TaxAmount, fixture.CaseId);
+            invoice.TotalAmount?.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture).Should().Be(fixture.Expected.TotalAmount == "" ? null : fixture.Expected.TotalAmount, fixture.CaseId);
+        }
+    }
+
+    [Fact]
     public void Mailbox_uid_golden_fixtures_are_stably_deduplicated_and_ordered()
     {
         var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "mailbox-order.json");
@@ -255,6 +284,24 @@ public sealed class DesktopParityFixtureTests
         string TotalAmount,
         string InvoiceNumber,
         string DocumentType);
+
+    private sealed record XmlExtractionFixtureSet(IReadOnlyList<XmlExtractionCase> Cases);
+
+    private sealed record XmlExtractionCase(
+        string CaseId,
+        string Xml,
+        XmlExtractionExpected Expected,
+        string ExpectedCSharpDisposition,
+        IReadOnlyList<string> ExpectedCSharpMissingFields);
+
+    private sealed record XmlExtractionExpected(
+        string InvoiceNumber,
+        string InvoiceDate,
+        string Purchaser,
+        string Seller,
+        string Amount,
+        string TaxAmount,
+        string TotalAmount);
 
     private sealed record MailboxOrderFixtureSet(IReadOnlyList<MailboxOrderCase> Cases);
 

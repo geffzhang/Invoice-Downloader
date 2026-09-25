@@ -49,6 +49,10 @@ public interface IInvoiceAcceptanceService
 public sealed class InvoiceAcceptanceService : IInvoiceAcceptanceService
 {
     private static readonly HashSet<InvoiceDocumentType> KnownTypes = Enum.GetValues<InvoiceDocumentType>().ToHashSet();
+    private static readonly HashSet<string> UnknownPurchaserValues = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "未知", "未知抬头", "未知购买方", "暂无抬头", "暂无购买方", "unknown", "unknownbuyer", "unknownpurchaser",
+    };
     private static readonly HashSet<InvoiceDocumentType> PurchaserExemptTypes =
     [
         InvoiceDocumentType.TrainTicket, InvoiceDocumentType.Taxi, InvoiceDocumentType.FlightTicket,
@@ -144,7 +148,7 @@ public sealed class InvoiceAcceptanceService : IInvoiceAcceptanceService
     private static bool RequiresPurchaser(InvoiceDocumentType type, InvoiceAcceptancePolicy policy) =>
         policy.RequirePurchaserForNonExemptTypes && !PurchaserExemptTypes.Contains(type);
 
-    private static bool IsUnknownPurchaser(string purchaser) => purchaser.Trim() is "未知" or "未知购买方" or "不详";
+    private static bool IsUnknownPurchaser(string purchaser) => UnknownPurchaserValues.Contains(purchaser.Trim());
 
     private static bool IsTargetPurchaser(string purchaser, string companyName) =>
         !string.IsNullOrWhiteSpace(companyName)
