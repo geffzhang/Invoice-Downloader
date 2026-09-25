@@ -1207,6 +1207,7 @@ class EmailFetcher:
         self._abort_requested = False
         self.certificate_error = False
         self.timeout_error = False
+        self.connection_error = None
         os.makedirs(self.staging_dir, exist_ok=True)
 
     def _emit_progress(self, message):
@@ -1362,6 +1363,7 @@ class EmailFetcher:
     def connect(self):
         self.certificate_error = False
         self.timeout_error = False
+        self.connection_error = None
         try:
             if self._abort_requested:
                 raise ConnectionAbortedError("IMAP connection cancelled")
@@ -1385,6 +1387,7 @@ class EmailFetcher:
             logging.info("Successfully connected and logged in.")
             return True
         except Exception as e:
+            self.connection_error = e
             self.certificate_error = isinstance(e, ssl.SSLCertVerificationError)
             self.timeout_error = isinstance(e, TimeoutError)
             mail, self.mail = self.mail, None

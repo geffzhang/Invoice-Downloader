@@ -948,6 +948,63 @@ def test_malformed_uid_search_reaches_one_sanitized_failed_terminal(
     assert all(entry.get("type") != "完成" for entry in api.logs)
 
 
+@pytest.mark.parametrize(
+    ("failure", "expected_state", "expected_reason"),
+    [
+        ("socket_abort", "completed", "CANCELLED"),
+        ("malformed_search", "failed", "MAILBOX_SCAN_FAILED"),
+        ("unrelated_os_error", "failed", "PROCESSING_FAILED"),
+    ],
+)
+def test_stop_only_converts_this_runs_imap_abort_to_cancelled(
+    tmp_path, monkeypatch, failure, expected_state, expected_reason
+):
+    from mailbox_scanner import MailboxScanError
+
+    monkeypatch.chdir(tmp_path)
+    api = InvoiceAppAPI()
+    terminal_events = []
+    disconnects = []
+
+    class Fetcher:
+        def __init__(self, *args, staging_dir, **kwargs):
+            self.staging_dir = Path(staging_dir)
+
+        def connect(self):
+            return True
+
+        def abort(self):
+            pass
+
+        def fetch_emails_by_date(self, **_kwargs):
+            api._request_safe_stop()
+            if failure == "socket_abort":
+                raise MailboxScanError("IMAP SELECT failed") from ConnectionAbortedError("socket closed")
+            if failure == "malformed_search":
+                raise MailboxScanError("malformed UID SEARCH ALL response")
+            raise OSError("unrelated local failure")
+
+        def disconnect(self):
+            disconnects.append(True)
+
+    monkeypatch.setattr("email_fetcher.EmailFetcher", Fetcher)
+    monkeypatch.setattr(api, "_start_truth_audit_async", lambda *args: None)
+    monkeypatch.setattr(
+        api,
+        "_safe_emit_run_state_event",
+        lambda old, new: terminal_events.append(new) if new in {"completed", "failed"} else None,
+    )
+
+    run_reserved_worker(
+        api, "", str(tmp_path / "output"),
+        email_address="a@qq.com", auth_code="x", api_key="y",
+    )
+    assert api.run_state == expected_state
+    assert api._run_state_store.terminal_reason == expected_reason
+    assert terminal_events == [expected_state]
+    assert disconnects == [True]
+
+
 def test_actual_post_fetch_processing_exception_reaches_unresolved_failed_terminal(
     tmp_path, monkeypatch
 ):

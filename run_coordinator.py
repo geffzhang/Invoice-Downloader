@@ -108,6 +108,12 @@ class ArchiveIncompleteError(RuntimeError):
     user_message = "归档结果不完整，本次任务已失败。"
 
 
+class RunImapCancelled(ConnectionAbortedError):
+    def __init__(self, run_id: str):
+        super().__init__("IMAP operation cancelled")
+        self.run_id = run_id
+
+
 class RunCoordinator:
     def __init__(
         self,
@@ -279,7 +285,7 @@ class RunCoordinator:
                     archive_report=archive_report,
                 )
             except Exception as exc:
-                if self._cancelled():
+                if isinstance(exc, RunImapCancelled) and exc.run_id == request.run_id and self._cancelled():
                     result = replace(result, cancelled=True)
                 else:
                     reason_code, user_message, safe_error = self._safe_failure(exc)

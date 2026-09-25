@@ -343,6 +343,7 @@ def test_downloaded_url_passes_preflight_archive_and_cleanup_with_pdf_intact(tmp
     assert retained.read_bytes() == downloaded.read_bytes()
     api._cleanup_temp_folders(staging_dir=staging)
     assert retained.read_bytes() == b"%PDF-1.4\nsynthetic receipt"
+    assert not staging.exists()
 
 
 def test_url_manual_review_uses_downloaded_artifact_path(tmp_path):
@@ -389,6 +390,46 @@ def test_downloaded_url_manual_copy_failure_cannot_complete(tmp_path, monkeypatc
     assert not list((output / "待人工复核").glob("*.json"))
 
 
+def test_manual_copy_failure_keeps_downloaded_original_after_desktop_finalizer(tmp_path, monkeypatch):
+    from run_coordinator import RunCoordinator, RunRequest
+    from run_lifecycle import RunState
+
+    api = InvoiceAppAPI()
+    output = tmp_path / "output"
+    output.mkdir()
+    staging = tmp_path / "staging"
+    handle = api._run_lifecycle.begin("manual-copy-failure", staging)
+    source = staging / "invoice.pdf"
+    original = b"%PDF-1.4\nrecoverable original"
+    source.write_bytes(original)
+    api._active_run_handle = handle
+    api._active_temp_dir = tmp_path / "temp"
+    api._run_state_store.reset(handle.run_id)
+    request = RunRequest(handle.run_id, "2026-06-01", "2026-06-13", str(output), "", "account", "qq", run_root=str(tmp_path))
+    candidate = CandidatePipeline().collect([
+        {"filepath": "https://example.test/invoice", "email_id": "mail-1"}
+    ])[0]
+    outcome = ExtractionOutcome(candidate, "manual_review", "NEEDS_REVIEW", artifact_path=str(source))
+    adapter = AppArchiveAdapter(api=api, extractor=object(), save_path=str(output), business_records={}, trace_store=object())
+    deps = api._build_run_dependencies(request, email_address="a@qq.com", auth_code="x", api_key="y")
+    fetcher = SimpleNamespace(disconnect=lambda: None)
+    deps.connect = lambda _request: fetcher
+    deps.scan = lambda *_args: ["mail"]
+    deps.candidate = lambda *_args: [candidate]
+    deps.extract = lambda *_args: [outcome]
+    deps.archive = lambda outcomes, _request: ArchiveService(
+        archive_operation=adapter.archive_operation
+    ).archive(outcomes, output)
+    monkeypatch.setattr(shutil, "copy2", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("copy failed")))
+
+    result = RunCoordinator(api._run_lifecycle, api._run_state_store, deps).run(request, handle=handle)
+    assert result.state is RunState.FAILED
+    assert result.reason_code == "ARCHIVE_INCOMPLETE"
+    assert source.read_bytes() == original
+    assert any(str(source) in entry.get("msg", "") for entry in api.logs)
+    assert not list((output / "待人工复核").glob("*.json"))
+
+
 def test_business_records_restore_from_output_scoped_state(tmp_path, monkeypatch):
     api = InvoiceAppAPI()
     output = tmp_path / "output"
@@ -401,6 +442,75 @@ def test_business_records_restore_from_output_scoped_state(tmp_path, monkeypatch
     session = api._create_processing_pipeline_session([], "", str(output), _extractor=extractor)
     try:
         assert session._business_records == records
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("interruption", ["failed", "cancelled", "commit_error"])
+def test_completed_old_state_survives_first_failed_upgraded_run(tmp_path, monkeypatch, interruption):
+    api = InvoiceAppAPI()
+    output = tmp_path / "output"
+    output.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
+    monkeypatch.setattr(api, "_output_state_dir", lambda _path: str(state))
+    records = {"old-invoice": {"file": "invoice.pdf"}}
+    (state / "processed_records.json").write_text(json.dumps(records), encoding="utf-8")
+    (state / ".antigravity_history.json").write_text(json.dumps(["old-history"]), encoding="utf-8")
+    (state / "run_state.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+
+    extractor = InvoiceExtractor(api_key="", output_dir=str(output))
+    first = api._create_processing_pipeline_session([], "", str(output), _extractor=extractor)
+    try:
+        assert first._business_records == records
+        assert "old-history" in first._working_history
+        if interruption == "commit_error":
+            real_write = api._write_json_file
+
+            def fail_bundle(path, payload):
+                if path.endswith("committed_state.json"):
+                    raise OSError("synthetic commit failure")
+                return real_write(path, payload)
+
+            monkeypatch.setattr(api, "_write_json_file", fail_bundle)
+            with pytest.raises(OSError, match="synthetic commit failure"):
+                api._commit_output_state(str(state), {"new-history"}, {"new-invoice": {"file": "new.pdf"}})
+        else:
+            api._mark_output_run_state(str(state), interruption)
+    finally:
+        first.close()
+
+    assert (state / "committed_state.json").exists()
+    restarted = InvoiceAppAPI()
+    monkeypatch.setattr(restarted, "_output_state_dir", lambda _path: str(state))
+    second = restarted._create_processing_pipeline_session(
+        [], "", str(output), _extractor=InvoiceExtractor(api_key="", output_dir=str(output))
+    )
+    try:
+        assert second._business_records == records
+        assert "old-history" in second._working_history
+    finally:
+        second.close()
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+def test_incomplete_old_state_is_not_migrated(tmp_path, monkeypatch, status):
+    api = InvoiceAppAPI()
+    output = tmp_path / "output"
+    output.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
+    monkeypatch.setattr(api, "_output_state_dir", lambda _path: str(state))
+    (state / "processed_records.json").write_text(json.dumps({"uncommitted": {"file": "x.pdf"}}), encoding="utf-8")
+    (state / ".antigravity_history.json").write_text(json.dumps(["uncommitted"]), encoding="utf-8")
+    (state / "run_state.json").write_text(json.dumps({"status": status}), encoding="utf-8")
+    session = api._create_processing_pipeline_session(
+        [], "", str(output), _extractor=InvoiceExtractor(api_key="", output_dir=str(output))
+    )
+    try:
+        assert session._business_records == {}
+        assert "uncommitted" not in session._working_history
+        assert not (state / "committed_state.json").exists()
     finally:
         session.close()
 

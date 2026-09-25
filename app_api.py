@@ -1,4 +1,6 @@
 import copy
+import errno
+import imaplib
 import importlib
 import json
 import os
@@ -22,7 +24,7 @@ from email_channel import resolve_channel
 from frontend_run_context import ensure_run_context_dirs, load_run_context, make_run_staging_dir, serialize_run_context
 from glm_runtime import GlmRequestError, GlmRuntime
 from report_service import ReportService
-from run_coordinator import RunCoordinator, RunDependencies, RunRequest
+from run_coordinator import RunCoordinator, RunDependencies, RunImapCancelled, RunRequest
 from run_lifecycle import RunLifecycle, RunState
 from run_state_store import RunStateStore
 from provider_direct_invoice import DIRECT_INVOICE_FAMILIES
@@ -814,6 +816,8 @@ class InvoiceAppAPI:
         self.quota_message = ""
         self._worker_thread = None
         self._active_fetcher = None
+        self._imap_abort_run_id = None
+        self._preserved_staging_dir = None
         self._truth_audit_thread = None
         self._truth_audit_job = None
         if truth_audit_timeout_seconds is None:
@@ -869,6 +873,8 @@ class InvoiceAppAPI:
         temp_root = Path(run_root).resolve() / "temp" if run_root else Path.cwd() / "temp"
         self._active_temp_dir = temp_root / lifecycle_run_id
         self._active_run_handle = handle
+        self._imap_abort_run_id = None
+        self._preserved_staging_dir = None
         self._terminal_frontend_run_id = ""
         return handle
 
@@ -2064,6 +2070,9 @@ class InvoiceAppAPI:
         fetcher = self._active_fetcher
         abort = getattr(fetcher, "abort", None)
         if callable(abort):
+            handle = self._active_run_handle
+            if handle is not None:
+                self._imap_abort_run_id = handle.run_id
             abort()
         self.status_text = message
         self._append_log("停止", message, "text-amber-600")
@@ -2215,6 +2224,29 @@ class InvoiceAppAPI:
 
     def _load_output_run_state(self, output_state_dir):
         return self._read_json_file(self._run_state_file_path(output_state_dir), {})
+
+    def _migrate_completed_output_state(self, output_state_dir):
+        committed_path = self._committed_state_file_path(output_state_dir)
+        if os.path.exists(committed_path):
+            return
+        run_state = self._load_output_run_state(output_state_dir)
+        if not isinstance(run_state, dict) or run_state.get("status") != "completed":
+            return
+        with open(self._history_file_path(output_state_dir), "r", encoding="utf-8") as handle:
+            history = json.load(handle)
+        with open(os.path.join(output_state_dir, "processed_records.json"), "r", encoding="utf-8") as handle:
+            records = json.load(handle)
+        if (
+            not isinstance(history, list)
+            or any(not isinstance(item, str) for item in history)
+            or not isinstance(records, dict)
+            or any(not isinstance(key, str) for key in records)
+        ):
+            raise ValueError("Completed output state is unreadable")
+        self._write_json_file(
+            committed_path,
+            {"history": history, "business_records": records},
+        )
 
     def _load_committed_history(self, output_state_dir):
         committed_path = self._committed_state_file_path(output_state_dir)
@@ -2492,9 +2524,28 @@ class InvoiceAppAPI:
 
         from email_fetcher import EmailFetcher
         from invoice_extractor import InvoiceExtractor
+        from mailbox_scanner import MailboxScanError
         from run_evidence import RunEvidenceWriter
 
         resources = {"fetcher": None, "pipeline": None}
+
+        def cancelled_imap_abort(fetcher, exc):
+            handle = self._active_run_handle
+            if (
+                not self._stop_requested
+                or self._imap_abort_run_id != request.run_id
+                or handle is None
+                or handle.run_id != request.run_id
+                or self._active_fetcher is not fetcher
+            ):
+                return False
+            if isinstance(exc, MailboxScanError):
+                exc = exc.__cause__
+            return isinstance(exc, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, imaplib.IMAP4.abort)) or (
+                isinstance(exc, OSError)
+                and not isinstance(exc, TimeoutError)
+                and exc.errno in {errno.EBADF, errno.ENOTCONN, errno.ECONNRESET, errno.EPIPE}
+            )
 
         account_label = f"{request.channel_id}:{request.account_id}"
 
@@ -2530,6 +2581,8 @@ class InvoiceAppAPI:
                 "text-blue-400",
             )
             if not fetcher.connect():
+                if cancelled_imap_abort(fetcher, getattr(fetcher, "connection_error", None)):
+                    raise RunImapCancelled(request.run_id)
                 if getattr(fetcher, "certificate_error", False):
                     raise ImapCertificateError("IMAP_TLS_CERTIFICATE_INVALID")
                 if getattr(fetcher, "timeout_error", False):
@@ -2552,10 +2605,15 @@ class InvoiceAppAPI:
             self._coordinator_before_date = before_date
             self._append_log("运行", f"原始用户范围：{self._raw_date_range_display}", "text-blue-400")
             self._append_log("运行", f"实际 IMAP 查询：{self._imap_query_range_display}", "text-blue-400")
-            email_ids = fetcher.fetch_emails_by_date(
-                since_date=since_date,
-                before_date=before_date,
-            )
+            try:
+                email_ids = fetcher.fetch_emails_by_date(
+                    since_date=since_date,
+                    before_date=before_date,
+                )
+            except Exception as exc:
+                if cancelled_imap_abort(fetcher, exc):
+                    raise RunImapCancelled(request.run_id) from exc
+                raise
             self.stats["emails"] = len(email_ids)
             self._append_log("信息", f"共匹配到 {len(email_ids)} 封邮件。", "text-emerald-400")
             if self._stop_requested:
@@ -2565,7 +2623,12 @@ class InvoiceAppAPI:
         def candidate(fetcher_email_ids, _request):
             fetcher = resources["fetcher"]
             self._append_log("运行", "正在下载并提取附件...", "text-blue-400")
-            attachments = fetcher.extract_attachments(fetcher_email_ids)
+            try:
+                attachments = fetcher.extract_attachments(fetcher_email_ids)
+            except Exception as exc:
+                if cancelled_imap_abort(fetcher, exc):
+                    raise RunImapCancelled(request.run_id) from exc
+                raise
             self._append_log("信息", f"共提取到 {len(attachments)} 个附件。", "text-emerald-400")
             return attachments
 
@@ -2798,6 +2861,7 @@ class InvoiceAppAPI:
 
         candidates = CandidatePipeline().collect(attachments_info)
         output_state_dir = self._output_state_dir(save_path)
+        self._migrate_completed_output_state(output_state_dir)
         business_records = self._load_business_records(save_path, output_state_dir, _extractor)
         working_history = set(self._load_committed_history(output_state_dir))
         sidecar = {}
@@ -3059,7 +3123,22 @@ class InvoiceAppAPI:
             if runtime_metadata.get("file_name") and not is_url:
                 original_name = os.path.basename(str(runtime_metadata["file_name"]))
             target_path = _unique_path(f"{prefix}_{original_name}")
-            shutil.copy2(source_path, target_path)
+            try:
+                shutil.copy2(source_path, target_path)
+            except OSError:
+                if is_url and has_local_file:
+                    self._preserved_staging_dir = staging
+                    self._append_log(
+                        "错误",
+                        f"人工复核副本保存失败，下载原件已保留：{source}",
+                        "text-error",
+                    )
+                if os.path.exists(target_path):
+                    try:
+                        os.remove(target_path)
+                    except OSError:
+                        pass
+                raise
 
         sidecar = f"{target_path}.json"
         payload = {
@@ -3209,6 +3288,8 @@ class InvoiceAppAPI:
 
         for target_path in temp_paths:
             if not target_path or not os.path.exists(target_path) or not os.path.isdir(target_path):
+                continue
+            if staging_dir and os.path.realpath(target_path) == self._preserved_staging_dir:
                 continue
             try:
                 shutil.rmtree(target_path)
