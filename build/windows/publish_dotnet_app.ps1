@@ -47,7 +47,18 @@ try {
 
     $ManifestDirectory = Join-Path $OutputRoot "manifests"
     $ModelsDirectory = Join-Path $OutputRoot "models"
-    New-Item -ItemType Directory -Force -Path $ManifestDirectory, $ModelsDirectory | Out-Null
+    $OcrModelDirectory = Join-Path $ModelsDirectory "ocr"
+    $LicenseDirectory = Join-Path $OutputRoot "licenses"
+    New-Item -ItemType Directory -Force -Path $ManifestDirectory, $OcrModelDirectory, $LicenseDirectory | Out-Null
+
+    $ModelAssemblyName = "Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll"
+    $PublishedModelAssembly = Join-Path $OutputRoot $ModelAssemblyName
+    if (-not (Test-Path -LiteralPath $PublishedModelAssembly -PathType Leaf)) {
+        throw "Published output is missing the pinned OCR model assembly."
+    }
+    Copy-Item -LiteralPath $PublishedModelAssembly -Destination (Join-Path $OcrModelDirectory $ModelAssemblyName) -Force
+    Copy-Item -LiteralPath (Join-Path $RepoRoot "licenses\THIRD-PARTY-NOTICES.txt") -Destination (Join-Path $LicenseDirectory "THIRD-PARTY-NOTICES.txt") -Force
+
     & (Join-Path $RepoRoot "build\model-manifest.ps1") -ModelsRoot $ModelsDirectory -Output (Join-Path $ManifestDirectory "model.json")
     & (Join-Path $RepoRoot "build\release-manifest.ps1") -PublishRoot $OutputRoot -Output (Join-Path $ManifestDirectory "release.json") -ProductVersion $ProductVersion -RuntimeIdentifier "win-x64" -Architecture "x64"
 }

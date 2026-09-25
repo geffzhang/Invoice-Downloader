@@ -23,33 +23,45 @@ if (-not (Test-Path -LiteralPath $ModelsRoot -PathType Container)) {
     throw "ModelsRoot '$ModelsRoot' does not exist or is not a directory."
 }
 
+$requiredAssets = @('ocr/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll')
+foreach ($relativePath in $requiredAssets) {
+    $assetPath = Join-Path $ModelsRoot ($relativePath.Replace('/', [IO.Path]::DirectorySeparatorChar))
+    if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf)) {
+        throw "Required OCR model asset '$relativePath' is missing."
+    }
+    if ((Get-Item -LiteralPath $assetPath).Length -le 0) {
+        throw "Required OCR model asset '$relativePath' is empty."
+    }
+}
+
 # Stable sort by relative path so the manifest JSON hash is
 # reproducible regardless of the OS's file enumeration order.
 $files = @(Get-ChildItem -LiteralPath $ModelsRoot -File -Recurse |
     Where-Object { $_.FullName -notmatch '[\\/]manifests[\\/]' } |
-    Sort-Object -Property @{ Expression = { $_.FullName.Substring($ModelsRoot.Length).TrimStart('\\','/') } })
+    Sort-Object -Property @{ Expression = { $_.FullName.Substring($ModelsRoot.Length).TrimStart([char[]]@('\','/')) } })
 
 $assets = @(foreach ($file in $files) {
-    $rel = $file.FullName.Substring($ModelsRoot.Length).TrimStart('\','/').Replace('\','/')
+    $rel = $file.FullName.Substring($ModelsRoot.Length).TrimStart([char[]]@('\','/')).Replace('\','/')
     $kind = switch -Wildcard ($rel) {
-        '*.bin'        { 'model' }
-        '*.onnx'       { 'onnx' }
-        '*.json'       { 'metadata' }
-        '*.txt'        { 'license' }
-        default        { 'data' }
+        'ocr/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll' { 'model-bundle'; break }
+        '*.bin'        { 'model'; break }
+        '*.onnx'       { 'onnx'; break }
+        '*/dict.txt'   { 'dictionary'; break }
+        '*.json'       { 'metadata'; break }
+        '*.txt'        { 'license'; break }
+        default        { 'data'; break }
     }
     [pscustomobject]@{
         relativePath = $rel.Replace('/', [IO.Path]::DirectorySeparatorChar)
-        sizeBytes    = $file.Length
+        length       = $file.Length
         sha256       = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         kind         = $kind
-        revision     = $null
-        notes        = $null
+        revision     = if ($kind -eq 'model-bundle') { '1.0.0' } else { $null }
+        notes        = if ($kind -eq 'model-bundle') { 'Embedded PP-OCRv6 Chinese V6 Tiny model bundle.' } else { $null }
     }
 })
 
-$vendor = 'InvoiceFlowAI'
-$schema = 'invoiceflow.model-manifest.v1'
+$vendor = 'Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny'
 
 # Compute the manifest fingerprint deterministically (sorted entries).
 $jsonForHash = ConvertTo-Json -InputObject @($assets | Sort-Object relativePath) -Depth 5 -Compress
@@ -60,10 +72,10 @@ $fingerprint = [BitConverter]::ToString(
 ).Replace('-', '').ToLowerInvariant()
 
 $manifest = [pscustomobject]@{
-    schemaVersion       = $schema
-    vendor              = $vendor
-    assets              = @($assets | Sort-Object relativePath)
-    manifestFingerprint = $fingerprint
+    schemaVersion = 1
+    vendor        = $vendor
+    assets        = @($assets | Sort-Object relativePath)
+    manifestSha256 = $fingerprint
 }
 
 $dir = Split-Path -Parent $Output

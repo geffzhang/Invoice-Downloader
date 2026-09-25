@@ -7,6 +7,7 @@
 // the root directory.
 
 using System.Security.Cryptography;
+using System.Reflection.PortableExecutable;
 using ContractsRelease = InvoiceFlowAI.Contracts.Release;
 
 namespace InvoiceFlowAI.Application.Release;
@@ -30,6 +31,9 @@ public sealed record ReleaseAssetIssue(
 
 public sealed class ReleaseManifestVerifier : IReleaseManifestVerifier
 {
+    private const string ChineseV6TinyVendor = "Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny";
+    private const string ChineseV6TinyBundlePath = "ocr/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll";
+
     public ReleaseVerificationReport Verify(ContractsRelease.ReleaseManifest manifest, string publishRoot)
     {
         ArgumentNullException.ThrowIfNull(manifest);
@@ -58,6 +62,44 @@ public sealed class ReleaseManifestVerifier : IReleaseManifestVerifier
             });
         }
         var issues = new List<ReleaseAssetIssue>();
+        if (string.Equals(manifest.Vendor, ChineseV6TinyVendor, StringComparison.Ordinal))
+        {
+            var assetsByPath = manifest.Assets
+                .GroupBy(asset => asset.RelativePath.Replace('\\', '/'), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+            if (!assetsByPath.TryGetValue(ChineseV6TinyBundlePath, out var bundles))
+            {
+                issues.Add(new ReleaseAssetIssue(ChineseV6TinyBundlePath, "ModelAssetMissing", "required OCR model bundle is missing"));
+            }
+            else if (bundles.Length != 1)
+            {
+                issues.Add(new ReleaseAssetIssue(ChineseV6TinyBundlePath, "ModelAssetDuplicate", "OCR model bundle must appear exactly once"));
+            }
+            else
+            {
+                var bundle = bundles[0];
+                if (bundle.Length <= 0)
+                {
+                    issues.Add(new ReleaseAssetIssue(bundle.RelativePath, "ModelAssetSizeInvalid", "model bundle must not be empty"));
+                }
+                if (!string.Equals(bundle.Kind, "model-bundle", StringComparison.OrdinalIgnoreCase))
+                {
+                    issues.Add(new ReleaseAssetIssue(bundle.RelativePath, "ModelAssetKindMismatch", "OCR model bundle kind is invalid"));
+                }
+                if (!string.Equals(bundle.Revision, "1.0.0", StringComparison.Ordinal))
+                {
+                    issues.Add(new ReleaseAssetIssue(bundle.RelativePath, "ModelRevisionMismatch", "OCR model bundle revision is invalid"));
+                }
+
+                CheckOne(modelsRoot, bundle.RelativePath, bundle.Length, bundle.Sha256, "model-bundle", issues);
+                if (TryResolve(modelsRoot, bundle.RelativePath, out var bundlePath, out _) && File.Exists(bundlePath)
+                    && !IsAnyCpuManagedAssembly(bundlePath))
+                {
+                    issues.Add(new ReleaseAssetIssue(bundle.RelativePath, "ModelArchitectureMismatch", "OCR model bundle must be an AnyCPU managed assembly"));
+                }
+            }
+        }
+
         foreach (var asset in manifest.Assets)
         {
             CheckOne(modelsRoot, asset.RelativePath, asset.Length, asset.Sha256, asset.Kind, issues);
@@ -171,6 +213,26 @@ public sealed class ReleaseManifestVerifier : IReleaseManifestVerifier
         catch (Exception ex)
         {
             issues.Add(new ReleaseAssetIssue(relativePath, "PeReadFailed", ex.Message));
+        }
+    }
+
+    private static bool IsAnyCpuManagedAssembly(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = new PEReader(stream);
+            var headers = reader.PEHeaders;
+            var corHeader = headers.CorHeader;
+            return headers.CoffHeader.Machine == Machine.I386
+                && corHeader is not null
+                && (corHeader.Flags & CorFlags.ILOnly) != 0
+                && (corHeader.Flags & CorFlags.Requires32Bit) == 0
+                && (corHeader.Flags & CorFlags.Prefers32Bit) == 0;
+        }
+        catch
+        {
+            return false;
         }
     }
 }

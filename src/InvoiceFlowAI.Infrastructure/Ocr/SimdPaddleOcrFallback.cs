@@ -1,6 +1,11 @@
+using System.Text.Json;
 using InvoiceFlowAI.Application.Extraction;
+using InvoiceFlowAI.Application.Release;
+using InvoiceFlowAI.Contracts.Release;
+using InvoiceFlowAI.Contracts.Serialization;
 using InvoiceFlowAI.Domain.Candidates;
 using Sdcb.SimdPaddleOCR;
+using Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny;
 using SkiaSharp;
 
 namespace InvoiceFlowAI.Infrastructure.Ocr;
@@ -14,7 +19,9 @@ public sealed record SimdPaddleOcrOptions(
     int MaximumPages = 2,
     int MaximumWidth = 4096,
     int MaximumHeight = 8192,
-    long MaximumImageBytes = 10 * 1024 * 1024)
+    long MaximumImageBytes = 10 * 1024 * 1024,
+    bool UseEmbeddedModels = false,
+    string? ModelManifestPath = null)
 {
     public int EffectiveMaximumConcurrency => Math.Min(MaximumConcurrency, 2);
 
@@ -22,7 +29,9 @@ public sealed record SimdPaddleOcrOptions(
         Path.Combine(baseDirectory, "models", "ocr", "det.onnx"),
         Path.Combine(baseDirectory, "models", "ocr", "cls.onnx"),
         Path.Combine(baseDirectory, "models", "ocr", "rec.onnx"),
-        Path.Combine(baseDirectory, "models", "ocr", "dict.txt"));
+        Path.Combine(baseDirectory, "models", "ocr", "dict.txt"),
+        UseEmbeddedModels: true,
+        ModelManifestPath: Path.Combine(baseDirectory, "manifests", "model.json"));
 }
 
 public sealed class SimdPaddleOcrFallback : IOcrFallback, IAsyncDisposable
@@ -110,6 +119,10 @@ public sealed class SimdPaddleOcrFallback : IOcrFallback, IAsyncDisposable
         {
             throw;
         }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
         catch
         {
             throw new InvalidOperationException("OCR recognition failed.");
@@ -148,27 +161,33 @@ public sealed class SimdPaddleOcrFallback : IOcrFallback, IAsyncDisposable
             return _ocr;
         }
 
-        var modelPaths = new[]
-        {
-            _options.DetectionModelPath,
-            _options.ClassificationModelPath,
-            _options.RecognitionModelPath,
-            _options.DictionaryPath,
-        };
-        if (modelPaths.Any(path => string.IsNullOrWhiteSpace(path) || !File.Exists(path)))
-        {
-            throw new InvalidOperationException("OCR model assets are unavailable.");
-        }
-
-        try
-        {
-            _ocr = await PaddleOcrAll.LoadAsync(
+        if (!_options.UseEmbeddedModels && new[]
+            {
                 _options.DetectionModelPath,
                 _options.ClassificationModelPath,
                 _options.RecognitionModelPath,
                 _options.DictionaryPath,
-                new PaddleOcrOptions(),
-                cancellationToken).ConfigureAwait(false);
+            }.Any(path => string.IsNullOrWhiteSpace(path) || !File.Exists(path)))
+        {
+            throw new InvalidOperationException("OCR model assets are unavailable.");
+        }
+
+        if (_options.UseEmbeddedModels)
+        {
+            VerifyEmbeddedModelManifest();
+        }
+
+        try
+        {
+            _ocr = _options.UseEmbeddedModels
+                ? await PaddleOcrAll.LoadAsync(ChineseV6TinyModels.Default, new PaddleOcrOptions(), cancellationToken).ConfigureAwait(false)
+                : await PaddleOcrAll.LoadAsync(
+                    _options.DetectionModelPath,
+                    _options.ClassificationModelPath,
+                    _options.RecognitionModelPath,
+                    _options.DictionaryPath,
+                    new PaddleOcrOptions(),
+                    cancellationToken).ConfigureAwait(false);
             return _ocr;
         }
         catch (OperationCanceledException)
@@ -178,6 +197,32 @@ public sealed class SimdPaddleOcrFallback : IOcrFallback, IAsyncDisposable
         catch
         {
             throw new InvalidOperationException("OCR model initialization failed.");
+        }
+    }
+
+    private void VerifyEmbeddedModelManifest()
+    {
+        try
+        {
+            var manifestPath = _options.ModelManifestPath;
+            if (string.IsNullOrWhiteSpace(manifestPath) || !File.Exists(manifestPath))
+            {
+                throw new InvalidDataException();
+            }
+
+            var manifestJson = File.ReadAllText(manifestPath);
+            var manifest = JsonSerializer.Deserialize<ModelManifest>(manifestJson, InvoiceJsonOptions.Strict);
+            var publishRoot = Path.GetDirectoryName(Path.GetDirectoryName(manifestPath)!)!;
+            var modelRoot = Path.Combine(publishRoot, "models");
+            var report = new ReleaseManifestVerifier().VerifyModel(manifest, modelRoot);
+            if (!report.AllPresent)
+            {
+                throw new InvalidDataException();
+            }
+        }
+        catch
+        {
+            throw new InvalidOperationException("OCR model manifest is unavailable or invalid.");
         }
     }
 

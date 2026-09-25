@@ -169,6 +169,88 @@ public sealed class ReleaseManifestVerifierTests
     }
 
     [Fact]
+    public void Empty_model_manifest_reports_missing_required_chinese_v6_tiny_assets()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var manifest = new ModelManifest(1, "Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny", [], "fixture");
+
+            var report = _verifier.VerifyModel(manifest, dir);
+
+            report.AllPresent.Should().BeFalse();
+            report.Issues.Should().ContainSingle(issue =>
+                issue.RelativePath == "ocr/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll"
+                && issue.Code == "ModelAssetMissing");
+        }
+        finally { TryDelete(dir); }
+    }
+
+    [Fact]
+    public void Complete_chinese_v6_tiny_manifest_verifies_synthetic_assets()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var assets = WriteSyntheticModelBundle(dir, typeof(ReleaseManifestVerifierTests).Assembly.Location);
+            var manifest = new ModelManifest(1, "Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny", assets, "fixture");
+
+            var report = _verifier.VerifyModel(manifest, dir);
+
+            report.AllPresent.Should().BeTrue();
+            report.Issues.Should().BeEmpty();
+        }
+        finally { TryDelete(dir); }
+    }
+
+    [Fact]
+    public void Model_manifest_rejects_wrong_size_and_hash_for_model_bundle()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var path = Path.Combine(dir, "ocr", "Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var bytes = new byte[] { 1, 2, 3, 4 };
+            File.WriteAllBytes(path, bytes);
+            var assets = WriteSyntheticModelBundle(dir, typeof(ReleaseManifestVerifierTests).Assembly.Location)
+                .Select(asset => asset.RelativePath == "ocr/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll"
+                    ? asset with { Length = 99, Sha256 = "0".PadRight(64, '0') }
+                    : asset)
+                .ToArray();
+            var manifest = new ModelManifest(1, "Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny", assets, "fixture");
+
+            var report = _verifier.VerifyModel(manifest, dir);
+
+            report.Issues.Should().Contain(issue => issue.RelativePath == "ocr/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll" && issue.Code == "SizeMismatch");
+            report.Issues.Should().Contain(issue => issue.RelativePath == "ocr/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll" && issue.Code == "HashMismatch");
+        }
+        finally { TryDelete(dir); }
+    }
+
+    [Fact]
+    public void Model_manifest_rejects_non_managed_or_wrong_architecture_bundle()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var path = Path.Combine(dir, "ocr", "Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var bytes = CreatePeImage(machine: 0x8664);
+            File.WriteAllBytes(path, bytes);
+            var manifest = new ModelManifest(1, "Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny", [
+                new ModelManifestAsset("ocr/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll", bytes.LongLength,
+                    Sha256Hex(bytes), "model-bundle", "1.0.0", null),
+            ], "fixture");
+
+            var report = _verifier.VerifyModel(manifest, dir);
+
+            report.Issues.Should().Contain(issue => issue.Code == "ModelArchitectureMismatch");
+        }
+        finally { TryDelete(dir); }
+    }
+
+    [Fact]
     public void Adapter_routes_native_kind_to_PE_check()
     {
         var dir = NewTempDir();
@@ -224,6 +306,28 @@ public sealed class ReleaseManifestVerifierTests
 
     private static string Sha256Hex(byte[] bytes) =>
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private static ModelManifestAsset[] WriteSyntheticModelBundle(string root, string assemblyPath)
+    {
+        const string relativePath = "ocr/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll";
+        var bytes = File.ReadAllBytes(assemblyPath);
+        var outputPath = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+        File.WriteAllBytes(outputPath, bytes);
+        return [new ModelManifestAsset(relativePath, bytes.LongLength, Sha256Hex(bytes), "model-bundle", "1.0.0", null)];
+    }
+
+    private static byte[] CreatePeImage(ushort machine)
+    {
+        var bytes = new byte[0x100];
+        bytes[0] = (byte)'M';
+        bytes[1] = (byte)'Z';
+        BitConverter.GetBytes(0x80).CopyTo(bytes, 0x3C);
+        bytes[0x80] = (byte)'P';
+        bytes[0x81] = (byte)'E';
+        BitConverter.GetBytes(machine).CopyTo(bytes, 0x84);
+        return bytes;
+    }
 
     private static void TryDelete(string dir)
     {
