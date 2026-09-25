@@ -1,6 +1,345 @@
 {
   "cases": [
     {
+      "caseId": "nuonuo-multiple-valid-pdfs-fail-closed",
+      "selector": "nuonuo",
+      "providerFamily": "nuonuo_scan_invoice",
+      "sourceUrl": "https://nnfp.jss.com.cn/scan-invoice/printqrcode?paramList=fixture-ambiguous",
+      "expectedFields": {},
+      "expectedArtifactKinds": [],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedMatchReason": "",
+      "expectedFailure": "NUONUO_ARTIFACT_SELECTION_AMBIGUOUS",
+      "responses": [
+        { "statusCode": 200, "contentType": "text/html", "body": "", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/json", "body": "{\"status\":\"0000\",\"data\":{\"invoiceSimpleVo\":{\"xmlUrl\":\"https://files.fixture.invalid/first.pdf\",\"url\":\"https://files.fixture.invalid/second.pdf\"}}}", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/pdf", "body": "%PDF-1.7 first", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/pdf", "body": "%PDF-1.7 second", "redirectLocation": null }
+      ]
+    },
+    {
+      "caseId": "nuonuo-xml-identity-mismatch-fails-closed",
+      "selector": "nuonuo",
+      "providerFamily": "nuonuo_scan_invoice",
+      "sourceUrl": "https://nnfp.jss.com.cn/scan-invoice/printqrcode?paramList=fixture-mismatch",
+      "expectedFields": { "invoice_number": "11111111111111111111" },
+      "expectedArtifactKinds": ["Xml", "Pdf"],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedFailure": "DIRECT_INVOICE_PDF_ENTITY_MISMATCH",
+      "responses": [
+        { "statusCode": 200, "contentType": "text/html", "body": "", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/json", "body": "{\"status\":\"0000\",\"data\":{\"invoiceSimpleVo\":{\"xmlUrl\":\"https://files.fixture.invalid/invoice.xml\",\"url\":\"https://files.fixture.invalid/invoice.pdf\"}}}", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/xml", "body": "<?xml version=\"1.0\"?><InvoiceNumber>99999999999999999999</InvoiceNumber>", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/pdf", "body": "%PDF-1.7 synthetic", "redirectLocation": null }
+      ]
+    },
+    {
+      "caseId": "direct-chinatax-archive-pairs-pdf-with-matching-xml",
+      "selector": "direct",
+      "providerFamily": "chinatax_direct_invoice",
+      "sourceUrl": "https://tax.fixture.invalid/archive.zip?token=synthetic",
+      "expectedFields": { "invoice_number": "11111111111111111111" },
+      "expectedArtifactKinds": ["Xml", "Pdf", "Ofd"],
+      "expectedSelectedIndex": 1,
+      "expectedSelectedKind": "Pdf",
+      "expectedMatchReason": "invoice_number",
+      "responses": [
+        { "statusCode": 302, "contentType": "text/plain", "body": "", "redirectLocation": "https://cdn.fixture.invalid/archive.zip?token=redirected" },
+        {
+          "statusCode": 200,
+          "contentType": "application/zip",
+          "body": "",
+          "redirectLocation": null,
+          "archiveMembers": [
+            { "name": "invoice.xml", "body": "<?xml version=\"1.0\"?><InvoiceNumber>11111111111111111111</InvoiceNumber>" },
+            { "name": "invoice.pdf", "body": "%PDF-1.7 synthetic" },
+            { "name": "invoice.ofd", "body": "", "archiveMembers": [
+              { "name": "OFD.xml", "body": "<?xml version=\"1.0\"?><OFD/>" }
+            ] }
+          ]
+        }
+      ]
+    },
+    {
+      "caseId": "direct-bwjf-archive-pairs-pdf-with-matching-xml",
+      "selector": "direct",
+      "providerFamily": "bwjf_signed_invoice",
+      "sourceUrl": "https://bwjf.fixture.invalid/archive.zip?token=synthetic",
+      "expectedFields": { "invoice_number": "11111111111111111111" },
+      "expectedArtifactKinds": ["Xml", "Pdf", "Ofd"],
+      "expectedSelectedIndex": 1,
+      "expectedSelectedKind": "Pdf",
+      "expectedMatchReason": "invoice_number",
+      "responses": [
+        { "statusCode": 302, "contentType": "text/plain", "body": "", "redirectLocation": "https://cdn.fixture.invalid/archive.zip?token=redirected" },
+        { "statusCode": 200, "contentType": "application/zip", "body": "", "redirectLocation": null,
+          "archiveMembers": [
+            { "name": "invoice.xml", "body": "<?xml version=\"1.0\"?><InvoiceNumber>11111111111111111111</InvoiceNumber>" },
+            { "name": "invoice.pdf", "body": "%PDF-1.7 synthetic" },
+            { "name": "invoice.ofd", "body": "", "archiveMembers": [
+              { "name": "OFD.xml", "body": "<?xml version=\"1.0\"?><OFD/>" }
+            ] }
+          ] }
+      ]
+    },
+    {
+      "caseId": "direct-fpyun-archive-pairs-pdf-with-matching-xml",
+      "selector": "direct",
+      "providerFamily": "fpyun_direct_invoice",
+      "sourceUrl": "https://sdapi.fpyun.com.cn/invoice/qd/download/getInvoiceFile?fptqm=fixture-archive",
+      "expectedFields": { "invoice_number": "11111111111111111111" },
+      "expectedArtifactKinds": ["Xml", "Pdf", "Ofd"],
+      "expectedSelectedIndex": 1,
+      "expectedSelectedKind": "Pdf",
+      "expectedMatchReason": "invoice_number",
+      "responses": [
+        { "statusCode": 200, "contentType": "application/zip", "body": "", "redirectLocation": null,
+          "archiveMembers": [
+            { "name": "invoice.xml", "body": "<?xml version=\"1.0\"?><InvoiceNumber>11111111111111111111</InvoiceNumber>" },
+            { "name": "invoice.pdf", "body": "%PDF-1.7 synthetic" },
+            { "name": "invoice.ofd", "body": "", "archiveMembers": [
+              { "name": "OFD.xml", "body": "<?xml version=\"1.0\"?><OFD/>" }
+            ] }
+          ] }
+      ]
+    },
+    {
+      "caseId": "direct-pdd-archive-pairs-pdf-with-matching-xml",
+      "selector": "direct",
+      "providerFamily": "pdd_direct_invoice",
+      "sourceUrl": "https://pdd.fixture.invalid/archive.zip?token=synthetic",
+      "expectedFields": { "invoice_number": "11111111111111111111" },
+      "expectedArtifactKinds": ["Xml", "Pdf", "Ofd"],
+      "expectedSelectedIndex": 1,
+      "expectedSelectedKind": "Pdf",
+      "expectedMatchReason": "invoice_number",
+      "responses": [
+        { "statusCode": 302, "contentType": "text/plain", "body": "", "redirectLocation": "https://cdn.fixture.invalid/archive.zip?token=redirected" },
+        { "statusCode": 200, "contentType": "application/zip", "body": "", "redirectLocation": null,
+          "archiveMembers": [
+            { "name": "invoice.xml", "body": "<?xml version=\"1.0\"?><InvoiceNumber>11111111111111111111</InvoiceNumber>" },
+            { "name": "invoice.pdf", "body": "%PDF-1.7 synthetic" },
+            { "name": "invoice.ofd", "body": "", "archiveMembers": [
+              { "name": "OFD.xml", "body": "<?xml version=\"1.0\"?><OFD/>" }
+            ] }
+          ] }
+      ]
+    },
+    {
+      "caseId": "direct-jdcloud-archive-pairs-pdf-with-matching-xml",
+      "selector": "direct",
+      "providerFamily": "jdcloud_direct_invoice",
+      "sourceUrl": "https://jd.fixture.invalid/archive.zip?token=synthetic",
+      "expectedFields": { "invoice_number": "11111111111111111111" },
+      "expectedArtifactKinds": ["Xml", "Pdf", "Ofd"],
+      "expectedSelectedIndex": 1,
+      "expectedSelectedKind": "Pdf",
+      "expectedMatchReason": "invoice_number",
+      "responses": [
+        { "statusCode": 302, "contentType": "text/plain", "body": "", "redirectLocation": "https://cdn.fixture.invalid/archive.zip?token=redirected" },
+        { "statusCode": 200, "contentType": "application/zip", "body": "", "redirectLocation": null,
+          "archiveMembers": [
+            { "name": "invoice.xml", "body": "<?xml version=\"1.0\"?><InvoiceNumber>11111111111111111111</InvoiceNumber>" },
+            { "name": "invoice.pdf", "body": "%PDF-1.7 synthetic" },
+            { "name": "invoice.ofd", "body": "", "archiveMembers": [
+              { "name": "OFD.xml", "body": "<?xml version=\"1.0\"?><OFD/>" }
+            ] }
+          ] }
+      ]
+    },
+    {
+      "caseId": "direct-kpbyd-archive-pairs-pdf-with-matching-xml",
+      "selector": "direct",
+      "providerFamily": "kpbyd_direct_invoice",
+      "sourceUrl": "https://kpbyd.fixture.invalid/archive.zip?token=synthetic",
+      "expectedFields": { "invoice_number": "11111111111111111111" },
+      "expectedArtifactKinds": ["Xml", "Pdf", "Ofd"],
+      "expectedSelectedIndex": 1,
+      "expectedSelectedKind": "Pdf",
+      "expectedMatchReason": "invoice_number",
+      "responses": [
+        { "statusCode": 302, "contentType": "text/plain", "body": "", "redirectLocation": "https://cdn.fixture.invalid/archive.zip?token=redirected" },
+        { "statusCode": 200, "contentType": "application/zip", "body": "", "redirectLocation": null,
+          "archiveMembers": [
+            { "name": "invoice.xml", "body": "<?xml version=\"1.0\"?><InvoiceNumber>11111111111111111111</InvoiceNumber>" },
+            { "name": "invoice.pdf", "body": "%PDF-1.7 synthetic" },
+            { "name": "invoice.ofd", "body": "", "archiveMembers": [
+              { "name": "OFD.xml", "body": "<?xml version=\"1.0\"?><OFD/>" }
+            ] }
+          ] }
+      ]
+    },
+    {
+      "caseId": "direct-chinatax-xml-identity-mismatch-fails-closed",
+      "selector": "direct",
+      "providerFamily": "chinatax_direct_invoice",
+      "sourceUrl": "https://tax.fixture.invalid/mismatch.xml",
+      "expectedFields": { "invoice_number": "11111111111111111111" },
+      "expectedArtifactKinds": ["Xml"],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedFailure": "DIRECT_INVOICE_PDF_ENTITY_MISMATCH",
+      "responses": [ { "statusCode": 200, "contentType": "application/xml", "body": "<?xml version=\"1.0\"?><InvoiceNumber>99999999999999999999</InvoiceNumber>", "redirectLocation": null } ]
+    },
+    {
+      "caseId": "direct-bwjf-xml-identity-mismatch-fails-closed",
+      "selector": "direct",
+      "providerFamily": "bwjf_signed_invoice",
+      "sourceUrl": "https://bwjf.fixture.invalid/mismatch.xml",
+      "expectedFields": { "invoice_number": "11111111111111111111" },
+      "expectedArtifactKinds": ["Xml"],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedFailure": "DIRECT_INVOICE_PDF_ENTITY_MISMATCH",
+      "responses": [ { "statusCode": 200, "contentType": "application/xml", "body": "<?xml version=\"1.0\"?><InvoiceNumber>99999999999999999999</InvoiceNumber>", "redirectLocation": null } ]
+    },
+    {
+      "caseId": "direct-fpyun-xml-identity-mismatch-fails-closed",
+      "selector": "direct",
+      "providerFamily": "fpyun_direct_invoice",
+      "sourceUrl": "https://sdapi.fpyun.com.cn/invoice/qd/download/getInvoiceFile?fptqm=fixture-mismatch",
+      "expectedFields": { "invoice_number": "11111111111111111111" },
+      "expectedArtifactKinds": ["Xml"],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedFailure": "DIRECT_INVOICE_PDF_ENTITY_MISMATCH",
+      "responses": [ { "statusCode": 200, "contentType": "application/xml", "body": "<?xml version=\"1.0\"?><InvoiceNumber>99999999999999999999</InvoiceNumber>", "redirectLocation": null } ]
+    },
+    {
+      "caseId": "direct-pdd-xml-identity-mismatch-fails-closed",
+      "selector": "direct",
+      "providerFamily": "pdd_direct_invoice",
+      "sourceUrl": "https://pdd.fixture.invalid/mismatch.xml",
+      "expectedFields": { "invoice_number": "11111111111111111111" },
+      "expectedArtifactKinds": ["Xml"],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedFailure": "DIRECT_INVOICE_PDF_ENTITY_MISMATCH",
+      "responses": [ { "statusCode": 200, "contentType": "application/xml", "body": "<?xml version=\"1.0\"?><InvoiceNumber>99999999999999999999</InvoiceNumber>", "redirectLocation": null } ]
+    },
+    {
+      "caseId": "direct-jdcloud-xml-identity-mismatch-fails-closed",
+      "selector": "direct",
+      "providerFamily": "jdcloud_direct_invoice",
+      "sourceUrl": "https://jd.fixture.invalid/mismatch.xml",
+      "expectedFields": { "invoice_number": "11111111111111111111" },
+      "expectedArtifactKinds": ["Xml"],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedFailure": "DIRECT_INVOICE_PDF_ENTITY_MISMATCH",
+      "responses": [ { "statusCode": 200, "contentType": "application/xml", "body": "<?xml version=\"1.0\"?><InvoiceNumber>99999999999999999999</InvoiceNumber>", "redirectLocation": null } ]
+    },
+    {
+      "caseId": "direct-kpbyd-xml-identity-mismatch-fails-closed",
+      "selector": "direct",
+      "providerFamily": "kpbyd_direct_invoice",
+      "sourceUrl": "https://kpbyd.fixture.invalid/mismatch.xml",
+      "expectedFields": { "invoice_number": "11111111111111111111" },
+      "expectedArtifactKinds": ["Xml"],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedFailure": "DIRECT_INVOICE_PDF_ENTITY_MISMATCH",
+      "responses": [ { "statusCode": 200, "contentType": "application/xml", "body": "<?xml version=\"1.0\"?><InvoiceNumber>99999999999999999999</InvoiceNumber>", "redirectLocation": null } ]
+    },
+    {
+      "caseId": "direct-chinatax-unsupported-body-fails-closed",
+      "selector": "direct",
+      "providerFamily": "chinatax_direct_invoice",
+      "sourceUrl": "https://tax.fixture.invalid/unknown.bin",
+      "expectedFields": {},
+      "expectedArtifactKinds": [],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedFailure": "DIRECT_INVOICE_NO_VALID_ARTIFACT",
+      "responses": [
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null }
+      ]
+    },
+    {
+      "caseId": "direct-bwjf-unsupported-body-fails-closed",
+      "selector": "direct",
+      "providerFamily": "bwjf_signed_invoice",
+      "sourceUrl": "https://bwjf.fixture.invalid/unknown.bin",
+      "expectedFields": {},
+      "expectedArtifactKinds": [],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedFailure": "DIRECT_INVOICE_NO_VALID_ARTIFACT",
+      "responses": [
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null }
+      ]
+    },
+    {
+      "caseId": "direct-fpyun-unsupported-body-fails-closed",
+      "selector": "direct",
+      "providerFamily": "fpyun_direct_invoice",
+      "sourceUrl": "https://sdapi.fpyun.com.cn/invoice/qd/download/getInvoiceFile?fptqm=fixture-unknown",
+      "expectedFields": {},
+      "expectedArtifactKinds": [],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedFailure": "DIRECT_INVOICE_NO_VALID_ARTIFACT",
+      "responses": [
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null }
+      ]
+    },
+    {
+      "caseId": "direct-pdd-unsupported-body-fails-closed",
+      "selector": "direct",
+      "providerFamily": "pdd_direct_invoice",
+      "sourceUrl": "https://pdd.fixture.invalid/unknown.bin",
+      "expectedFields": {},
+      "expectedArtifactKinds": [],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedFailure": "DIRECT_INVOICE_NO_VALID_ARTIFACT",
+      "responses": [
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null }
+      ]
+    },
+    {
+      "caseId": "direct-jdcloud-unsupported-body-fails-closed",
+      "selector": "direct",
+      "providerFamily": "jdcloud_direct_invoice",
+      "sourceUrl": "https://jd.fixture.invalid/unknown.bin",
+      "expectedFields": {},
+      "expectedArtifactKinds": [],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedFailure": "DIRECT_INVOICE_NO_VALID_ARTIFACT",
+      "responses": [
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null }
+      ]
+    },
+    {
+      "caseId": "direct-kpbyd-unsupported-body-fails-closed",
+      "selector": "direct",
+      "providerFamily": "kpbyd_direct_invoice",
+      "sourceUrl": "https://kpbyd.fixture.invalid/unknown.bin",
+      "expectedFields": {},
+      "expectedArtifactKinds": [],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedFailure": "DIRECT_INVOICE_NO_VALID_ARTIFACT",
+      "responses": [
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null },
+        { "statusCode": 200, "contentType": "application/octet-stream", "body": "synthetic unsupported bytes", "redirectLocation": null }
+      ]
+    },
+    {
       "caseId": "baiwang-matched-xml-selects-related-pdf-and-rejects-wrapper",
       "selector": "baiwang",
       "expectedFields": { "invoice_number": "12345678901234567890" },
@@ -17,6 +356,35 @@
       "expectedWrapperMatch": false
     },
     {
+      "caseId": "baiwang-matching-ofd-selects-same-source-pdf",
+      "selector": "baiwang",
+      "expectedFields": { "invoice_number": "88888888888888888888" },
+      "captures": [
+        { "kind": "Pdf", "sourceUrlOrdinal": 0, "fields": {}, "captureReason": "BAIWANG_WRAPPER_DETECTED" },
+        { "kind": "Ofd", "sourceUrlOrdinal": 1, "fields": { "invoice_number": "88888888888888888888" }, "captureReason": "CAPTURED" },
+        { "kind": "Pdf", "sourceUrlOrdinal": 1, "fields": {}, "captureReason": "CAPTURED" },
+        { "kind": "Pdf", "sourceUrlOrdinal": 2, "fields": { "invoice_number": "99999999999999999999" }, "captureReason": "CAPTURED" }
+      ],
+      "expectedSelectedIndex": 2,
+      "expectedSelectedKind": "Pdf",
+      "expectedSourceUrlOrdinal": 1,
+      "expectedMatchReason": "xml_then_pdf_same_source",
+      "expectedWrapperMatch": false
+    },
+    {
+      "caseId": "baiwang-all-candidates-mismatch-fail-closed",
+      "selector": "baiwang",
+      "expectedFields": { "invoice_number": "11111111111111111111" },
+      "captures": [
+        { "kind": "Pdf", "sourceUrlOrdinal": 0, "fields": { "invoice_number": "99999999999999999999" }, "captureReason": "CAPTURED" },
+        { "kind": "Ofd", "sourceUrlOrdinal": 1, "fields": { "invoice_number": "88888888888888888888" }, "captureReason": "CAPTURED" },
+        { "kind": "Pdf", "sourceUrlOrdinal": 2, "fields": { "invoice_number": "77777777777777777777" }, "captureReason": "CAPTURED" }
+      ],
+      "expectedSelectedIndex": -1,
+      "expectedSelectedKind": "",
+      "expectedFailure": "BAIWANG_PDF_ENTITY_MISMATCH"
+    },
+    {
       "caseId": "nuonuo-retries-detail-and-selects-pdf-with-xml-inventory",
       "selector": "nuonuo",
       "providerFamily": "nuonuo_scan_invoice",
@@ -25,7 +393,7 @@
       "expectedArtifactKinds": ["Xml", "Pdf"],
       "expectedSelectedIndex": 1,
       "expectedSelectedKind": "Pdf",
-      "expectedMatchReason": "ARTIFACT_CAPTURED",
+      "expectedMatchReason": "single_pdf_without_conflict",
       "responses": [
         { "statusCode": 200, "contentType": "text/html", "body": "" },
         { "statusCode": 200, "contentType": "application/json", "body": "{\"status\":\"1001\"}" },

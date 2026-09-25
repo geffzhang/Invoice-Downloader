@@ -140,6 +140,82 @@ public sealed class UrlRecoveryStageTests
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
+    [Fact]
+    public async Task Caller_cancellation_terminates_a_blocked_recovery_request()
+    {
+        var item = WorkItem(UrlSource("https://invoice.example/file"), "blocked-candidate");
+        var requestStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = new BlockingUrlRecoveryClient(requestStarted, cancellationObserved);
+        var stage = new UrlRecoveryStage(client);
+        using var cancellation = new CancellationTokenSource();
+
+        var execution = stage.ExecuteAsync(new CandidateBatch([item]), cancellation.Token);
+        await requestStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
+        await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Recovery_runs_at_most_ten_independent_groups_and_preserves_result_order()
+    {
+        var client = new BarrierGroupRecoveryClient(10);
+        var stage = new UrlRecoveryStage(client, new RecoveredArtifactIdentityFactory());
+        var items = Enumerable.Range(0, 12)
+            .Select(index => GroupWorkItem(index, "generic"))
+            .ToArray();
+        var execution = stage.ExecuteAsync(new CandidateBatch(items), CancellationToken.None);
+
+        await client.ThresholdReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        client.MaximumActive.Should().Be(10);
+        client.Release.TrySetResult();
+
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        result.Items.Select(item => item.Candidate.Sequence).Should().Equal(Enumerable.Range(0, 12).Select(index => (long)index));
+        client.MaximumActive.Should().Be(10);
+    }
+
+    [Fact]
+    public async Task Strong_provider_recovery_runs_at_most_four_groups_at_once()
+    {
+        var client = new BarrierGroupRecoveryClient(4);
+        var stage = new UrlRecoveryStage(client, new RecoveredArtifactIdentityFactory());
+        var items = Enumerable.Range(0, 9)
+            .Select(index => GroupWorkItem(index, "chinatax_direct_invoice"))
+            .ToArray();
+        var execution = stage.ExecuteAsync(new CandidateBatch(items), CancellationToken.None);
+
+        await client.ThresholdReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        client.MaximumActive.Should().Be(4);
+        client.Release.TrySetResult();
+
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        result.Items.Should().HaveCount(9);
+        client.MaximumActive.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task Candidates_inside_one_provider_group_are_recovered_serially()
+    {
+        var candidates = Enumerable.Range(0, 3)
+            .Select(index => UrlSource($"https://provider.example/{index}") with
+            {
+                ProviderFamily = "chinatax_direct_invoice",
+                Sequence = index,
+            })
+            .ToArray();
+        var client = new SerialTrackingUrlRecoveryClient();
+
+        await ((IUrlRecoveryClient)client).RecoverAsync(Group(candidates, "same-provider-group"), CancellationToken.None);
+
+        client.RequestedUris.Should().Equal(candidates.Select(candidate => candidate.SourceUrl));
+        client.MaximumActive.Should().Be(1);
+    }
+
     private static CandidateWorkItem WorkItem(MailboxUrlCandidate? source, string identity)
     {
         var candidate = new DocumentCandidate(
@@ -162,6 +238,25 @@ public sealed class UrlRecoveryStageTests
     private static UrlCandidateGroup Group(MailboxUrlCandidate candidate, string identity)
         => new(candidate.ProviderFamily, [candidate], new Dictionary<string, string>(),
             new Dictionary<string, IReadOnlyList<ExpectedFieldEvidence>>(), DocumentIdentity.Create(identity));
+
+    private static UrlCandidateGroup Group(IReadOnlyList<MailboxUrlCandidate> candidates, string identity)
+        => new(candidates[0].ProviderFamily, candidates, new Dictionary<string, string>(),
+            new Dictionary<string, IReadOnlyList<ExpectedFieldEvidence>>(), DocumentIdentity.Create(identity));
+
+    private static CandidateWorkItem GroupWorkItem(int index, string providerFamily)
+    {
+        var source = UrlSource($"https://recovery.example/{index}") with
+        {
+            ProviderFamily = providerFamily,
+            ProviderGroupId = $"group-{index}",
+            Sequence = index,
+        };
+        return WorkItem(source, $"source-{index}") with
+        {
+            SourceUrlGroup = Group(source, $"group-identity-{index}"),
+            Candidate = WorkItem(source, $"source-{index}").Candidate with { Sequence = index },
+        };
+    }
 
     private static CapturedUrlArtifact Artifact(RecoveredArtifactKind kind, string content, string contentType)
     {
@@ -221,6 +316,88 @@ public sealed class UrlRecoveryStageTests
             RequestedUris.Add(sourceUrl);
             cancellationToken.ThrowIfCancellationRequested();
             return recover(sourceUrl);
+        }
+    }
+
+    private sealed class BlockingUrlRecoveryClient(
+        TaskCompletionSource requestStarted,
+        TaskCompletionSource cancellationObserved) : IUrlRecoveryClient
+    {
+        public Task<UrlRecoveryResult> RecoverAsync(Uri sourceUrl, CancellationToken cancellationToken)
+        {
+            requestStarted.TrySetResult();
+            return WaitForCancellationAsync(cancellationToken);
+        }
+
+        private async Task<UrlRecoveryResult> WaitForCancellationAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                throw new InvalidOperationException("The blocked request unexpectedly completed.");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                cancellationObserved.TrySetResult();
+                throw;
+            }
+        }
+    }
+
+    private sealed class BarrierGroupRecoveryClient(int threshold) : IUrlRecoveryClient
+    {
+        private readonly object _sync = new();
+        private int _active;
+        public TaskCompletionSource ThresholdReached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int MaximumActive { get; private set; }
+
+        public Task<UrlRecoveryResult> RecoverAsync(Uri sourceUrl, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public async Task<UrlRecoveryResult> RecoverAsync(UrlCandidateGroup group, CancellationToken cancellationToken)
+        {
+            lock (_sync)
+            {
+                _active++;
+                MaximumActive = Math.Max(MaximumActive, _active);
+                if (_active >= threshold) ThresholdReached.TrySetResult();
+            }
+
+            try
+            {
+                await Release.Task.WaitAsync(cancellationToken);
+                var bytes = Encoding.ASCII.GetBytes("%PDF-1.7 barrier result");
+                return new UrlRecoveryResult(bytes, "application/pdf");
+            }
+            finally
+            {
+                lock (_sync) _active--;
+            }
+        }
+    }
+
+    private sealed class SerialTrackingUrlRecoveryClient : IUrlRecoveryClient
+    {
+        private int _active;
+        public List<Uri> RequestedUris { get; } = [];
+        public int MaximumActive { get; private set; }
+
+        public async Task<UrlRecoveryResult> RecoverAsync(Uri sourceUrl, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _active++;
+            MaximumActive = Math.Max(MaximumActive, _active);
+            RequestedUris.Add(sourceUrl);
+            try
+            {
+                await Task.Yield();
+                return new UrlRecoveryResult(Encoding.ASCII.GetBytes("%PDF-1.7 serial"), "application/pdf");
+            }
+            finally
+            {
+                _active--;
+            }
         }
     }
 }

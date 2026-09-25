@@ -1,4 +1,8 @@
 using System.Net;
+using System.Net.Security;
+using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Net.Sockets;
 using FluentAssertions;
 using InvoiceFlowAI.Infrastructure.Url;
@@ -67,6 +71,73 @@ public sealed class PinnedHttpUrlRecoveryTransportTests
     }
 
     [Fact]
+    public async Task Https_proxy_tls_uses_configured_proxy_hostname_as_server_identity()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var proxyPort = ((IPEndPoint)listener.LocalEndpoint).Port;
+        using var key = RSA.Create(2048);
+        var certificateRequest = new CertificateRequest(
+            "CN=unrelated.invalid",
+            key,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        using var certificate = certificateRequest.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            DateTimeOffset.UtcNow.AddMinutes(5));
+        var serverName = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var proxyTask = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(3));
+            using var stream = new SslStream(client.GetStream());
+            try
+            {
+                await stream.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+                {
+                    ServerCertificateSelectionCallback = (_, requestedName) =>
+                    {
+                        serverName.TrySetResult(requestedName);
+                        return certificate;
+                    },
+                });
+            }
+            catch (AuthenticationException)
+            {
+            }
+            catch (IOException)
+            {
+            }
+        });
+        var validated = HttpsProxyValidatedUrl("https://invoice.example/invoice", proxyPort);
+        var transport = new PinnedHttpUrlRecoveryTransport(new PublicUrlPolicy());
+
+        var act = () => transport.SendAsync(new UrlTransportRequest(validated, HttpMethod.Get), 1024, CancellationToken.None);
+
+        await act.Should().ThrowAsync<HttpRequestException>();
+        (await serverName.Task.WaitAsync(TimeSpan.FromSeconds(3))).Should().Be("proxy.example");
+        await proxyTask.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public async Task Proxy_bypass_uses_direct_policy_and_disables_transport_proxy()
+    {
+        var proxy = new FixedWebProxy(new Uri("http://proxy.example:7897"), bypass: true);
+        var policy = new PublicUrlPolicy(
+            resolver: (_, _) => Task.FromResult<IReadOnlyList<IPAddress>>([IPAddress.Parse("93.184.216.34")]),
+            proxy: proxy,
+            publicResolver: (_, _) => throw new InvalidOperationException("bypassed target must not use public attestation"),
+            proxyResolver: (_, _) => throw new InvalidOperationException("bypassed target must not resolve a proxy"));
+
+        var validated = await policy.ValidateAsync(new Uri("https://invoice.example/invoice"), CancellationToken.None);
+        var transport = new PinnedHttpUrlRecoveryTransport(policy);
+        using var handler = transport.CreatePinnedHandler(validated);
+
+        validated.ProxyEndpoint.Should().BeNull();
+        handler.UseProxy.Should().BeFalse();
+        handler.ConnectCallback.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task Http_proxy_request_uses_attested_ip_and_preserves_origin_host_header()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -107,6 +178,21 @@ public sealed class PinnedHttpUrlRecoveryTransportTests
         var endpointUri = new Uri($"http://127.0.0.1:{proxyPort}");
         var endpoint = new ValidatedProxyEndpoint(endpointUri, "127.0.0.1", proxyPort, [IPAddress.Loopback]);
         return new ValidatedPublicUrl(uri, "invoice.example", uri.Port, [IPAddress.Parse("93.184.216.34")], endpoint);
+    }
+
+    private static ValidatedPublicUrl HttpsProxyValidatedUrl(string rawUrl, int proxyPort)
+    {
+        var uri = new Uri(rawUrl);
+        var endpointUri = new Uri($"https://proxy.example:{proxyPort}");
+        var endpoint = new ValidatedProxyEndpoint(endpointUri, "proxy.example", proxyPort, [IPAddress.Loopback]);
+        return new ValidatedPublicUrl(uri, "invoice.example", uri.Port, [IPAddress.Parse("93.184.216.34")], endpoint);
+    }
+
+    private sealed class FixedWebProxy(Uri endpoint, bool bypass = false) : IWebProxy
+    {
+        public ICredentials? Credentials { get; set; }
+        public Uri GetProxy(Uri destination) => bypass ? destination : endpoint;
+        public bool IsBypassed(Uri host) => bypass;
     }
 
     private sealed class TrackingHandler(Func<HttpResponseMessage> responseFactory) : HttpMessageHandler
