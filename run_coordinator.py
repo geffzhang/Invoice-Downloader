@@ -178,6 +178,8 @@ class RunCoordinator:
         return {
             "MISSING_REQUIRED_CREDENTIALS": "启动失败",
             "IMAP_LOGIN_FAILED": "邮箱登录失败",
+            "IMAP_TLS_CERTIFICATE_INVALID": "邮箱证书验证失败",
+            "IMAP_CONNECTION_TIMEOUT": "邮箱连接超时",
             "QUOTA_EXHAUSTED": "GLM API 额度不足",
             "REMOTE_AUTH_FAILED": "GLM API 身份验证失败",
             "UNRESOLVED_MAILBOX_INPUT": "邮件读取不完整",
@@ -277,18 +279,21 @@ class RunCoordinator:
                     archive_report=archive_report,
                 )
             except Exception as exc:
-                reason_code, user_message, safe_error = self._safe_failure(exc)
-                acquired_handle.fail(
-                    exc,
-                    reason_code=reason_code,
-                    user_message=user_message,
-                )
-                result = replace(
-                    result,
-                    state=RunState.FINALIZING,
-                    reason_code=reason_code,
-                    error=safe_error,
-                )
+                if self._cancelled():
+                    result = replace(result, cancelled=True)
+                else:
+                    reason_code, user_message, safe_error = self._safe_failure(exc)
+                    acquired_handle.fail(
+                        exc,
+                        reason_code=reason_code,
+                        user_message=user_message,
+                    )
+                    result = replace(
+                        result,
+                        state=RunState.FINALIZING,
+                        reason_code=reason_code,
+                        error=safe_error,
+                    )
 
             try:
                 self._dependencies.state_flush()

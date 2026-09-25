@@ -264,21 +264,28 @@ class InvoiceExtractor:
                         break
                 break
 
+        money = r"(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{2})?"
         amounts = []
         for index, line in enumerate(lines):
             if line.lower() == "transactions":
                 break
             if line.lower() == "total":
                 for candidate in lines[index + 1:index + 4]:
-                    amount_match = re.search(r"\$?\s*([0-9]+(?:\.[0-9]{2})?)\s*(?:USD)?", candidate, re.IGNORECASE)
+                    amount_match = re.search(
+                        rf"(?<![\d,.])(?:\$\s*)?({money})\s*(?:USD)?(?![\d,.])",
+                        candidate,
+                        re.IGNORECASE,
+                    )
                     if amount_match:
                         amounts.append(amount_match.group(1))
                         break
         if not amounts:
-            amounts = re.findall(r"\$([0-9]+(?:\.[0-9]{2})?)\s*USD", text, re.IGNORECASE)
+            amounts = re.findall(
+                rf"(?<![\d,.])\$\s*({money})\s*USD(?![\d,.])", text, re.IGNORECASE
+            )
 
         date_value = self._parse_english_ordinal_date_to_yyyymmdd(date_match.group(1))
-        amount = f"{float(amounts[-1]):.2f}" if amounts else ""
+        amount = f"{Decimal(amounts[-1].replace(',', '')):.2f}" if amounts else ""
         if not (seller and date_value and amount):
             return None
 

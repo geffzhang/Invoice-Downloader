@@ -236,6 +236,48 @@ def _make_dependencies(calls, *, archive_report=None, cancel=lambda: False):
     )
 
 
+def test_cancelled_imap_read_finalizes_once_and_releases_next_run(tmp_path: Path):
+    from report_service import ReportService
+    from run_coordinator import RunCoordinator, RunDependencies, RunRequest
+    from run_lifecycle import RunLifecycle, RunState
+    from run_state_store import RunStateStore
+
+    cancelled = False
+    calls = []
+    lifecycle = RunLifecycle()
+    store = RunStateStore()
+
+    def scan(_session, _request):
+        nonlocal cancelled
+        cancelled = True
+        raise ConnectionAbortedError("synthetic cancelled socket read")
+
+    dependencies = RunDependencies(
+        connect=lambda _request: object(), scan=scan,
+        cancel_requested=lambda: cancelled,
+        report_service=ReportService(
+            disconnect_callback=lambda *_args: calls.append("disconnect"),
+            cleanup_callback=lambda *_args: calls.append("cleanup"),
+        ),
+    )
+    coordinator = RunCoordinator(lifecycle, store, dependencies)
+    request = RunRequest("cancelled-read", "2026-06-01", "2026-06-13", str(tmp_path), "", "account", "qq")
+    result = _run_reserved(coordinator, request, tmp_path / "staging-1")
+    assert result.state is RunState.COMPLETED
+    assert result.cancelled is True
+    assert store.terminal_reason == "CANCELLED"
+    assert calls == ["disconnect", "cleanup"]
+    assert lifecycle.can_begin
+
+    cancelled = False
+    dependencies.scan = lambda _session, _request: []
+    next_request = RunRequest("next-read", "2026-06-01", "2026-06-13", str(tmp_path), "", "account", "qq")
+    next_result = _run_reserved(coordinator, next_request, tmp_path / "staging-2")
+    assert next_result.state is RunState.COMPLETED
+    assert not next_result.cancelled
+    assert calls == ["disconnect", "cleanup", "disconnect", "cleanup"]
+
+
 def test_coordinator_runs_real_stages_and_finalizers_before_completed(tmp_path: Path):
     from run_coordinator import RunCoordinator, RunRequest
     from run_lifecycle import RunLifecycle, RunState

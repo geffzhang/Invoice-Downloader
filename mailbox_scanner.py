@@ -238,6 +238,8 @@ class MailboxScanner:
                     return response
                 last_error_type = "fetch_status"
             except Exception as exc:
+                if isinstance(exc, (TimeoutError, ConnectionError)):
+                    raise MailboxScanError("IMAP FETCH connection failed") from exc
                 last_error_type = type(exc).__name__
         self._emit(
             "imap_fetch_retry_exhausted",

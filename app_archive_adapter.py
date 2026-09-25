@@ -34,6 +34,7 @@ class AppArchiveAdapter:
         self.acceptance_service = acceptance_service
         self.pairing_finalizer = pairing_finalizer
         self.pairing_metadata: dict[str, dict[str, Any]] = {}
+        self.business_keys_by_document_id: dict[str, str] = {}
 
     def _append_success_state(
         self,
@@ -48,6 +49,7 @@ class AppArchiveAdapter:
         self.api.processed_invoices.append(
             {
                 "id": f"inv_{time.time()}_{outcome.candidate.sequence}",
+                "document_id": outcome.candidate.identity.document_id,
                 "date": info_json.get("Date", "---"),
                 "amount": f"¥ {info_json.get('Amount', '0.00')}",
                 "category": category,
@@ -69,6 +71,7 @@ class AppArchiveAdapter:
         self.api.error_invoices.append(
             {
                 "id": f"inv_prefilter_{time.time()}_{outcome.candidate.sequence}",
+                "document_id": outcome.candidate.identity.document_id,
                 "date": "---",
                 "amount": "---",
                 "category": "人工复核" if is_manual else "预过滤保全",
@@ -101,6 +104,7 @@ class AppArchiveAdapter:
         self.api.error_invoices.append(
             {
                 "id": f"inv_{time.time()}_{outcome.candidate.sequence}",
+                "document_id": outcome.candidate.identity.document_id,
                 "date": info_json.get("Date", "---"),
                 "amount": f"¥ {info_json.get('Amount', '0.00')}",
                 "category": category,
@@ -313,10 +317,15 @@ class AppArchiveAdapter:
             if isinstance(payload, dict)
             else outcome.candidate.to_legacy()
         )
-        source_path = (
-            str(payload.get("pdf_path") or outcome.candidate.source_path)
-            if isinstance(payload, dict)
-            else outcome.candidate.source_path
+        source_candidates = (
+            (payload.get("pdf_path") if isinstance(payload, dict) else None),
+            outcome.artifact_path,
+            metadata.get("filepath"),
+            outcome.candidate.source_path,
+        )
+        source_path = next(
+            (str(path) for path in source_candidates if path and os.path.isfile(path)),
+            str(next((path for path in source_candidates if path), "")),
         )
         if outcome.status != "resolved":
             if outcome.status == "manual_review":
@@ -495,6 +504,7 @@ class AppArchiveAdapter:
             self.api.error_invoices.append(
                 {
                     "id": f"inv_{__import__('time').time()}_{outcome.candidate.sequence}",
+                    "document_id": outcome.candidate.identity.document_id,
                     "date": info_json.get("Date", "---"),
                     "amount": f"¥ {info_json.get('Amount', '0.00')}",
                     "category": "保留记录",
@@ -551,13 +561,14 @@ class AppArchiveAdapter:
         code = str(info_json.get("InvoiceCode") or "").strip()
         number = str(info_json.get("InvoiceNumber") or "").strip()
         if code or number:
-            record_business_success(
+            business_key = record_business_success(
                 self.business_records,
                 code,
                 number,
                 info_json,
                 os.path.basename(path),
             )
+            self.business_keys_by_document_id[outcome.candidate.identity.document_id] = business_key
         from app_api import canonical_artifact_role
 
         artifact_role = canonical_artifact_role(info_json, os.path.basename(path))
@@ -606,7 +617,14 @@ class AppArchiveAdapter:
             trace_store=self.trace_store,
             artifact_metadata=self.pairing_metadata,
         )
-        self.api._cwt_cancellation_matching(str(root))
+        moved_paths = self.api._cwt_cancellation_matching(str(root)) or {}
+        if moved_paths:
+            for row in self.trace_store.iter_records():
+                old_path = str(row.get("archive_target") or "")
+                if old_path in moved_paths:
+                    self.trace_store.set_fields(
+                        str(row["document_id"]), archive_target=moved_paths[old_path]
+                    )
         iterator = getattr(self.trace_store, "iter_records", None)
         if not callable(iterator):
             return None

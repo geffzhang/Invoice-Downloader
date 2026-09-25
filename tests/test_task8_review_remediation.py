@@ -635,9 +635,11 @@ def test_archive_success_restores_frontend_row_category_stats_and_event_shape(tm
     assert report.can_complete is True
     assert len(api.processed_invoices) == 1
     row = api.processed_invoices[0]
-    assert set(row) == {"id", "date", "amount", "category", "merchant", "path"}
+    assert set(row) == {"id", "document_id", "date", "amount", "category", "merchant", "path"}
+    assert row["document_id"] == outcome.candidate.identity.document_id
     assert row | {"id": "ignored"} == {
         "id": "ignored",
+        "document_id": outcome.candidate.identity.document_id,
         "date": "20260610",
         "amount": "¥ 88.50",
         "category": "餐饮",
