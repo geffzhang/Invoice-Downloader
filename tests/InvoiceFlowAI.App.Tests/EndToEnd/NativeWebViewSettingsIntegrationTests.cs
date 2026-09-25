@@ -66,6 +66,10 @@ public sealed class NativeWebViewSettingsIntegrationTests
                 $"{failureMessage} | {context.Diagnostics}");
             result.GetProperty("companyName").GetString().Should().Be("Native WebView Buyer");
             result.GetProperty("lastOutputDirectory").GetString().Should().Be("C:/NativeInvoices");
+            result.GetProperty("rootChildCount").GetInt32().Should().BeGreaterThan(0,
+                $"the settings page must render inside the native WebView | {context.Diagnostics}");
+            result.GetProperty("initialSetupVisible").GetBoolean().Should().BeTrue(
+                $"a fresh profile must open the settings interface | {context.Diagnostics}");
         }
         finally
         {
@@ -207,7 +211,9 @@ internal sealed class NativeWebViewIntegrationApplication : Avalonia.Application
                         kind: "invoiceflow-native-webview-result",
                         ok: true,
                         companyName: updated.companyName,
-                        lastOutputDirectory: updated.lastOutputDirectory
+                        lastOutputDirectory: updated.lastOutputDirectory,
+                        rootChildCount: document.getElementById("root").childElementCount,
+                        initialSetupVisible: !!document.querySelector(".app-shell--initial-setup .page-wrap--settings")
                     }));
                 }).catch(function (error) {
                     window.chrome.webview.postMessage(JSON.stringify({

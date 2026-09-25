@@ -180,28 +180,20 @@ flowchart TD
 
 ---
 
-### 第三步 · 获取智谱 GLM API Key
+### 第三步 · 获取 DeepSeek API Key
 
 <details>
-<summary>📖 点击展开 GLM API 配置步骤</summary>
+<summary>📖 点击展开 DeepSeek API 配置步骤</summary>
 
-系统使用 **GLM-4.5V**（多模态视觉）和 **GLM-OCR** 识别发票内容。
+桌面版设置界面需要填写 **DeepSeek API Key**。API 用量和费用以 DeepSeek 平台显示为准。
 
 **步骤**
 
-1. 访问 [open.bigmodel.cn](https://open.bigmodel.cn/)，注册账号
-2. 进入控制台 → **API Keys** → **创建 API Key**
-3. 复制并保存 Key（格式：`xxxxxxxx.xxxxxxxxxxxxxxxx`）
+1. 访问 [DeepSeek 开放平台](https://platform.deepseek.com/)，注册并登录
+2. 打开 **API Keys** 页面，创建 API Key
+3. 复制并妥善保存 Key，在首次启动的设置界面中填写
 
-**费用参考**
-
-| 情况 | 说明 |
-|------|------|
-| 🎁 新用户福利 | 赠送 500 万 GLM-4 tokens（30 天有效） |
-| 💰 推荐充值 | **5 元以内**，按量计费 |
-| 📊 使用估算 | 每张发票约消耗 1,000–3,000 tokens；每月 200 张，5 元可用约 12 个月 |
-
-📚 [智谱 AI 开放平台](https://open.bigmodel.cn/)
+📚 [DeepSeek API Keys](https://platform.deepseek.com/api_keys)
 
 </details>
 
@@ -213,7 +205,7 @@ flowchart TD
 
 1. 安装版：运行 `InvoiceFlowAI-*-windows-x64-setup.msi`；免安装版：解压 `InvoiceFlowAI-*-windows-x64-portable.zip` 到普通文件夹（避免云盘同步目录），保留压缩包中的目录结构。
 2. 双击 `InvoiceFlowAI.exe`；首次启动会自动弹出设置界面。
-3. 填入邮箱地址与授权码（QQ 或 163）、GLM API Key，保存后点击「开始扫描」。发票会自动归档到桌面「发票整理」文件夹。
+3. 填入邮箱地址与授权码（QQ 或 163）、DeepSeek API Key，保存后点击「开始扫描」。发票会自动归档到桌面「发票整理」文件夹。
 
 ---
 
@@ -267,9 +259,9 @@ flowchart TD
 </details>
 
 <details>
-<summary>Q：GLM API 报错余额不足？</summary>
+<summary>Q：DeepSeek API 报错额度不足？</summary>
 
-登录 [open.bigmodel.cn](https://open.bigmodel.cn/) → 费用中心 → 充值。推荐充值 **5 元**，按量计费。
+登录 [DeepSeek 开放平台](https://platform.deepseek.com/) 查看 API 用量、账户余额和可用服务。
 
 </details>
 
@@ -300,7 +292,7 @@ flowchart TD
 
 **准确性与合规性** · 作者不保证发票数据或生成结果的准确性、完整性、合法性、税务合规性、财务合规性或会计合规性。用户必须自行核验所有发票、报销、税务、会计和合规结果后再使用。
 
-**数据** · 调用 GLM API 时，发票图片会发送至智谱 AI 服务器进行识别，受 [智谱 AI 隐私政策](https://www.zhipuai.cn/zh/privacy) 约束；邮件原文不会发送。
+**数据** · 调用 DeepSeek API 进行发票信息提取时，发票文本和识别提示词会发送至 DeepSeek；启用视觉回退时，相关发票页面图像也会发送。邮件原文不会发送。详情请参阅 [DeepSeek 隐私政策](https://cdn.deepseek.com/policies/zh-CN/deepseek-privacy-policy.html)。
 
 **责任限制** · 作者不对使用本软件造成的损失、遗漏、错误、报销失败、税务风险、合规问题或数据丢失承担责任。
 

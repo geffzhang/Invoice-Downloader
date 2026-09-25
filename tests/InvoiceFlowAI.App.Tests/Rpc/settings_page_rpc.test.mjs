@@ -46,6 +46,31 @@ test("opens initial setup only while required persisted settings are incomplete"
     assert.equal(settingsRpc.needsInitialSetup(configured), false);
 });
 
+test("settings page presents initial setup after loading persisted settings", () => {
+    const fs = require("node:fs");
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../templates");
+    const source = fs.readFileSync(path.join(root, "index_app.js"), "utf8");
+    const stylesheet = fs.readFileSync(path.join(root, "index.html"), "utf8");
+
+    assert.match(source, /needsInitialSetup:\s*SettingsRpc\.needsInitialSetup\(loaded\)/);
+    assert.match(source, /setInitialSetup\(state\.needsInitialSetup\s*&&\s*!hasExplicitQaRunContext\(state\.runContext\)\)/);
+    assert.match(source, /initialSetup=\{initialSetup\}/);
+    assert.match(stylesheet, /\.app-shell--initial-setup \.app-main\s*\{/);
+});
+
+test("native WebView loads current precompiled page without file-based JSX fetching", () => {
+    const fs = require("node:fs");
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../templates");
+    const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+    const compiler = path.join(root, "..", "build", "compile-webview-page.mjs");
+    const { spawnSync } = require("node:child_process");
+    const result = spawnSync(process.execPath, [compiler, "--check"], { encoding: "utf8" });
+
+    assert.match(html, /<script src="\.\/index_app\.compiled\.js"><\/script>/);
+    assert.doesNotMatch(html, /type="text\/babel"/);
+    assert.equal(result.status, 0, result.stderr);
+});
+
 test("saves revisioned non-secret settings and mailbox account", async () => {
     const rpc = createRpcClient();
     await settingsRpc.saveAccount(rpc, null, {
@@ -119,6 +144,10 @@ test("settings UI uses RPC for settings operations and never stores secrets in W
         assert.ok(settingsPage.includes("SettingsRpc.testAccount"));
         assert.ok(settingsPage.includes("SettingsRpc.testProvider"));
         assert.ok(settingsPage.includes("SettingsRpc.setSecret"));
+        assert.match(settingsPage, /DeepSeek API Key/);
+        assert.match(source, /https:\/\/platform\.deepseek\.com\/api_keys/);
+        assert.match(settingsPage, />DeepSeek<\/StatusPill>/);
+        assert.doesNotMatch(settingsPage, /GLM API Key|ZHIPU_PLATFORM_URL|>GLM<\/StatusPill>/);
     assert.match(bootstrap, /RpcClient\.handshake\(\)[\s\S]*SettingsRpc\.load\(RpcClient\)/);
     assert.equal(bootstrap.includes("settings.snapshot.get"), false);
     for (const legacyMethod of ["load_user_settings", "save_user_settings", "test_email_auth", "test_connection", "choose_directory"]) {
