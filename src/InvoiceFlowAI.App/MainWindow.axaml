@@ -1,13 +1,11 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:webview="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.WebView"
         x:Class="InvoiceFlowAI.App.MainWindow"
         Title="InvoiceFlowAI"
         Width="1100"
         Height="720"
         MinWidth="640"
         MinHeight="480">
-    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-        <TextBlock Text="InvoiceFlowAI scaffold" FontSize="24" HorizontalAlignment="Center" />
-        <TextBlock Text="WebView + RpcClient land in Task 9." Opacity="0.7" HorizontalAlignment="Center" />
-    </StackPanel>
+    <webview:NativeWebView x:Name="AppWebView" />
 </Window>

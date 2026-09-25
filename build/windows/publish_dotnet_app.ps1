@@ -60,7 +60,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $RepoRoot "licenses\THIRD-PARTY-NOTICES.txt") -Destination (Join-Path $LicenseDirectory "THIRD-PARTY-NOTICES.txt") -Force
 
     & (Join-Path $RepoRoot "build\model-manifest.ps1") -ModelsRoot $ModelsDirectory -Output (Join-Path $ManifestDirectory "model.json")
-    & (Join-Path $RepoRoot "build\release-manifest.ps1") -PublishRoot $OutputRoot -Output (Join-Path $ManifestDirectory "release.json") -ProductVersion $ProductVersion -RuntimeIdentifier "win-x64" -Architecture "x64"
+    & (Join-Path $RepoRoot "build\release-manifest.ps1") -PublishRoot $OutputRoot -Output (Join-Path $ManifestDirectory "release.json") -ProductVersion $ProductVersion -RuntimeIdentifier "win-x64"
 }
 finally {
     if (Test-Path -LiteralPath $WorkerStage) {

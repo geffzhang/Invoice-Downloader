@@ -49,6 +49,8 @@ public sealed class InvoiceFlowDbContext : DbContext
             b.Property(x => x.SettingsId).HasMaxLength(64).IsRequired();
             b.Property(x => x.Revision).IsRequired();
             b.Property(x => x.DefaultMailbox).HasMaxLength(128).IsRequired();
+            b.Property(x => x.CompanyName).HasMaxLength(256).IsRequired();
+            b.Property(x => x.LastOutputDirectory).HasMaxLength(1024);
             b.Property(x => x.RuleSetId).HasMaxLength(128).IsRequired();
             b.Property(x => x.RuleSetVersion).IsRequired();
             b.Property(x => x.ConfigurationFingerprint).HasMaxLength(64);

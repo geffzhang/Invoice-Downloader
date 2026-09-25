@@ -582,6 +582,9 @@ public sealed class MailKitMailboxScannerTests
 
         public FakeMailboxAccountReader(MailboxConnectionSettings? account) => _account = account;
 
+        public Task<IReadOnlyList<InvoiceFlowAI.Contracts.Accounts.MailboxAccountSnapshot>> ListAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<InvoiceFlowAI.Contracts.Accounts.MailboxAccountSnapshot>>([]);
+
         public Task<MailboxConnectionSettings?> FindAsync(string accountId, CancellationToken cancellationToken)
             => Task.FromResult(_account is not null && _account.AccountId == accountId ? _account : null);
     }
@@ -591,6 +594,9 @@ public sealed class MailKitMailboxScannerTests
         private readonly Exception _exception;
 
         public ThrowingMailboxAccountReader(Exception exception) => _exception = exception;
+
+        public Task<IReadOnlyList<InvoiceFlowAI.Contracts.Accounts.MailboxAccountSnapshot>> ListAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<InvoiceFlowAI.Contracts.Accounts.MailboxAccountSnapshot>>([]);
 
         public Task<MailboxConnectionSettings?> FindAsync(string accountId, CancellationToken cancellationToken)
             => Task.FromException<MailboxConnectionSettings?>(_exception);

@@ -80,6 +80,10 @@
     }
 
     function _post(message) {
+        if (_root && typeof _root.invokeCSharpAction === "function") {
+            _root.invokeCSharpAction(JSON.stringify(message));
+            return;
+        }
         if (!_root || !_root.chrome || !_root.chrome.webview || typeof _root.chrome.webview.postMessage !== "function") {
             throw new RpcError("RPC_BACKEND_MISSING", "WebView2 backend is not available", null);
         }

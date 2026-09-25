@@ -127,7 +127,8 @@ public sealed class InitialSchemaTests : IClassFixture<SqliteTestFixture>
         migrationIds.Should().Equal(
             "20260923_InitialSchema",
             "20260924_AddMailboxDefaultMailbox",
-            "20260925003448_PersistArchivePaths");
+            "20260925003448_PersistArchivePaths",
+            "20260925120000_AddUserSettingsCompanyAndOutputDirectory");
     }
 
     [Fact]

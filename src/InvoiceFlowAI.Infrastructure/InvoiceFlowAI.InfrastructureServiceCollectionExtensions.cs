@@ -1,11 +1,14 @@
 using InvoiceFlowAI.Application.Candidates;
 using InvoiceFlowAI.Application.Ai;
+using InvoiceFlowAI.Application.Accounts;
 using InvoiceFlowAI.Application.Archive;
 using InvoiceFlowAI.Application.Extraction;
 using InvoiceFlowAI.Application.Persistence;
+using InvoiceFlowAI.Application.Security;
 using InvoiceFlowAI.Application.Parsers;
 using InvoiceFlowAI.Application.Pipeline;
 using InvoiceFlowAI.Application.Url;
+using InvoiceFlowAI.Application.Mail;
 using InvoiceFlowAI.Infrastructure.Persistence.Stores;
 using InvoiceFlowAI.Infrastructure.Persistence;
 using InvoiceFlowAI.Infrastructure.Archive;
@@ -15,7 +18,10 @@ using InvoiceFlowAI.Infrastructure.Parsers;
 using InvoiceFlowAI.Infrastructure.Pipeline;
 using InvoiceFlowAI.Infrastructure.Url;
 using InvoiceFlowAI.Infrastructure.Url.Worker;
+using InvoiceFlowAI.Infrastructure.Security;
+using InvoiceFlowAI.Infrastructure.Mail;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace InvoiceFlowAI.Infrastructure;
 
@@ -24,6 +30,16 @@ public static class InvoiceFlowAIInfrastructureServiceCollectionExtensions
     public static IServiceCollection AddInvoiceFlowInfrastructure(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+        services.TryAddSingleton<ISessionSecretStore, SessionSecretStore>();
+        services.TryAddSingleton<ISecretRetentionStore, SecretApplicationService>();
+        services.TryAddSingleton<ISecretStore>(serviceProvider => new CompositeSecretStore(
+            serviceProvider.GetRequiredService<IPersistentSecretStore>(),
+            serviceProvider.GetRequiredService<ISessionSecretStore>()));
+        services.AddScoped<AccountTestService>();
+        services.AddScoped<AccountApplicationService>();
+        services.AddScoped<IMailboxConnectionTester, MailKitMailboxConnectionTester>();
+        services.AddScoped<IProviderConnectionTester, DeepSeekProviderConnectionTester>();
+        services.TryAddSingleton<IMailboxSessionFactory, MailboxSessionFactory>();
         services.AddScoped<IChatCompletionService>(serviceProvider =>
             new DeepSeekChatCompletionService(serviceProvider.GetRequiredService<ISecretStore>()));
         services.AddScoped<InvoiceNormalizer>();

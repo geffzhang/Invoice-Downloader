@@ -364,18 +364,20 @@ public interface IWebViewNavigationPolicy
 | `review.get` | `reviewId` | 脱敏的复核详情和字段 | 只读，不返回原始凭据。 |
 | `review.submit` | `reviewId`、修正字段、决定 | 更新后的候选终态 | 必须带 revision，重复 revision 不重复应用。 |
 | `settings.get` | 无或设置分组 | 非秘密设置 | API Key、邮箱授权码只返回 `configured` 和掩码状态。 |
-| `settings.update` | 非秘密设置 | 更新结果和配置指纹 | 不允许携带 API Key、邮箱授权码或其他秘密字段。 |
+| `settings.update` | 非秘密设置，含公司匹配规则和上次输出目录 | 更新结果和配置指纹 | 不允许携带 API Key、邮箱授权码或其他秘密字段。 |
 | `account.list` | 无 | 非秘密邮箱账户摘要 | 只读；不返回授权码。 |
 | `account.save` | 非秘密账户 DTO、`expectedRevision` | 账户摘要和新 revision | 乐观并发；不保存 secret value。 |
 | `account.delete` | `accountId`、`expectedRevision` | 删除确认 | 活动运行引用时拒绝。 |
-| `account.test` | `accountId`、可选 `mailbox` | 脱敏连接结果 | 不修改账户；省略 mailbox 时使用 `UserSettings.DefaultMailbox`；授权码只从 DPAPI 按 `CredentialName` 读取。 |
+| `account.test` | `accountId`、可选 `mailbox` | 脱敏连接结果 | 不修改账户；省略 mailbox 时使用 `UserSettings.DefaultMailbox`；授权码按 `CredentialName` 从秘密服务读取。 |
+| `provider.test` | provider ID、credential name | 脱敏模型连接结果 | 不修改设置；密钥由后端从 DPAPI 或当前会话秘密存储解析。 |
+| `directory.choose` | 无 | 取消状态和选中的规范化目录 | 只打开原生目录选择器；页面不能传入待访问路径。 |
 | `report.export` | `runId`、可选 `reportName` | `ReportExportResult` | 幂等；同一 run 和 template 返回同一 content hash。 |
 | `ruleset.list` | `ruleSetId` | 规则版本摘要分页/列表 | 只读；按 version 降序返回。 |
 | `ruleset.get` | `ruleSetId`、`version` 可选 | 脱敏规则 JSON、AST fingerprint 和版本元数据 | 只读。 |
 | `ruleset.save` | `ruleSetId`、`expectedVersion`、schema JSON | 新规则版本、fingerprint 和配置指纹 | 乐观并发；不覆盖历史版本。 |
 | `ruleset.rollback` | `ruleSetId`、`targetVersion`、`expectedCurrentVersion` | 新 rollback 版本和配置指纹 | 创建新版本，不删除目标版本。 |
-| `secret.set` | `name`、`value` | `name`、`configured` | 只允许受控的秘密名称；写入 DPAPI 后不回显 value。 |
-| `secret.delete` | `name` | `name`、`configured=false` | 幂等删除；不返回旧值。 |
+| `secret.set` | `name`、`value`、`retention` (`persistent` 或 `session`) | `name`、`configured`、`persistent` | 只允许受控的秘密名称；persistent 写入 DPAPI，session 仅保存在进程内存，不回显 value。 |
+| `secret.delete` | `name` | `name`、`configured=false` | 幂等删除 DPAPI 和会话值；不返回旧值。 |
 | `report.open` | `runId`、报告类型 | 受控临时打开 token | 后端验证路径，不接受前端任意路径。 |
 
 `run.start` 的参数映射为 `RunInput`：`dateFrom`、`dateTo` 使用 `yyyy-MM-dd`；`savePath` 必须是用户可访问的目录；`accountId` 必须引用已保存的邮箱配置；`mailbox` 是本次运行的有效 mailbox，显式传入时覆盖 `UserSettingsSnapshot.DefaultMailbox`，省略时由后端补齐；`customRules` 有长度上限但首版非空值必须拒绝，规则只能通过 `ruleset.save/rollback` 修改；`runMode` 只能取 `interactive` 或首版明确支持的枚举值。后端重新校验所有字段，不能信任前端校验。
@@ -475,6 +477,8 @@ public sealed record SettingsUpdateRequest(
     int ExpectedRevision,
     string? AccountId = null,
     string? Mailbox = null,
+  string? CompanyName = null,
+  string? LastOutputDirectory = null,
     MailboxFilterRules? MailboxFilters = null,
     PipelineOptionsPatch? Pipeline = null,
     string? CustomRuleSetJson = null,
@@ -489,6 +493,8 @@ public sealed record UserSettingsSnapshot(
   int Revision,
   string? CurrentAccountId,
   string DefaultMailbox,
+  string CompanyName,
+  string? LastOutputDirectory,
   MailboxFilterRules MailboxFilters,
   PipelineOptions Pipeline,
   bool AllowVisionFallback,
@@ -576,7 +582,7 @@ public sealed record RuleSetMutationResult(
 
 分页规则固定为 offset/limit：`Offset >= 0`、`1 <= Limit <= 100`，排序为 `CreatedAtUtc ASC, ReviewId ASC`，返回 `Total`、`HasMore` 和 `NextOffset`。`review.get` 不返回 OCR 原文、图片、完整邮件正文、秘密或本地绝对路径；`EditableFields` 是后端白名单，不由前端决定。`review.submit` 的 `Decision` 与 `Correction` 组合必须满足：`CorrectAndAccept` 必须有 correction，其他决定不能携带 correction；`ExpectedRevision` 必须等于当前 review revision。
 
-`run.retry` 的 `DocumentIds` 与 `RetryAllEligible` 互斥；单次最多 100 个 document，只有 `Retryable=true` 且未超过最大次数的候选进入 `AcceptedDocumentIds`，其余进入 `RejectedDocumentIds` 并带稳定原因详情。`settings.update` 只允许非秘密用户设置；修改 `CurrentAccountId`、`DefaultMailbox`、筛选器、pipeline 或视觉 fallback 时递增 `UserSettings.Revision`，`ExpectedRevision` 冲突返回 `SETTINGS_REVISION_CONFLICT`。`settings.update` 不直接写入规则 JSON，`CustomRuleSetJson` 非空时返回 `RPC_INVALID_PARAMS`。
+`run.retry` 的 `DocumentIds` 与 `RetryAllEligible` 互斥；单次最多 100 个 document，只有 `Retryable=true` 且未超过最大次数的候选进入 `AcceptedDocumentIds`，其余进入 `RejectedDocumentIds` 并带稳定原因详情。`settings.update` 只允许非秘密用户设置；修改 `CurrentAccountId`、`DefaultMailbox`、公司匹配规则、上次输出目录、筛选器、pipeline 或视觉 fallback 时递增 `UserSettings.Revision`，`ExpectedRevision` 冲突返回 `SETTINGS_REVISION_CONFLICT`。`settings.update` 不直接写入规则 JSON，`CustomRuleSetJson` 非空时返回 `RPC_INVALID_PARAMS`。
 
 `ruleset.save` 的 `RuleSetJson` 只能由后端按 `schemaVersion`、字段白名单、目录白名单、priority 范围和冲突规则解析；前端不得发送已解析 AST 作为权威输入。`ruleset.rollback` 只接受存在的历史版本，结果总是新的 version；规则保存/回滚只递增 `RuleSet.Version`，不递增 `UserSettings.Revision`，但立即基于新的规则版本计算并返回新的 `ConfigurationFingerprint`，已运行任务仍使用原配置快照。规则 RPC 的未知字段、版本冲突、未知目标版本和无权限目录分别映射为 `RPC_INVALID_PARAMS`、`RULESET_REVISION_CONFLICT`、`RULESET_VERSION_NOT_FOUND` 和 `RULESET_INVALID`。
 
@@ -703,14 +709,14 @@ fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SET
 
 | 现有前端表面 | .NET/Avalonia.Controls.WebView 目标 | RPC/事件 |
 | --- | --- | --- |
-| `SettingsPage` 路由 `/` | `SettingsView` + `SettingsStore` | `bridge.hello`, `settings.get`, `settings.update`, `secret.set`, `secret.delete`, `run.start` |
+| `SettingsPage` 路由 `/` | `SettingsView` + `SettingsStore` | `bridge.hello`, `settings.get/update`, `account.list/save/test`, `provider.test`, `directory.choose`, `secret.set/delete`, `run.start` |
 | `ProcessingPage` 路由 `/processing` | `ProcessingView` + `RunStore` | `run.get`, `run.cancel`, `run.retry`; 消费 `run.stageChanged`, `run.progress`, `run.documentResult`, `run.failed`, `run.completed`, `run.cancelled` |
 | `AnalysisPage` 路由 `/analysis` | `AnalysisView` + `ReviewStore` | `review.list`, `review.get`, `review.submit`, `report.open` |
 | `callApi()`/`waitForApi()` | `RpcClient` | request ID、超时、取消、错误 envelope、hello 状态和 WebView message transport |
 | 页面多个 `useState` | `AppStore` reducer | 所有页面通过 selector 读取状态，只能 dispatch action |
 | `load_user_settings` | `settings.get` | 非秘密设置、revision、fingerprint、秘密 configured/masked 状态 |
 | `save_user_settings` | `settings.update` | `ExpectedRevision`、规则集 revision、pipeline patch 和新的 fingerprint |
-| `test_email_auth` / `test_api_key` | 设置验证 command（首版可作为 `settings.validate` 扩展） | 只返回脱敏成功/失败状态，不返回秘密 |
+| `test_email_auth` / `test_connection` | `account.test` / `provider.test` | 分别测试 IMAP 与 GLM；只返回脱敏成功/失败状态，不返回秘密 |
 | `start_processing` | `run.start` | 只发送 `accountId`、非秘密运行参数和 secret reference |
 | `get_progress` | `run.get` + 推送事件 | 不再轮询；断线或 event sequence 跳跃时请求快照/补发事件 |
 | `get_results` | `run.get`、`review.list`、`report.open` | 分离运行摘要、复核分页和受控文件打开 |
@@ -724,10 +730,12 @@ fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SET
 | --- | --- | --- |
 | `load_user_settings` | 读取旧设置仅用于一次性导入 | 拆成 `settings.get`、`account.list` 和秘密 configured 状态；旧明文 secret 不回显到页面 |
 | `save_user_settings` | 只读取非秘密字段 | 写入 `UserSettings`/账户 revision；`auth_code`、`api_key` 被拒绝并要求 `secret.set` |
+| `choose_directory` | 不接受页面传入的候选路径 | 调用 `directory.choose`，取消时返回明确的取消状态 |
 | `test_email_auth` | 旧参数不直接转发 | 转换为 `account.test(accountId, mailbox?)` |
-| `test_api_key` | 不保留 GLM endpoint | 转换为 DeepSeek adapter health/auth test，不返回供应商原始响应 |
+| `test_connection` | 不保留旧位置参数或 GLM endpoint 直连 | 转换为 `provider.test`；密钥由后端解析，不返回供应商原始响应 |
 | `start_processing` | 旧位置参数解析一次 | 转换为显式 `run.start` DTO，缺失字段返回 `RPC_INVALID_PARAMS` |
 | `get_progress` | 不再轮询 | 转换为 `run.get` 快照和 `run.*` event reducer |
+| `stop_processing` | 不接受无 run ID 的全局停止 | 转换为 `run.cancel(runId, reason)`，重复请求安全 |
 | `get_results` | 不返回旧结果字典 | 转换为 `run.get`、`review.list` 和 `report.open` |
 | `open_folder`/`view_invoice` | 旧绝对路径永不接受 | 通过 run/artifact 相对路径生成一次性 report token |
 
@@ -772,6 +780,24 @@ reducer 只接受协议相关 action：`BRIDGE_READY`、`SETTINGS_LOADED`、`SET
 7. 任一资源缺失、manifest hash 不匹配或本地导航失败都阻止进入可运行状态，并返回 `WEB_ASSET_INVALID`。
 
 迁移验收必须覆盖现有三页的路由进入、设置加载/更新、秘密 configured 状态、run.start、事件实时更新、断线重连、事件缺口重放、取消、复核 revision 冲突、报告打开和资源 hash 校验。旧的 Python 方法名只能出现在映射测试 fixture 中，不能作为 .NET RPC 的公开方法名。
+
+#### 设置表单与任务操作分阶段迁移
+
+设置页保留单邮箱式表单与现有操作顺序，不在本迁移中改为多账户管理界面。底层仍使用账户实体和 account RPC，以保持账户 ID、凭据引用和 revision 的明确边界。页面初始化加载非秘密设置和当前账户摘要；秘密输入始终为空，页面只接收 configured/masked 状态。用户可输入新秘密、保留已配置秘密，或通过明确操作清除秘密。邮箱测试走 `account.test`，GLM 测试走 `provider.test`，二者互不隐式触发。
+
+`remember_settings` 的行为必须与旧实现一致：开启时保存非秘密偏好并将秘密以 DPAPI CurrentUser 范围持久化；关闭时恢复非秘密默认值且不持久化新秘密。为支持关闭记忆时本次仍能测试或启动任务，`secret.set` 的 `retention=session` 将值放入只存在于应用进程内存的会话秘密存储，应用退出后不可恢复；`retention=persistent` 使用 DPAPI。秘密服务按逻辑名称先查会话值、再查 DPAPI 值。切换为不记忆时必须删除同名的持久化秘密，避免旧值在下次启动时被误用；清除秘密时同时删除两个存储中的值。开启记忆并确认保存时，当前会话秘密应在 host 内转存到 DPAPI，不要求页面重新读取或回显秘密。账户和设置更新不得引用尚未成功设置的秘密。应用服务应先完成字段验证，再写秘密和账户/设置，确保失败时不会发布悬空凭据引用；跨 SQLite 与 DPAPI 不承诺分布式原子事务。
+
+当前设置契约缺少旧表单使用的公司名称和上次输出目录。扩展 `UserSettingsSnapshot` 与 `SettingsUpdateRequest`，以非秘密字段保存这两项；公司名称继续用于现有购买方匹配语义。`run.start` 使用显式选择的输出目录，未显式更改时可使用上次目录，但后端每次都必须验证该目录。配置指纹包含公司匹配规则等影响业务结果的非秘密配置，不包含秘密值或本机秘密密文。
+
+任务启动参数必须包括日期范围、输出目录、账户 ID、有效 mailbox、run mode 和公司匹配规则；GLM provider ID 与 credential name 只作为逻辑引用传递，原始授权码和 API Key 只在 `secret.set`、邮件连接或模型连接的服务边界短暂出现。Raw secret 不进入 `RunInput`、事件、运行快照、审计载荷或持久化 JSON。运行参数缺少的公司规则、provider/credential reference 必须补入 RPC 请求或从不可变设置快照确定，不得从旧位置参数隐式推断。
+
+迁移分为三个可单独验证的切片：
+
+1. **设置与账户**：注册设置、账户、秘密、目录选择、IMAP 测试和 GLM 测试 handlers；补齐公司和输出目录契约；完成单邮箱表单读写、revision 冲突、秘密 configured 状态和“记住设置”行为。不得在此阶段假报 run.start 成功。
+2. **任务生命周期**：先实现真实的应用级 run service，再成组迁移 `run.start`、`run.get`/重连、进度事件和 `run.cancel`。当前 `IRunCoordinator` 只处理数据包提交和终态决策，不是任务执行器；新服务必须拥有真实 Pipeline 执行、单活动任务约束、运行快照、事件序号和幂等取消。若运行不能端到端执行，该切片不算完成，UI 不得显示已启动。
+3. **结果操作**：运行切片提供稳定 run ID 和终态结果后，再迁移结果读取、目录/发票打开和汇总导出。每个操作都必须有 typed RPC contract，通过 run/artifact ID 或一次性受控 token 定位资源；不能接受页面任意绝对路径。
+
+每个切片只在对应 handler、应用服务和契约测试就绪后切换其前端调用。不要新增通用旧方法适配器；也不要提前删除尚未被完整替换的调用组。每组迁移需覆盖 RPC handler、严格 JSON round-trip、前端行为和秘密不泄漏测试；首次完整设置到 handler 链路另需 Windows Avalonia WebView 集成 smoke test。每个切片运行对应 .NET/JavaScript 测试、桌面应用构建、Web 资源校验和 `git diff --check`。
 
 ## 5. ZeroPipeline 编排与运行生命周期
 

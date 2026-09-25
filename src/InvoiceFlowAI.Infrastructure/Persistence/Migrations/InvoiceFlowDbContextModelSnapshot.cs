@@ -833,9 +833,18 @@ namespace InvoiceFlowAI.Infrastructure.Persistence.Migrations
                     b.Property<string>("CurrentAccountId")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("CompanyName")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("DefaultMailbox")
                         .IsRequired()
                         .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LastOutputDirectory")
+                        .HasMaxLength(1024)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("MailboxFiltersJson")

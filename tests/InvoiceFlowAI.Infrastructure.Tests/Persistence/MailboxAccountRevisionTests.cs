@@ -148,6 +148,26 @@ public sealed class MailboxAccountRevisionTests : IClassFixture<SqliteTestFixtur
         settings!.DefaultMailbox.Should().Be("Invoices");
     }
 
+    [Fact]
+    public async Task ListAsync_returns_accounts_in_account_id_order()
+    {
+        await _fixture.ResetAsync();
+        await using var context = _fixture.CreateContext();
+        var store = new EfMailboxAccountStore(context);
+
+        await using (var uow = await BeginAsync(context))
+        {
+            await store.SaveAsync(NewDraft("acct-z"), expectedRevision: 0, uow, CancellationToken.None);
+            await store.SaveAsync(NewDraft("acct-a"), expectedRevision: 0, uow, CancellationToken.None);
+            await uow.CommitAsync(CancellationToken.None);
+        }
+
+        IMailboxAccountStore reader = store;
+        var accounts = await reader.ListAsync(CancellationToken.None);
+
+        accounts.Select(x => x.AccountId).Should().Equal("acct-a", "acct-z");
+    }
+
     private static MailboxAccountDraft NewDraft(string id) => new(
         AccountId: id,
         EmailAddress: "alice@example.com",

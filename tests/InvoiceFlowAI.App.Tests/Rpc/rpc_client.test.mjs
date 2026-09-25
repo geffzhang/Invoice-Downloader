@@ -56,6 +56,20 @@ function loadClient() {
     return { RpcClient, bus, sessionStorage: sessionStorageData };
 }
 
+function loadAvaloniaClient() {
+    const bus = { listeners: new Set(), posted: [] };
+    const fakeWindow = {
+        invokeCSharpAction(message) { bus.posted.push(JSON.parse(message)); },
+        addEventListener(_evt, fn) { bus.listeners.add(fn); },
+    };
+    const sandboxModule = { exports: {} };
+    new Function("module", "exports", clientSrc)(sandboxModule, sandboxModule.exports);
+    const RpcClient = sandboxModule.exports;
+    RpcClient.__resetForTests();
+    RpcClient.init(fakeWindow);
+    return { RpcClient, bus };
+}
+
 function reply(bus, id, ok, payload) {
     const msg = { protocol: "invoiceflow.rpc.v1", id, ok };
     if (ok) msg.result = payload;
@@ -92,6 +106,16 @@ test("call resolves on ok response and rejects on error", async () => {
     const pending2 = bus.posted.shift();
     reply(bus, pending2.id, false, { code: "BAD", userMessage: "not found" });
     await assert.rejects(failing, (err) => err.code === "BAD");
+});
+
+test("call uses the Avalonia NativeWebView message callback", async () => {
+    const { RpcClient, bus } = loadAvaloniaClient();
+    const promise = RpcClient.call("settings.snapshot.get", null);
+    const pending = bus.posted.shift();
+    assert.equal(pending.method, "settings.snapshot.get");
+    assert.equal(pending.protocol, "invoiceflow.rpc.v1");
+    reply(bus, pending.id, true, { revision: 3 });
+    assert.deepEqual(await promise, { revision: 3 });
 });
 
 test("events are dispatched to registered handlers", () => {
