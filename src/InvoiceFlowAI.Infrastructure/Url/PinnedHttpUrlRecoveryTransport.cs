@@ -8,9 +8,14 @@ namespace InvoiceFlowAI.Infrastructure.Url;
 public sealed class PinnedHttpUrlRecoveryTransport : IUrlRecoveryTransport
 {
     private readonly PublicUrlPolicy _policy;
+    private readonly Func<HttpMessageHandler>? _handlerFactory;
 
     public PinnedHttpUrlRecoveryTransport(PublicUrlPolicy policy)
         => _policy = policy ?? throw new ArgumentNullException(nameof(policy));
+
+    internal PinnedHttpUrlRecoveryTransport(PublicUrlPolicy policy, Func<HttpMessageHandler> handlerFactory)
+        : this(policy)
+        => _handlerFactory = handlerFactory ?? throw new ArgumentNullException(nameof(handlerFactory));
 
     public async Task<UrlTransportResponse> SendAsync(
         UrlTransportRequest transportRequest,
@@ -19,15 +24,7 @@ public sealed class PinnedHttpUrlRecoveryTransport : IUrlRecoveryTransport
     {
         ArgumentNullException.ThrowIfNull(transportRequest);
         var url = transportRequest.Url;
-        using var handler = new SocketsHttpHandler
-        {
-            AllowAutoRedirect = false,
-            UseCookies = false,
-            UseProxy = false,
-            ConnectTimeout = TimeSpan.FromSeconds(5),
-            AutomaticDecompression = DecompressionMethods.All,
-        };
-        handler.ConnectCallback = (context, token) => ConnectPinnedAsync(context, url, token);
+        using var handler = _handlerFactory?.Invoke() ?? CreatePinnedHandler(url);
 
         using var client = new HttpClient(handler, disposeHandler: false)
         {
@@ -132,6 +129,20 @@ public sealed class PinnedHttpUrlRecoveryTransport : IUrlRecoveryTransport
         }
 
         throw new HttpRequestException("Could not connect to a validated public address.", lastFailure);
+    }
+
+    internal SocketsHttpHandler CreatePinnedHandler(ValidatedPublicUrl url)
+    {
+        var handler = new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            UseCookies = false,
+            UseProxy = false,
+            ConnectTimeout = TimeSpan.FromSeconds(5),
+            AutomaticDecompression = DecompressionMethods.All,
+        };
+        handler.ConnectCallback = (context, token) => ConnectPinnedAsync(context, url, token);
+        return handler;
     }
 
     private static bool IsRedirect(HttpStatusCode statusCode)

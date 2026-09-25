@@ -252,7 +252,7 @@ public sealed class DocumentArchivingStageTests
         try
         {
             var stage = CreateStage(out var coordinator, out var pairStore, out var reviewStore);
-            var cancellation = NewResult("cwt-cancellation", source, InvoiceDocumentType.AccommodationConfirmation, CandidateStatus.Resolved);
+            var cancellation = NewResult("cwt-cancellation", source, InvoiceDocumentType.Other, CandidateStatus.Resolved);
             cancellation = cancellation with
             {
                 Candidate = cancellation.Candidate with
@@ -267,6 +267,7 @@ public sealed class DocumentArchivingStageTests
             var batch = await stage.ExecuteAsync(
                 new ArchiveStageRequest("run-cwt", TempRoot, NewBatch(cancellation)), CancellationToken.None);
 
+            batch.Results.Single().Invoice!.DocumentType.Should().Be(InvoiceDocumentType.Other);
             reviewStore.Items.Should().ContainSingle(item =>
                 item.DocumentId == "cwt-cancellation" && item.Reason == "CWT_HOTEL_CANCELLATION");
             batch.Artifacts.Should().ContainSingle(outcome =>

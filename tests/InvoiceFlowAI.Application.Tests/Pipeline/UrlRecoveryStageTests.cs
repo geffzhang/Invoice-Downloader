@@ -111,6 +111,25 @@ public sealed class UrlRecoveryStageTests
     }
 
     [Fact]
+    public async Task Unexpected_provider_exception_does_not_persist_sensitive_diagnostics()
+    {
+        const string sourceUrl = "https://invoice.example/capability-segment?token=QUERY-SECRET";
+        const string rawException = "LOG-EXCEPTION-SECRET BUYER-SECRET SENDER-SECRET MAILBOX-SUBJECT-SECRET";
+        var item = WorkItem(UrlSource(sourceUrl), "privacy-candidate");
+        var stage = new UrlRecoveryStage(new FakeUrlRecoveryClient(
+            _ => Task.FromException<UrlRecoveryResult>(new InvalidOperationException(rawException))));
+
+        var output = await stage.ExecuteAsync(new CandidateBatch([item]), CancellationToken.None);
+
+        var failure = output.EffectiveTerminalResults.Should().ContainSingle().Which.Failure!;
+        var persistedDiagnostic = string.Join('|', failure.ReasonCode, failure.SafeMessage, failure.ExceptionType, failure.Fingerprint);
+        persistedDiagnostic.Should().Be("URL_RECOVERY_WORKER_FAILED|Invoice link could not be recovered.||");
+        persistedDiagnostic.Should().NotContain("capability-segment").And.NotContain("QUERY-SECRET")
+            .And.NotContain("LOG-EXCEPTION-SECRET").And.NotContain("BUYER-SECRET")
+            .And.NotContain("SENDER-SECRET").And.NotContain("MAILBOX-SUBJECT-SECRET");
+    }
+
+    [Fact]
     public async Task Propagates_cancellation_without_creating_terminal_failure()
     {
         var item = WorkItem(UrlSource("https://invoice.example/file"), "canceled-candidate");

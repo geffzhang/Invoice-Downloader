@@ -60,7 +60,6 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
             .OrderBy(static candidate => candidate.Candidate.Sequence)
             .ToArray();
         var confirmationCandidates = candidates
-            .Where(IsHotelConfirmation)
             .OrderBy(static candidate => candidate.Candidate.Sequence)
             .ToArray();
         var matchedDocuments = new HashSet<string>(StringComparer.Ordinal);
@@ -217,33 +216,88 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            await RollbackFileMoveAsync(sourcePath, targetPath, sidecarPath, moved, sidecarWritten).ConfigureAwait(false);
+            var recoveryRequired = await RollbackFileMoveAsync(sourcePath, targetPath, sidecarPath, moved, sidecarWritten).ConfigureAwait(false);
+            if (recoveryRequired)
+                await RecordRelocationRecoveryAsync(runId, confirmation, snapshot, relativePath, targetPath).ConfigureAwait(false);
             throw;
         }
         catch (CwtFinalizationException exception)
         {
-            await RollbackFileMoveAsync(sourcePath, targetPath, sidecarPath, moved, sidecarWritten).ConfigureAwait(false);
+            var recoveryRequired = await RollbackFileMoveAsync(sourcePath, targetPath, sidecarPath, moved, sidecarWritten).ConfigureAwait(false);
+            if (recoveryRequired)
+            {
+                await RecordRelocationRecoveryAsync(runId, confirmation, snapshot, relativePath, targetPath).ConfigureAwait(false);
+                return new CwtCancellationFinalizationFailure(documentId, "CWT_MATCH_RECOVERY_REQUIRED", "The matched archive requires recovery.");
+            }
             return new CwtCancellationFinalizationFailure(documentId, exception.ReasonCode, exception.Message);
         }
         catch
         {
-            await RollbackFileMoveAsync(sourcePath, targetPath, sidecarPath, moved, sidecarWritten).ConfigureAwait(false);
+            var recoveryRequired = await RollbackFileMoveAsync(sourcePath, targetPath, sidecarPath, moved, sidecarWritten).ConfigureAwait(false);
+            if (recoveryRequired)
+            {
+                await RecordRelocationRecoveryAsync(runId, confirmation, snapshot, relativePath, targetPath).ConfigureAwait(false);
+                return new CwtCancellationFinalizationFailure(documentId, "CWT_MATCH_RECOVERY_REQUIRED", "The matched archive requires recovery.");
+            }
             return new CwtCancellationFinalizationFailure(
                 documentId, "CWT_MATCH_RELOCATION_FAILED", "The matched hotel confirmation could not be moved to manual review.");
         }
     }
 
-    private async Task RollbackFileMoveAsync(string sourcePath, string targetPath, string sidecarPath, bool moved, bool sidecarWritten)
+    private async Task<bool> RollbackFileMoveAsync(string sourcePath, string targetPath, string sidecarPath, bool moved, bool sidecarWritten)
     {
+        var rollbackSucceeded = true;
         try
         {
-            if (sidecarWritten) await _fileSystem.DeleteAsync(sidecarPath, CancellationToken.None).ConfigureAwait(false);
             if (moved && await _fileSystem.FileExistsAsync(targetPath, CancellationToken.None).ConfigureAwait(false))
+            {
                 await _fileSystem.AtomicMoveAsync(targetPath, sourcePath, CancellationToken.None).ConfigureAwait(false);
+            }
         }
         catch
         {
+            rollbackSucceeded = false;
         }
+
+        if (rollbackSucceeded && sidecarWritten)
+        {
+            try
+            {
+                await _fileSystem.DeleteAsync(sidecarPath, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch
+            {
+                rollbackSucceeded = false;
+            }
+        }
+
+        return !rollbackSucceeded
+            && await _fileSystem.FileExistsAsync(targetPath, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task RecordRelocationRecoveryAsync(
+        string runId,
+        CandidateProcessResult confirmation,
+        ArchiveArtifactSnapshot snapshot,
+        string relativePath,
+        string targetPath)
+    {
+        var safePayload = JsonSerializer.Serialize(new { artifactId = snapshot.ArtifactId, reason = "CWT_MATCH_RECOVERY_REQUIRED" });
+        await using var transaction = await _unitOfWorkFactory
+            .BeginAsync(TransactionPurpose.ArchiveCommit, CancellationToken.None).ConfigureAwait(false);
+        await _artifactStore.UpdateCommittedLocationAsync(
+            snapshot.ArtifactId, relativePath, targetPath, Path.GetFileName(targetPath), transaction, CancellationToken.None).ConfigureAwait(false);
+        await _artifactStore.MarkRecoveryRequiredAsync(
+            snapshot.ArtifactId, "CWT_MATCH_RECOVERY_REQUIRED", transaction, CancellationToken.None).ConfigureAwait(false);
+        await _reviewStore.UpsertOpenAsync(
+            runId, confirmation.Candidate.DocumentId.Value, confirmation.Candidate.ProcessingRevision,
+            "CWT_CANCELLATION_MATCH", transaction, CancellationToken.None).ConfigureAwait(false);
+        await _auditStore.AppendAsync(new AuditEventRecord(
+            $"audit-{runId}-cwt-recovery-{snapshot.ArtifactId}", runId, 0,
+            "archive.cwt_recovery_required", "archive", "archive", confirmation.Candidate.DocumentId.Value,
+            confirmation.Candidate.ProcessingRevision, "CWT_MATCH_RECOVERY_REQUIRED", safePayload,
+            Sha256Hex(safePayload), DateTimeOffset.UtcNow), transaction, CancellationToken.None).ConfigureAwait(false);
+        await transaction.CommitAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
     private static bool IsCwtCancellation(CandidateProcessResult result)
@@ -251,9 +305,6 @@ public sealed class CwtCancellationFinalizer : ICwtCancellationFinalizer
             && metadata.TryGetValue("source_is_cwt", out var sourceIsCwt)
             && sourceIsCwt.Equals("true", StringComparison.OrdinalIgnoreCase)
             && SourceName(result).Contains("取消", StringComparison.Ordinal);
-
-    private static bool IsHotelConfirmation(CandidateProcessResult result)
-        => result.Invoice?.DocumentType == InvoiceDocumentType.AccommodationConfirmation;
 
     private static bool IsNameMatch(string personName, string fileName)
         => fileName.Contains(personName, StringComparison.Ordinal)
