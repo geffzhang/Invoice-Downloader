@@ -62,6 +62,24 @@ public sealed class CandidateCollectionStageTests
     }
 
     [Fact]
+    public async Task Marks_cwt_source_without_copying_sender_or_subject_into_candidate_metadata()
+    {
+        var stage = new CandidateCollectionStage(new FakeIdentityFactory(), new FakeHistoryReader());
+        var attachment = Attachment("message-cwt", "cancel.pdf", [1, 2, 3], "main_chain");
+        var scan = Scan(
+            [Message("message-cwt", "notices@mycwt.com", "Cancellation notice")],
+            [attachment],
+            Array.Empty<MailboxUrlCandidate>());
+
+        var batch = await stage.ExecuteAsync(scan, CancellationToken.None);
+
+        var metadata = batch.Items.Should().ContainSingle().Which.Candidate.Metadata!;
+        metadata.Should().ContainKey("source_is_cwt").WhoseValue.Should().Be("true");
+        metadata.Should().NotContainKey("sender");
+        metadata.Should().NotContainKey("subject");
+    }
+
+    [Fact]
     public async Task Filters_dropped_attachments_and_returns_retain_manual_and_skip_as_terminal_results()
     {
         var stage = new CandidateCollectionStage(new FakeIdentityFactory(), new FakeHistoryReader());
@@ -130,6 +148,9 @@ public sealed class CandidateCollectionStageTests
 
     private static MailboxMessage Message(string uid)
         => new("INBOX", uid, 4, DateTimeOffset.UnixEpoch, "Synthetic", "sender@fixture.invalid", Array.Empty<string>(), false);
+
+    private static MailboxMessage Message(string uid, string sender, string subject)
+        => new("INBOX", uid, 4, DateTimeOffset.UnixEpoch, subject, sender, Array.Empty<string>(), false);
 
     private static MailboxAttachmentCandidate Attachment(
         string uid,

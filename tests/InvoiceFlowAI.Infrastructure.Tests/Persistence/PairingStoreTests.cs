@@ -95,6 +95,34 @@ public sealed class PairingStoreTests : IClassFixture<SqliteTestFixture>
         completed.ReasonCode.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task Reconcile_requires_every_artifact_for_a_pair_member_to_be_committed()
+    {
+        await _fixture.ResetAsync();
+        await using var context = _fixture.CreateContext();
+        await SeedRunAndDocumentsAsync(context, "run-multi-artifact", "invoice-m", "companion-m");
+        var store = new EfPairingStore(context);
+        await using (var transaction = await BeginAsync(context))
+        {
+            await store.UpsertAsync(NewPairing("run-multi-artifact", "invoice-m", "Prepared", [new("companion-m", 0)]), transaction, CancellationToken.None);
+            await transaction.CommitAsync(CancellationToken.None);
+        }
+
+        var invoice = NewSnapshot("artifact-invoice-m", "invoice-m", ArchiveArtifactState.Committed, "run-multi-artifact");
+        var companion = NewSnapshot("artifact-companion-m", "companion-m", ArchiveArtifactState.Committed, "run-multi-artifact");
+        var companionRecoveryRequired = NewSnapshot("artifact-companion-m-extra", "companion-m", ArchiveArtifactState.RecoveryRequired, "run-multi-artifact");
+        await using (var transaction = await BeginAsync(context))
+        {
+            await store.ReconcileArchiveStateAsync(
+                "run-multi-artifact", [invoice, companion, companionRecoveryRequired], transaction, CancellationToken.None);
+            await transaction.CommitAsync(CancellationToken.None);
+        }
+
+        var pair = await context.Pairings.AsNoTracking().SingleAsync();
+        pair.State.Should().Be("RecoveryRequired");
+        pair.ReasonCode.Should().Be("PAIR_ARCHIVE_MEMBER_RECOVERY_REQUIRED");
+    }
+
     private static PairingRecord NewPairing(string runId, string invoiceDocumentId, string state, IReadOnlyList<PairingCompanionRecord> companions) => new(
         RunId: runId,
         InvoiceDocumentId: invoiceDocumentId,
@@ -145,9 +173,9 @@ public sealed class PairingStoreTests : IClassFixture<SqliteTestFixture>
     private static async Task<IUnitOfWork> BeginAsync(InvoiceFlowDbContext context) =>
         await new EfUnitOfWorkFactory(context).BeginAsync(TransactionPurpose.PairingCommit, CancellationToken.None);
 
-    private static ArchiveArtifactSnapshot NewSnapshot(string artifactId, string documentId, ArchiveArtifactState state) => new(
+    private static ArchiveArtifactSnapshot NewSnapshot(string artifactId, string documentId, ArchiveArtifactState state, string runId = "run-reconcile") => new(
         artifactId,
-        new ArchiveArtifactKey("run-reconcile", documentId, 0, "paired", new string('a', 64)),
+        new ArchiveArtifactKey(runId, documentId, 0, "paired", new string('a', 64)),
         "temp.bin",
         $"archive/{documentId}.bin",
         $"{documentId}.bin",

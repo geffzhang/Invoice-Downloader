@@ -246,6 +246,43 @@ public sealed class DocumentArchivingStageTests
     }
 
     [Fact]
+    public async Task Cwt_cancellation_is_routed_to_manual_review_before_any_pair_processing()
+    {
+        var source = CreateSource("酒店预定取消知会-张三-20260610入住-上海.pdf", "synthetic cancellation notice");
+        try
+        {
+            var stage = CreateStage(out var coordinator, out var pairStore, out var reviewStore);
+            var cancellation = NewResult("cwt-cancellation", source, InvoiceDocumentType.AccommodationConfirmation, CandidateStatus.Resolved);
+            cancellation = cancellation with
+            {
+                Candidate = cancellation.Candidate with
+                {
+                    Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["source_is_cwt"] = "true",
+                    },
+                },
+            };
+
+            var batch = await stage.ExecuteAsync(
+                new ArchiveStageRequest("run-cwt", TempRoot, NewBatch(cancellation)), CancellationToken.None);
+
+            reviewStore.Items.Should().ContainSingle(item =>
+                item.DocumentId == "cwt-cancellation" && item.Reason == "CWT_HOTEL_CANCELLATION");
+            batch.Artifacts.Should().ContainSingle(outcome =>
+                outcome.DocumentId == "cwt-cancellation"
+                && outcome.State == ArchiveArtifactState.Committed
+                && outcome.RelativePath!.Contains("/review/", StringComparison.Ordinal));
+            coordinator.Requests.Should().ContainSingle(request => request.Key.Role == "manual_review");
+            pairStore.Records.Should().BeEmpty();
+        }
+        finally
+        {
+            DeleteSource(source);
+        }
+    }
+
+    [Fact]
     public async Task Archive_status_golden_fixtures_match_routing_and_safe_failure_codes()
     {
         var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "archive-routing.json");
@@ -392,6 +429,7 @@ public sealed class DocumentArchivingStageTests
         public Task AtomicMoveAsync(string sourcePath, string targetPath, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task FlushToDiskAsync(string path, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task DeleteAsync(string path, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task WriteTextAtomicAsync(string path, string content, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class RecordingCoordinator : IArchiveCommitCoordinator

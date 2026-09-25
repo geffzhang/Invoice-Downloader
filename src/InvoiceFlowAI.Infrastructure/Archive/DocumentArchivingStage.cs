@@ -16,6 +16,7 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
     private readonly IPairingStore _pairingStore;
     private readonly IManualReviewItemStore _reviewStore;
     private readonly IUnitOfWorkFactory _unitOfWorkFactory;
+    private readonly ICwtCancellationFinalizer? _cwtCancellationFinalizer;
 
     public DocumentArchivingStage(
         IArchiveNamingPolicy namingPolicy,
@@ -23,7 +24,8 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
         IArchiveFileSystem fileSystem,
         IPairingStore pairingStore,
         IManualReviewItemStore reviewStore,
-        IUnitOfWorkFactory unitOfWorkFactory)
+        IUnitOfWorkFactory unitOfWorkFactory,
+        ICwtCancellationFinalizer? cwtCancellationFinalizer = null)
     {
         _namingPolicy = namingPolicy ?? throw new ArgumentNullException(nameof(namingPolicy));
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
@@ -31,6 +33,7 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
         _pairingStore = pairingStore ?? throw new ArgumentNullException(nameof(pairingStore));
         _reviewStore = reviewStore ?? throw new ArgumentNullException(nameof(reviewStore));
         _unitOfWorkFactory = unitOfWorkFactory ?? throw new ArgumentNullException(nameof(unitOfWorkFactory));
+        _cwtCancellationFinalizer = cwtCancellationFinalizer;
     }
 
     public async Task<ArchiveBatch> ExecuteAsync(ArchiveStageRequest request, CancellationToken cancellationToken)
@@ -64,15 +67,37 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
             .Select((result, index) => (Id: result.Candidate.DocumentId.Value, Index: index))
             .GroupBy(item => item.Id, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First().Index, StringComparer.Ordinal);
-        var pairByDocument = BuildPairMap(request.Batch);
+        var cwtCancellationIds = results
+            .Where(IsCwtCancellation)
+            .Select(static result => result.Candidate.DocumentId.Value)
+            .ToHashSet(StringComparer.Ordinal);
+        var pairByDocument = BuildPairMap(request.Batch, cwtCancellationIds);
         var processedPairs = new HashSet<PairWork>();
         var outcomes = new List<ArchiveArtifactOutcome>();
+        var failures = new List<RunFailure>();
 
         for (var index = 0; index < results.Length; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var result = results[index];
             var documentId = result.Candidate.DocumentId.Value;
+
+            if (cwtCancellationIds.Contains(documentId))
+            {
+                var reviewResult = result with
+                {
+                    Status = CandidateStatus.ManualReview,
+                    Failure = new CandidateFailure(
+                        "CWT_HOTEL_CANCELLATION",
+                        FailureScope.Candidate,
+                        FailureCategory.Validation,
+                        Retryable: false,
+                        SafeMessage: "A CWT hotel cancellation notice requires manual review."),
+                };
+                results[index] = reviewResult;
+                await ProcessReviewAsync(index, reviewResult, request, outputRoot, results, outcomes, cancellationToken).ConfigureAwait(false);
+                continue;
+            }
 
             if (pairByDocument.TryGetValue(documentId, out var pair))
             {
@@ -98,7 +123,41 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
             }
         }
 
-        return new ArchiveBatch(results, Array.Empty<RunFailure>()) { Artifacts = outcomes };
+        if (cwtCancellationIds.Count > 0 && _cwtCancellationFinalizer is not null)
+        {
+            var finalization = await _cwtCancellationFinalizer
+                .FinalizeAsync(request.RunId, outputRoot, results, cancellationToken).ConfigureAwait(false);
+            foreach (var entry in finalization.UpdatedRelativePaths)
+            {
+                var index = Array.FindIndex(results, result => result.Candidate.DocumentId.Value == entry.Key);
+                if (index >= 0)
+                {
+                    results[index] = results[index] with
+                    {
+                        Status = CandidateStatus.ManualReview,
+                        ArtifactPath = Path.Combine(outputRoot, entry.Value.Replace('/', Path.DirectorySeparatorChar)),
+                        Failure = new CandidateFailure("CWT_CANCELLATION_MATCH", FailureScope.Candidate,
+                            FailureCategory.Validation, Retryable: false,
+                            SafeMessage: "A related hotel confirmation was moved to manual review."),
+                    };
+                }
+                var artifactIndex = outcomes.FindIndex(outcome => outcome.DocumentId == entry.Key);
+                if (artifactIndex >= 0)
+                {
+                    outcomes[artifactIndex] = outcomes[artifactIndex] with { RelativePath = entry.Value };
+                }
+            }
+
+            failures.AddRange(finalization.Failures.Select(failure => new RunFailure(
+                request.RunId,
+                "archive-documents",
+                failure.ReasonCode,
+                FailureCategory.Persistence,
+                Retryable: false,
+                SafeMessage: failure.SafeMessage)));
+        }
+
+        return new ArchiveBatch(results, failures) { Artifacts = outcomes };
     }
 
     private async Task ProcessPairAsync(
@@ -411,10 +470,12 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private static Dictionary<string, PairWork> BuildPairMap(PairingBatch batch)
+    private static Dictionary<string, PairWork> BuildPairMap(PairingBatch batch, IReadOnlySet<string> excludedDocumentIds)
     {
         var pairWorks = batch.Results
             .SelectMany(result => result.Pairs)
+            .Where(assignment => !excludedDocumentIds.Contains(assignment.Invoice.Id)
+                && !excludedDocumentIds.Contains(assignment.Companion.Id))
             .Select(assignment => new PairWork(
                 assignment,
                 PairFamily(assignment.Invoice.Role)))
@@ -434,6 +495,12 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
         }
         return map;
     }
+
+    private static bool IsCwtCancellation(CandidateProcessResult result)
+        => result.Candidate.Metadata is { } metadata
+            && metadata.TryGetValue("source_is_cwt", out var sourceIsCwt)
+            && sourceIsCwt.Equals("true", StringComparison.OrdinalIgnoreCase)
+            && SourceName(result).Contains("取消", StringComparison.Ordinal);
 
     private static string PairFamily(PairingRole role) => role switch
     {

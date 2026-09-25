@@ -29,6 +29,7 @@ public sealed class PairingStoreRegistrationTests
         scope.ServiceProvider.GetRequiredService<IArchiveArtifactStore>().Should().BeOfType<EfArchiveArtifactStore>();
         scope.ServiceProvider.GetRequiredService<IArchiveCommitCoordinator>().Should().BeOfType<ArchiveCommitCoordinator>();
         scope.ServiceProvider.GetRequiredService<IArchiveRecoveryService>().Should().BeOfType<ArchiveRecoveryService>();
+        scope.ServiceProvider.GetRequiredService<ICwtCancellationFinalizer>().Should().BeOfType<CwtCancellationFinalizer>();
         scope.ServiceProvider.GetRequiredService<IArchiveFileSystem>().Should().BeOfType<PhysicalArchiveFileSystem>();
         scope.ServiceProvider.GetRequiredService<IArchiveNamingPolicy>().Should().BeOfType<ArchiveNamingPolicy>();
         scope.ServiceProvider.GetRequiredService<IDocumentArchivingStage>().Should().BeOfType<DocumentArchivingStage>();

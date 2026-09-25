@@ -263,5 +263,6 @@ public sealed class ClosedXmlReportExporterTests
         public Task AtomicMoveAsync(string sourcePath, string targetPath, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task FlushToDiskAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task DeleteAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task WriteTextAtomicAsync(string path, string content, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

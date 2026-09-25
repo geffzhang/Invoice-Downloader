@@ -16,6 +16,14 @@ public interface IArchiveArtifactStore
 
     Task MarkRecoveryRequiredAsync(string artifactId, string reasonCode, IUnitOfWork transaction, CancellationToken cancellationToken);
 
+    Task UpdateCommittedLocationAsync(
+        string artifactId,
+        string relativePath,
+        string finalPath,
+        string fileName,
+        IUnitOfWork transaction,
+        CancellationToken cancellationToken);
+
     Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListByRunAsync(string runId, CancellationToken cancellationToken);
 }
 

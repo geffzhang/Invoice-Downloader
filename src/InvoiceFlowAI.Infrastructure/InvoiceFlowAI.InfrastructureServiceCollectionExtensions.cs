@@ -76,6 +76,7 @@ public static class InvoiceFlowAIInfrastructureServiceCollectionExtensions
         services.AddSingleton<IArchiveNamingPolicy, ArchiveNamingPolicy>();
         services.AddScoped<IArchiveCommitCoordinator, ArchiveCommitCoordinator>();
         services.AddScoped<IArchiveRecoveryService, ArchiveRecoveryService>();
+        services.AddScoped<ICwtCancellationFinalizer, CwtCancellationFinalizer>();
         services.AddScoped<IDocumentArchivingStage, DocumentArchivingStage>();
         services.AddScoped<ICandidateCollectionStage, CandidateCollectionStage>();
         services.AddScoped<IParser, XmlInvoiceParser>();

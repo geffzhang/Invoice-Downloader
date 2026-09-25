@@ -250,6 +250,9 @@ public sealed class ArchiveCommitCoordinatorTests
             _files.Remove(path);
             return Task.CompletedTask;
         }
+
+        public Task WriteTextAtomicAsync(string path, string content, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
     }
 
     private sealed class FakeArchiveArtifactStore : IArchiveArtifactStore
@@ -294,6 +297,10 @@ public sealed class ArchiveCommitCoordinatorTests
             _byHash[kvp.Key] = kvp.Value with { State = ArchiveArtifactState.RecoveryRequired };
             return Task.CompletedTask;
         }
+
+        public Task UpdateCommittedLocationAsync(string artifactId, string relativePath, string finalPath, string fileName,
+            IUnitOfWork transaction, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
 
         public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListByRunAsync(string runId, CancellationToken cancellationToken)
             => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(_byRun.Where(s => s.Key.RunId == runId).ToList());

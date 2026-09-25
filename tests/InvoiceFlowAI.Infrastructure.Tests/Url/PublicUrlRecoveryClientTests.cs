@@ -42,6 +42,25 @@ public sealed class PublicUrlRecoveryClientTests
     }
 
     [Fact]
+    public async Task Rejects_redirect_hostname_that_resolves_to_private_address_before_second_request()
+    {
+        var transport = new FakeUrlRecoveryTransport(
+            new UrlTransportResponse(HttpStatusCode.Redirect, ReadOnlyMemory<byte>.Empty, "", "https://private-hop.example/document"));
+        var policy = new PublicUrlPolicy((host, _) => Task.FromResult<IReadOnlyList<IPAddress>>(
+            host.Equals("private-hop.example", StringComparison.OrdinalIgnoreCase)
+                ? [IPAddress.Parse("10.2.3.4")]
+                : [IPAddress.Parse("203.0.114.7") ]));
+        var client = new PublicUrlRecoveryClient(policy, transport, maxResponseBytes: 1024, timeout: TimeSpan.FromSeconds(2));
+
+        var act = () => client.RecoverAsync(new Uri("https://first.example/invoice"), CancellationToken.None);
+
+        var error = await act.Should().ThrowAsync<UrlRecoveryException>();
+        error.Which.ReasonCode.Should().Be("URL_POLICY_REJECTED");
+        error.Which.Message.Should().NotContain("private-hop.example");
+        transport.Requests.Select(request => request.Url.Host).Should().ContainSingle().Which.Should().Be("first.example");
+    }
+
+    [Fact]
     public async Task Rejects_response_body_over_configured_limit()
     {
         var transport = new FakeUrlRecoveryTransport(

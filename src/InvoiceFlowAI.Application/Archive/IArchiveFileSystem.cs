@@ -18,4 +18,6 @@ public interface IArchiveFileSystem
     Task FlushToDiskAsync(string path, CancellationToken cancellationToken);
 
     Task DeleteAsync(string path, CancellationToken cancellationToken);
+
+    Task WriteTextAtomicAsync(string path, string content, CancellationToken cancellationToken);
 }
