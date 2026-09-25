@@ -145,6 +145,57 @@ public sealed class DesktopParityFixtureTests
     }
 
     [Fact]
+    public async Task Candidate_identity_golden_fixtures_are_opaque_stable_and_retain_malformed_urls()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "candidate-identity.json");
+        var fixtures = JsonSerializer.Deserialize<CandidateIdentityFixtureSet>(File.ReadAllText(fixturePath), JsonOptions)
+            ?? throw new InvalidDataException("Candidate identity parity fixtures are empty.");
+        var keyProvider = new FixtureIdentityKeyProvider();
+        var identityFactory = new CandidateIdentityFactory(keyProvider);
+
+        foreach (var fixture in fixtures.Cases)
+        {
+            var candidates = fixture.Urls.Select((url, index) => new MailboxUrlCandidate(
+                fixture.AccountId,
+                fixture.Mailbox,
+                fixture.UidValidity,
+                fixture.MessageUid,
+                new Uri(url, UriKind.RelativeOrAbsolute),
+                fixture.ProviderFamily,
+                "opaque-group",
+                new Dictionary<string, string>(),
+                index)).ToArray();
+            var identity = await identityFactory.CreateUrlGroupAsync(fixture.ProviderFamily, candidates, CancellationToken.None);
+
+            identity.Value.Should().StartWith(fixture.ExpectedIdentityPrefix, fixture.CaseId);
+            fixture.MustNotContain.Should().OnlyContain(value => !identity.Value.Contains(value, StringComparison.Ordinal), fixture.CaseId);
+            if (fixture.ExpectedStatus is null)
+            {
+                var reversed = await identityFactory.CreateUrlGroupAsync(fixture.ProviderFamily, candidates.Reverse().ToArray(), CancellationToken.None);
+                reversed.Should().Be(identity, fixture.CaseId);
+                continue;
+            }
+
+            var scan = new MailboxScanResult(
+                [new MailboxMessage(fixture.Mailbox, fixture.MessageUid, 1, DateTimeOffset.UnixEpoch, "Synthetic", "sender@fixture.invalid", [], false)],
+                [], 1, fixture.UidValidity, false)
+            {
+                AccountId = fixture.AccountId,
+                UrlCandidates = candidates,
+            };
+            var stage = new CandidateCollectionStage(identityFactory, new FixtureHistoryReader());
+            var batch = await stage.ExecuteAsync(scan, CancellationToken.None);
+
+            batch.Items.Should().BeEmpty(fixture.CaseId);
+            var result = batch.EffectiveTerminalResults.Should().ContainSingle(fixture.CaseId).Which;
+            result.Status.ToString().Should().Be(fixture.ExpectedStatus, fixture.CaseId);
+            result.Failure!.ReasonCode.Should().Be(fixture.ExpectedReasonCode, fixture.CaseId);
+            result.Candidate.SourceUrl.Should().BeNull(fixture.CaseId);
+            fixture.MustNotContain.Should().OnlyContain(value => !result.Candidate.DocumentId.Value.Contains(value, StringComparison.Ordinal), fixture.CaseId);
+        }
+    }
+
+    [Fact]
     public async Task Candidate_order_golden_fixtures_preserve_mailbox_and_source_order()
     {
         var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "candidate-order.json");
@@ -338,6 +389,29 @@ public sealed class DesktopParityFixtureTests
     private sealed record CandidateOrderAttachment(string Uid, string FileName);
 
     private sealed record CandidateOrderUrl(string Uid, long Sequence);
+
+    private sealed record CandidateIdentityFixtureSet(IReadOnlyList<CandidateIdentityCase> Cases);
+
+    private sealed record CandidateIdentityCase(
+        string CaseId,
+        string AccountId,
+        string Mailbox,
+        string UidValidity,
+        string MessageUid,
+        string ProviderFamily,
+        IReadOnlyList<string> Urls,
+        string ExpectedIdentityPrefix,
+        IReadOnlyList<string> MustNotContain,
+        string? ExpectedStatus = null,
+        string? ExpectedReasonCode = null);
+
+    private sealed class FixtureIdentityKeyProvider : ICandidateIdentityKeyProvider
+    {
+        private readonly byte[] _key = Enumerable.Range(1, 32).Select(static value => (byte)value).ToArray();
+
+        public Task<CandidateIdentityKey> GetCurrentKeyAsync(CancellationToken cancellationToken)
+            => Task.FromResult(new CandidateIdentityKey("2", _key));
+    }
 
     private sealed class FixtureIdentityFactory : ICandidateIdentityFactory
     {

@@ -93,13 +93,14 @@ public sealed class CandidateIdentityFactory : ICandidateIdentityFactory
         var resource = providerFamily;
         if (string.IsNullOrEmpty(first.ProviderFamily))
         {
-            if (candidates.Count != 1 || !first.SourceUrl.IsAbsoluteUri
-                || (first.SourceUrl.Scheme != Uri.UriSchemeHttp && first.SourceUrl.Scheme != Uri.UriSchemeHttps))
+            if (candidates.Count != 1)
             {
                 throw new ArgumentException("Unknown-provider URL candidates must be grouped individually.", nameof(candidates));
             }
 
-            resource = Canonicalize(first.SourceUrl);
+            resource = IsValidHttpUrl(first.SourceUrl)
+                ? Canonicalize(first.SourceUrl)
+                : first.SourceUrl.OriginalString;
         }
 
         var fingerprint = HMACSHA256.HashData(key.KeyBytes.Span, Encoding.UTF8.GetBytes(resource));
@@ -164,6 +165,10 @@ public sealed class CandidateIdentityFactory : ICandidateIdentityFactory
         };
         return builder.Uri.GetComponents(UriComponents.AbsoluteUri, UriFormat.UriEscaped);
     }
+
+    private static bool IsValidHttpUrl(Uri sourceUrl)
+        => sourceUrl.IsAbsoluteUri
+            && (sourceUrl.Scheme == Uri.UriSchemeHttp || sourceUrl.Scheme == Uri.UriSchemeHttps);
 
     private static string BuildIdentity(
         string versionPrefix,
