@@ -47,7 +47,8 @@ public sealed class NuonuoScanRecoveryStrategy : IUrlRecoveryStrategy
                 attempt + 1 < _maxAttempts
                 && exception.ReasonCode is not "URL_POLICY_REJECTED"
                     and not "NUONUO_MISSING_PARAM_LIST"
-                    and not "NUONUO_ARTIFACT_SELECTION_AMBIGUOUS")
+                    and not "NUONUO_ARTIFACT_SELECTION_AMBIGUOUS"
+                    and not "DIRECT_INVOICE_PDF_ENTITY_MISMATCH")
             {
                 var delay = RetryDelays[Math.Min(attempt, RetryDelays.Length - 1)];
                 if (delay > TimeSpan.Zero)
@@ -152,7 +153,9 @@ public sealed class NuonuoScanRecoveryStrategy : IUrlRecoveryStrategy
                             sourceOrdinal,
                             digest,
                             SanitizedOrigin(downloaded.EffectiveUrl),
-                            new Dictionary<string, string>(StringComparer.Ordinal),
+                            kind == RecoveredArtifactKind.Xml
+                                ? DirectArtifactProbe.ParseXmlFields(downloaded.Response.Content)
+                                : new Dictionary<string, string>(StringComparer.Ordinal),
                             null,
                             "ARTIFACT_CAPTURED"));
                     }
@@ -162,17 +165,7 @@ public sealed class NuonuoScanRecoveryStrategy : IUrlRecoveryStrategy
                 }
             }
 
-            var selectedIndex = SelectPrimary(artifacts);
-            if (selectedIndex is null)
-            {
-                throw new UrlRecoveryException(
-                    artifacts.Count == 0 ? "NUONUO_ARTIFACT_DOWNLOAD_FAILED" : "NUONUO_ARTIFACT_SELECTION_AMBIGUOUS",
-                    "Invoice provider did not return one selectable invoice document.",
-                    true,
-                    false);
-            }
-
-            return new UrlRecoveryResult(artifacts, selectedIndex);
+            return SelectPrimary(artifacts, group.ExpectedFields, group.Candidates.Select(static candidate => candidate.SourceUrl).ToArray());
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -192,20 +185,31 @@ public sealed class NuonuoScanRecoveryStrategy : IUrlRecoveryStrategy
         }
     }
 
-    private static int? SelectPrimary(IReadOnlyList<CapturedUrlArtifact> artifacts)
+    private static UrlRecoveryResult SelectPrimary(
+        IReadOnlyList<CapturedUrlArtifact> artifacts,
+        IReadOnlyDictionary<string, string> expectedFields,
+        IReadOnlyList<Uri> sourceUrls)
     {
-        var pdfIndexes = artifacts.Select((artifact, index) => (artifact, index))
-            .Where(static item => item.artifact.Kind == RecoveredArtifactKind.Pdf)
-            .Select(static item => item.index)
-            .ToArray();
-        if (pdfIndexes.Length == 1) return pdfIndexes[0];
-        if (pdfIndexes.Length > 1) return null;
-
-        var xmlIndexes = artifacts.Select((artifact, index) => (artifact, index))
-            .Where(static item => item.artifact.Kind == RecoveredArtifactKind.Xml)
-            .Select(static item => item.index)
-            .ToArray();
-        return xmlIndexes.Length == 1 ? xmlIndexes[0] : null;
+        try
+        {
+            return DirectInvoiceArtifactSelector.Select(expectedFields, artifacts, sourceUrls);
+        }
+        catch (UrlRecoveryException exception) when (exception.ReasonCode is "DIRECT_INVOICE_MULTIPLE_PDF_CANDIDATES" or "DIRECT_INVOICE_XML_ONLY_NO_MATCH")
+        {
+            throw new UrlRecoveryException(
+                "NUONUO_ARTIFACT_SELECTION_AMBIGUOUS",
+                "Invoice provider did not return one selectable invoice document.",
+                false,
+                false);
+        }
+        catch (UrlRecoveryException exception) when (exception.ReasonCode == "DIRECT_INVOICE_NO_VALID_ARTIFACT")
+        {
+            throw new UrlRecoveryException(
+                "NUONUO_ARTIFACT_DOWNLOAD_FAILED",
+                "Invoice provider did not return one selectable invoice document.",
+                true,
+                false);
+        }
     }
 
     private static Dictionary<string, string> ParseQuery(string query)

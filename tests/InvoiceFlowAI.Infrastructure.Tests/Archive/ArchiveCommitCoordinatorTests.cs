@@ -81,8 +81,21 @@ public sealed class ArchiveCommitCoordinatorTests
         snapshot.State.Should().Be(ArchiveArtifactState.Prepared);
         snapshot.TempFilePath.Should().NotBe(sourcePath);
         (await fakes.FileSystem.FileExistsAsync(snapshot.TempFilePath, CancellationToken.None)).Should().BeTrue();
+        (await fakes.FileSystem.ComputeSha256Async(snapshot.TempFilePath, CancellationToken.None)).Should().Be(hash);
+        (await fakes.FileSystem.FileExistsAsync("archive/final-1.bin", CancellationToken.None)).Should().BeFalse();
         (await fakes.FileSystem.FileExistsAsync(sourcePath, CancellationToken.None)).Should().BeTrue();
         (await fakes.FileSystem.ComputeSha256Async(sourcePath, CancellationToken.None)).Should().Be(hash);
+        var recovery = new ArchiveRecoveryService(
+            fakes.UowFactory, fakes.Store, fakes.FileSystem, fakes.AuditStore);
+        var recoveryEntries = await recovery.ScanAsync("run-1", CancellationToken.None);
+        recoveryEntries.Should().ContainSingle().Which.Should().BeEquivalentTo(new
+        {
+            ArtifactId = snapshot.ArtifactId,
+            TempFilePath = snapshot.TempFilePath,
+            ExpectedContentHash = hash,
+            CurrentState = ArchiveArtifactState.Prepared,
+            FinalFilePath = snapshot.FinalFilePath,
+        });
     }
 
     [Fact]

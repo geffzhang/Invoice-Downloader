@@ -240,6 +240,13 @@ public sealed class DesktopParityFixtureTests
             if (fixture.Selector.Equals("baiwang", StringComparison.OrdinalIgnoreCase))
             {
                 var artifacts = fixture.Captures!.Select(CreateArtifact).ToArray();
+                if (!string.IsNullOrWhiteSpace(fixture.ExpectedFailure))
+                {
+                    var exception = Record.Exception(() => BaiwangArtifactSelector.Select(fixture.ExpectedFields, artifacts));
+                    exception.Should().BeOfType<UrlRecoveryException>().Which.ReasonCode.Should().Be(fixture.ExpectedFailure, fixture.CaseId);
+                    continue;
+                }
+
                 var baiwangResult = BaiwangArtifactSelector.Select(fixture.ExpectedFields, artifacts);
 
                 baiwangResult.SelectedArtifactIndex.Should().Be(fixture.ExpectedSelectedIndex, fixture.CaseId);
@@ -269,25 +276,35 @@ public sealed class DesktopParityFixtureTests
                 new Dictionary<string, IReadOnlyList<ExpectedFieldEvidence>>(),
                 DocumentIdentity.Create("provider-recovery-fixture"));
 
-            UrlRecoveryResult result;
+            IUrlRecoveryStrategy strategy;
             if (fixture.Selector.Equals("nuonuo", StringComparison.OrdinalIgnoreCase))
             {
-                var strategy = new NuonuoScanRecoveryStrategy(
+                strategy = new NuonuoScanRecoveryStrategy(
                     client,
                     maxAttempts: 3,
                     delayAsync: static (_, _) => Task.CompletedTask);
-                result = await strategy.RecoverAsync(group, CancellationToken.None);
             }
             else if (fixture.Selector.Equals("direct", StringComparison.OrdinalIgnoreCase))
             {
                 var probe = new DirectArtifactProbe(client, maxAttempts: 3,
                     delayAsync: static (_, _) => Task.CompletedTask);
-                result = await new DirectInvoiceRecoveryStrategy(probe).RecoverAsync(group, CancellationToken.None);
+                strategy = new DirectInvoiceRecoveryStrategy(probe);
             }
             else
             {
                 throw new InvalidDataException($"Unsupported provider recovery selector '{fixture.Selector}'.");
             }
+
+            if (!string.IsNullOrWhiteSpace(fixture.ExpectedFailure))
+            {
+                var exception = await Assert.ThrowsAsync<UrlRecoveryException>(
+                    () => strategy.RecoverAsync(group, CancellationToken.None));
+                exception.ReasonCode.Should().Be(fixture.ExpectedFailure, fixture.CaseId);
+                transport.Requests.Should().HaveCount(responses.Length, fixture.CaseId);
+                continue;
+            }
+
+            var result = await strategy.RecoverAsync(group, CancellationToken.None);
 
             result.Artifacts.Select(artifact => artifact.Kind.ToString())
                 .Should().Equal(fixture.ExpectedArtifactKinds!, fixture.CaseId);
@@ -298,9 +315,107 @@ public sealed class DesktopParityFixtureTests
         }
     }
 
+    [Fact]
+    public void Direct_provider_recovery_fixtures_cover_archive_pdf_xml_ofd_for_each_family()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "provider-recovery.json");
+        var fixtures = JsonSerializer.Deserialize<ProviderRecoveryFixtureSet>(File.ReadAllText(fixturePath), JsonOptions)
+            ?? throw new InvalidDataException("Provider recovery parity fixtures are empty.");
+
+        var families = new[]
+        {
+            "chinatax_direct_invoice",
+            "bwjf_signed_invoice",
+            "fpyun_direct_invoice",
+            "pdd_direct_invoice",
+            "jdcloud_direct_invoice",
+            "kpbyd_direct_invoice",
+        };
+
+        foreach (var family in families)
+        {
+            var familyFixture = fixtures.Cases.FirstOrDefault(fixture => fixture.ProviderFamily == family
+                && fixture.ExpectedArtifactKinds is { Count: 3 } kinds
+                && kinds[0] == "Xml"
+                && kinds[1] == "Pdf"
+                && kinds[2] == "Ofd");
+            familyFixture.Should().NotBeNull($"{family} must exercise archive XML/PDF/OFD capture");
+            if (family != "fpyun_direct_invoice")
+            {
+                familyFixture!.Responses.Should().Contain(response =>
+                    response.StatusCode == (int)HttpStatusCode.Redirect
+                    && !string.IsNullOrWhiteSpace(response.RedirectLocation),
+                    $"{family} must exercise redirect revalidation");
+            }
+
+            fixtures.Cases.Any(fixture => fixture.ProviderFamily == family
+                && fixture.ExpectedFailure == "DIRECT_INVOICE_PDF_ENTITY_MISMATCH")
+                .Should().BeTrue($"{family} must fail closed when XML invoice identity mismatches");
+            fixtures.Cases.Any(fixture => fixture.ProviderFamily == family
+                && fixture.ExpectedFailure == "DIRECT_INVOICE_NO_VALID_ARTIFACT")
+                .Should().BeTrue($"{family} must fail closed when no supported artifact is captured");
+        }
+    }
+
+    [Fact]
+    public void Provider_recovery_fixtures_include_nuonuo_ambiguous_pdf_failure()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "provider-recovery.json");
+        var fixtures = JsonSerializer.Deserialize<ProviderRecoveryFixtureSet>(File.ReadAllText(fixturePath), JsonOptions)
+            ?? throw new InvalidDataException("Provider recovery parity fixtures are empty.");
+
+        fixtures.Cases.Should().Contain(fixture =>
+            fixture.CaseId == "nuonuo-multiple-valid-pdfs-fail-closed"
+            && fixture.ExpectedFailure == "NUONUO_ARTIFACT_SELECTION_AMBIGUOUS");
+    }
+
+    [Fact]
+    public void Provider_recovery_fixtures_include_baiwang_ofd_to_pdf_pairing_case()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "provider-recovery.json");
+        var fixtures = JsonSerializer.Deserialize<ProviderRecoveryFixtureSet>(File.ReadAllText(fixturePath), JsonOptions)
+            ?? throw new InvalidDataException("Provider recovery parity fixtures are empty.");
+
+        fixtures.Cases.Should().Contain(fixture => fixture.CaseId == "baiwang-matching-ofd-selects-same-source-pdf");
+    }
+
+    [Fact]
+    public void Provider_recovery_fixtures_include_baiwang_entity_mismatch_failure()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "provider-recovery.json");
+        var fixtures = JsonSerializer.Deserialize<ProviderRecoveryFixtureSet>(File.ReadAllText(fixturePath), JsonOptions)
+            ?? throw new InvalidDataException("Provider recovery parity fixtures are empty.");
+
+        fixtures.Cases.Should().Contain(fixture =>
+            fixture.CaseId == "baiwang-all-candidates-mismatch-fail-closed"
+            && fixture.ExpectedFailure == "BAIWANG_PDF_ENTITY_MISMATCH");
+    }
+
     private static UrlTransportResponse CreateResponse(ProviderRecoveryResponse response)
-        => new((HttpStatusCode)response.StatusCode, Encoding.UTF8.GetBytes(response.Body), response.ContentType,
+        => new((HttpStatusCode)response.StatusCode,
+            response.ArchiveMembers is { } members
+                ? CreateArchive(members)
+                : Encoding.UTF8.GetBytes(response.Body),
+            response.ContentType,
             response.RedirectLocation);
+
+    private static byte[] CreateArchive(IReadOnlyList<ProviderRecoveryArchiveMember> members)
+    {
+        using var output = new MemoryStream();
+        using (var archive = new System.IO.Compression.ZipArchive(output, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var member in members)
+            {
+                using var stream = archive.CreateEntry(member.Name).Open();
+                var content = member.ArchiveMembers is { } nestedMembers
+                    ? CreateArchive(nestedMembers)
+                    : Encoding.UTF8.GetBytes(member.Body);
+                stream.Write(content);
+            }
+        }
+
+        return output.ToArray();
+    }
 
     private static CapturedUrlArtifact CreateArtifact(ProviderRecoveryCapture capture)
     {
@@ -425,7 +540,8 @@ public sealed class DesktopParityFixtureTests
         string ProviderFamily = "",
         string SourceUrl = "",
         IReadOnlyList<string>? ExpectedArtifactKinds = null,
-        IReadOnlyList<ProviderRecoveryResponse>? Responses = null);
+        IReadOnlyList<ProviderRecoveryResponse>? Responses = null,
+        string? ExpectedFailure = null);
 
     private sealed record ProviderRecoveryCapture(
         string Kind,
@@ -433,7 +549,17 @@ public sealed class DesktopParityFixtureTests
         IReadOnlyDictionary<string, string> Fields,
         string CaptureReason);
 
-    private sealed record ProviderRecoveryResponse(int StatusCode, string ContentType, string Body, string? RedirectLocation);
+    private sealed record ProviderRecoveryResponse(
+        int StatusCode,
+        string ContentType,
+        string Body,
+        string? RedirectLocation,
+        IReadOnlyList<ProviderRecoveryArchiveMember>? ArchiveMembers = null);
+
+    private sealed record ProviderRecoveryArchiveMember(
+        string Name,
+        string Body,
+        IReadOnlyList<ProviderRecoveryArchiveMember>? ArchiveMembers = null);
 
     private sealed class FixtureRecoveryTransport(params UrlTransportResponse[] responses) : IUrlRecoveryTransport
     {

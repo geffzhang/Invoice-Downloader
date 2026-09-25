@@ -98,6 +98,44 @@ public sealed class RunExecutionServiceTests
     }
 
     [Fact]
+    public async Task Terminal_publish_waits_for_in_flight_progress_commit()
+    {
+        var order = new List<string>();
+        var services = new ServiceCollection();
+        services.AddInvoiceFlowApplication();
+        services.AddSingleton<IMailboxScanner, EmptyMailboxScanner>();
+        services.AddSingleton<ICandidateCollectionStage, EmptyCandidateStage>();
+        services.AddSingleton<IUrlRecoveryStage, PassThroughRecoveryStage>();
+        services.AddSingleton<IDocumentExtractionStage, EmptyExtractionStage>();
+        services.AddSingleton<IArtifactPairingStage, EmptyPairingStage>();
+        services.AddSingleton<IDocumentArchivingStage, EmptyArchiveStage>();
+        services.AddSingleton<IReportExportStage, CompletedReportStage>();
+        await using var provider = services.BuildServiceProvider();
+        var coordinator = new RecordingCoordinator(order)
+        {
+            BlockPacketEventType = "run.progress",
+        };
+        var publisher = new RecordingEventPublisher(order);
+        var service = new RunExecutionService(
+            provider.GetRequiredService<InvoiceFlowAI.Application.Configuration.RecipeRegistry>(),
+            provider.GetRequiredService<PipelineRunFactory>(), coordinator, publisher, TimeProvider.System);
+
+        var execution = service.ExecuteAsync(new RunStartRequest(
+            "run-progress-barrier", "account-1", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30),
+            Path.GetTempPath(), "Example Co", "standard"), CancellationToken.None);
+        await coordinator.BlockedPacketCommit.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        execution.IsCompleted.Should().BeFalse();
+        publisher.Events.Should().NotContain(item => item.EventName == "run.terminal");
+        coordinator.ReleasePacketCommit.TrySetResult();
+
+        await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        publisher.Events.Last().EventName.Should().Be("run.terminal");
+        order.IndexOf("finalize").Should().BeLessThan(order.IndexOf("publish:" + publisher.Events.Last().Sequence));
+    }
+
+    [Fact]
     public async Task Candidate_result_is_finalized_and_its_event_is_published_after_commit()
     {
         var order = new List<string>();
@@ -356,21 +394,29 @@ public sealed class RunExecutionServiceTests
     {
         public List<RunFinalizationRequest> FinalizationRequests { get; } = [];
         public List<PacketCommitRequest> PacketRequests { get; } = [];
+        public TaskCompletionSource BlockedPacketCommit { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleasePacketCommit { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public long? TerminalEventSequence { get; set; }
         public string? FailPacketEventType { get; set; }
+        public string? BlockPacketEventType { get; set; }
         private long LastCommittedSequence { get; set; }
 
-        public Task<RunCommitResult> CommitPacketAsync(PacketCommitRequest request, CancellationToken cancellationToken)
+        public async Task<RunCommitResult> CommitPacketAsync(PacketCommitRequest request, CancellationToken cancellationToken)
         {
             PacketRequests.Add(request);
             order.Add($"commit:{request.EventSequence}");
+            if (request.EventType == BlockPacketEventType)
+            {
+                BlockedPacketCommit.TrySetResult();
+                await ReleasePacketCommit.Task.WaitAsync(cancellationToken);
+            }
             if (request.EventType == FailPacketEventType)
             {
-                return Task.FromException<RunCommitResult>(new InvalidOperationException("packet commit failed"));
+                throw new InvalidOperationException("packet commit failed");
             }
             LastCommittedSequence = Math.Max(LastCommittedSequence, request.EventSequence);
-            return Task.FromResult(new RunCommitResult(request.RunId, request.EventSequence,
-                request.EventSequence + 1, false, null));
+            return new RunCommitResult(request.RunId, request.EventSequence,
+                request.EventSequence + 1, false, null);
         }
 
         public Task<RunTerminalDecision> FinalizeAsync(RunFinalizationRequest request, CancellationToken cancellationToken)

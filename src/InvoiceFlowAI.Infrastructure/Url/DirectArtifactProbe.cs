@@ -197,7 +197,7 @@ public sealed class DirectArtifactProbe
                 ? artifact with { ExpectedMatch = true, MatchReasonCode = "invoice_number_from_url" }
                 : artifact;
 
-    private static IReadOnlyDictionary<string, string> ParseXmlFields(ReadOnlyMemory<byte> content)
+    internal static IReadOnlyDictionary<string, string> ParseXmlFields(ReadOnlyMemory<byte> content)
     {
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
         try

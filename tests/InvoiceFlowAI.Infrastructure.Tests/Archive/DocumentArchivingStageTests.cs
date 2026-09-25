@@ -110,6 +110,42 @@ public sealed class DocumentArchivingStageTests
     }
 
     [Fact]
+    public async Task Provider_identity_mismatch_is_routed_to_review_not_regular_archive()
+    {
+        var source = CreateSource("provider-mismatch.pdf", "synthetic mismatched provider artifact");
+        try
+        {
+            var stage = CreateStage(out var coordinator, out _, out var reviewStore);
+            var result = NewResult("provider-mismatch", source, InvoiceDocumentType.AirTicket, CandidateStatus.Unresolved) with
+            {
+                Failure = new CandidateFailure(
+                    "DIRECT_INVOICE_PDF_ENTITY_MISMATCH",
+                    FailureScope.Candidate,
+                    FailureCategory.Validation,
+                    Retryable: false,
+                    "The recovered invoice did not match its source identity."),
+            };
+
+            var batch = await stage.ExecuteAsync(
+                new ArchiveStageRequest("run-provider-mismatch", TempRoot, NewBatch(result)), CancellationToken.None);
+
+            batch.Results.Should().ContainSingle().Which.Status.Should().Be(CandidateStatus.Unresolved);
+            batch.Results.Single().Failure!.ReasonCode.Should().Be("DIRECT_INVOICE_PDF_ENTITY_MISMATCH");
+            reviewStore.Items.Should().ContainSingle(item =>
+                item.DocumentId == "provider-mismatch" && item.Reason == "DIRECT_INVOICE_PDF_ENTITY_MISMATCH");
+            coordinator.Requests.Should().ContainSingle(request => request.Key.Role == "manual_review");
+            coordinator.Requests.Should().NotContain(request => request.Key.Role == "standalone");
+            batch.Artifacts.Should().ContainSingle(outcome =>
+                outcome.DocumentId == "provider-mismatch"
+                && outcome.RelativePath!.Contains("/review/", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteSource(source);
+        }
+    }
+
+    [Fact]
     public async Task Run_id_path_traversal_is_rejected_before_coordinator_call()
     {
         var source = CreateSource("traversal.pdf", "safe bytes");
