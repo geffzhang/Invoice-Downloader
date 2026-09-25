@@ -293,6 +293,22 @@ class InvoiceP2RegressionTests(unittest.TestCase):
         self.assertEqual(result["Amount"], "49.99")
         self.assertEqual(result["Type"], "其他")
 
+    def test_foreign_invoice_fast_path_requires_complete_amount(self):
+        header = "Seller Ltd\nInvoice #123\nInvoice Date: Sunday, May 24th, 2026\n"
+        cases = {
+            "Total\n$1,234.56 USD": "1234.56",
+            "Total\n$12,345.67 USD": "12345.67",
+            "Total\n$1234.56 USD": "1234.56",
+            "Total\n$12,34.56 USD": None,
+            "Total\nnot an amount": None,
+            "$1,234.56 USD": "1234.56",
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body):
+                self.extractor._extract_embedded_pdf_text = lambda *_args, value=header + body, **_kwargs: value
+                result = self.extractor._try_extract_foreign_invoice_from_pdf_text("synthetic.pdf")
+                self.assertEqual(result["Amount"] if result else None, expected)
+
     def test_truth_builder_parses_foreign_invoice_ordinal_date(self):
         pdf = self.root / "Invoice-23265242.pdf"
         write_text_pdf(

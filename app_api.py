@@ -1,8 +1,11 @@
 import copy
+import errno
+import imaplib
 import importlib
 import json
 import os
 import re
+import ssl
 import sys
 import threading
 import time
@@ -22,7 +25,7 @@ from email_channel import resolve_channel
 from frontend_run_context import ensure_run_context_dirs, load_run_context, make_run_staging_dir, serialize_run_context
 from glm_runtime import GlmRequestError, GlmRuntime
 from report_service import ReportService
-from run_coordinator import RunCoordinator, RunDependencies, RunRequest
+from run_coordinator import RunCoordinator, RunDependencies, RunImapCancelled, RunRequest
 from run_lifecycle import RunLifecycle, RunState
 from run_state_store import RunStateStore
 from provider_direct_invoice import DIRECT_INVOICE_FAMILIES
@@ -68,6 +71,16 @@ class ProcessingLoopFailure(RuntimeError):
 class ImapLoginError(RuntimeError):
     reason_code = "IMAP_LOGIN_FAILED"
     user_message = "邮箱登录失败，请检查授权码和 IMAP 设置。"
+
+
+class ImapCertificateError(RuntimeError):
+    reason_code = "IMAP_TLS_CERTIFICATE_INVALID"
+    user_message = "邮箱服务器证书验证失败，请检查系统时间或可信根证书。"
+
+
+class ImapTimeoutError(RuntimeError):
+    reason_code = "IMAP_CONNECTION_TIMEOUT"
+    user_message = "邮箱连接或读取超时，请检查网络后重试。"
 
 
 class RemoteAuthError(RuntimeError):
@@ -466,6 +479,7 @@ class _ProcessingPipelineSession:
 
         report = merge_reports(reports)
         report = self._archive_service.finalize(report, self._save_path)
+        self._sync_final_archive_paths(report)
         if not report.can_complete:
             self._api._mark_output_run_state(
                 self._output_state_dir,
@@ -479,6 +493,48 @@ class _ProcessingPipelineSession:
             self._business_records,
         )
         return report
+
+    def _sync_final_archive_paths(self, report):
+        iter_records = getattr(self._trace_store, "iter_records", None)
+        final_paths = {
+            str(row.get("document_id")): str(row.get("archive_target"))
+            for row in (iter_records() if callable(iter_records) else ())
+            if row.get("document_id") and row.get("archive_target")
+        }
+        for item in report.outcomes:
+            path = str(item.archive_path or "")
+            if path and os.path.isfile(path):
+                final_paths[item.outcome.candidate.identity.document_id] = path
+
+        processed = getattr(self._api, "processed_invoices", [])
+        errors = getattr(self._api, "error_invoices", [])
+        for records in (processed, errors):
+            for row in list(records):
+                document_id = str(row.get("document_id") or "")
+                if not document_id:
+                    continue
+                path = final_paths.get(document_id, "")
+                if path and os.path.isfile(path):
+                    row["path"] = path
+                    if "name" in row:
+                        row["name"] = os.path.basename(path)
+                elif records is processed and not os.path.isfile(row.get("path") or ""):
+                    records.remove(row)
+                    self._api.stats["invoices"] = max(0, self._api.stats["invoices"] - 1)
+                    self._api.stats["errors"] += 1
+                    errors.append({
+                        **row, "status": "处理失败", "reason": "ARCHIVE_ARTIFACT_MISSING",
+                    })
+
+        adapter = getattr(getattr(self._archive_service, "_finalizer", None), "__self__", None)
+        for document_id, key in getattr(adapter, "business_keys_by_document_id", {}).items():
+            path = final_paths.get(document_id, "")
+            record = self._business_records.get(key)
+            if path and os.path.isfile(path) and isinstance(record, dict):
+                record["file"] = os.path.basename(path)
+        sync = getattr(self._api, "_sync_run_state_store_from_legacy", None)
+        if callable(sync):
+            sync()
 
     def close(self):
         if self._closed:
@@ -760,6 +816,9 @@ class InvoiceAppAPI:
         self.quota_exhausted = False
         self.quota_message = ""
         self._worker_thread = None
+        self._active_fetcher = None
+        self._imap_abort_run_id = None
+        self._preserved_staging_dir = None
         self._truth_audit_thread = None
         self._truth_audit_job = None
         if truth_audit_timeout_seconds is None:
@@ -815,6 +874,8 @@ class InvoiceAppAPI:
         temp_root = Path(run_root).resolve() / "temp" if run_root else Path.cwd() / "temp"
         self._active_temp_dir = temp_root / lifecycle_run_id
         self._active_run_handle = handle
+        self._imap_abort_run_id = None
+        self._preserved_staging_dir = None
         self._terminal_frontend_run_id = ""
         return handle
 
@@ -2007,6 +2068,13 @@ class InvoiceAppAPI:
         if self._stop_requested:
             return
         self._stop_requested = True
+        fetcher = self._active_fetcher
+        abort = getattr(fetcher, "abort", None)
+        if callable(abort):
+            handle = self._active_run_handle
+            if handle is not None:
+                self._imap_abort_run_id = handle.run_id
+            abort()
         self.status_text = message
         self._append_log("停止", message, "text-amber-600")
         self._sync_run_state_store_from_legacy()
@@ -2045,6 +2113,10 @@ class InvoiceAppAPI:
             return "MISSING_REQUIRED_CREDENTIALS", "缺少必要凭证，请填写邮箱、授权码和 API Key。"
         if "IMAP_LOGIN_FAILED" in normalized or "邮箱登录失败" in status:
             return "IMAP_LOGIN_FAILED", "邮箱登录失败，请检查授权码和 IMAP 设置。"
+        if "IMAP_TLS_CERTIFICATE_INVALID" in normalized:
+            return "IMAP_TLS_CERTIFICATE_INVALID", ImapCertificateError.user_message
+        if "IMAP_CONNECTION_TIMEOUT" in normalized:
+            return "IMAP_CONNECTION_TIMEOUT", ImapTimeoutError.user_message
         if "QUOTA_EXHAUSTED" in normalized or "额度" in status:
             return "QUOTA_EXHAUSTED", "GLM API 额度已耗尽，请充值或更换可用的 API Key。"
         if "UNRESOLVED_MAILBOX_INPUT" in normalized:
@@ -2116,6 +2188,9 @@ class InvoiceAppAPI:
     def _history_file_path(self, output_state_dir):
         return os.path.join(output_state_dir, ".antigravity_history.json")
 
+    def _committed_state_file_path(self, output_state_dir):
+        return os.path.join(output_state_dir, "committed_state.json")
+
     def _run_state_file_path(self, output_state_dir):
         return os.path.join(output_state_dir, "run_state.json")
 
@@ -2151,7 +2226,36 @@ class InvoiceAppAPI:
     def _load_output_run_state(self, output_state_dir):
         return self._read_json_file(self._run_state_file_path(output_state_dir), {})
 
+    def _migrate_completed_output_state(self, output_state_dir):
+        committed_path = self._committed_state_file_path(output_state_dir)
+        if os.path.exists(committed_path):
+            return
+        run_state = self._load_output_run_state(output_state_dir)
+        if not isinstance(run_state, dict) or run_state.get("status") != "completed":
+            return
+        with open(self._history_file_path(output_state_dir), "r", encoding="utf-8") as handle:
+            history = json.load(handle)
+        with open(os.path.join(output_state_dir, "processed_records.json"), "r", encoding="utf-8") as handle:
+            records = json.load(handle)
+        if (
+            not isinstance(history, list)
+            or any(not isinstance(item, str) for item in history)
+            or not isinstance(records, dict)
+            or any(not isinstance(key, str) for key in records)
+        ):
+            raise ValueError("Completed output state is unreadable")
+        self._write_json_file(
+            committed_path,
+            {"history": history, "business_records": records},
+        )
+
     def _load_committed_history(self, output_state_dir):
+        committed_path = self._committed_state_file_path(output_state_dir)
+        if os.path.exists(committed_path):
+            snapshot = self._read_json_file(committed_path, None)
+            if not isinstance(snapshot, dict) or not isinstance(snapshot.get("history"), list):
+                raise ValueError("Committed output state is unreadable")
+            return {str(key) for key in snapshot["history"] if isinstance(key, str) and key}
         run_state = self._load_output_run_state(output_state_dir)
         if str(run_state.get("status") or "").strip().lower() != "completed":
             return set()
@@ -2164,10 +2268,41 @@ class InvoiceAppAPI:
             if isinstance(item, str) and str(item).strip()
         }
 
+    def _load_business_records(self, save_path, output_state_dir, extractor=None):
+        legacy_path = os.path.join(save_path, "processed_records.json")
+        legacy = extractor.load_processed_records() if extractor else {}
+        if os.path.isfile(legacy_path):
+            with open(legacy_path, "r", encoding="utf-8") as handle:
+                legacy = json.load(handle)
+        if not isinstance(legacy, dict):
+            raise ValueError("Legacy business records must be an object")
+        if os.path.isfile(legacy_path):
+            backup = os.path.join(output_state_dir, "processed_records.legacy-backup.json")
+            if not os.path.exists(backup):
+                self._write_json_file(backup, legacy)
+
+        committed_path = self._committed_state_file_path(output_state_dir)
+        if os.path.exists(committed_path):
+            snapshot = self._read_json_file(committed_path, None)
+            scoped = snapshot.get("business_records") if isinstance(snapshot, dict) else None
+        else:
+            scoped_path = os.path.join(output_state_dir, "processed_records.json")
+            scoped = {}
+            if self._load_output_run_state(output_state_dir).get("status") == "completed" and os.path.isfile(scoped_path):
+                with open(scoped_path, "r", encoding="utf-8") as handle:
+                    scoped = json.load(handle)
+        if not isinstance(scoped, dict):
+            raise ValueError("Scoped business records must be an object")
+        return {**legacy, **scoped}
+
     def _commit_output_state(self, output_state_dir, history_keys, business_records):
         committed_history = sorted({str(item).strip() for item in (history_keys or set()) if str(item).strip()})
         self._write_json_file(self._history_file_path(output_state_dir), committed_history)
         self._write_json_file(os.path.join(output_state_dir, "processed_records.json"), business_records or {})
+        self._write_json_file(
+            self._committed_state_file_path(output_state_dir),
+            {"history": committed_history, "business_records": business_records or {}},
+        )
         self._mark_output_run_state(
             output_state_dir,
             "completed",
@@ -2262,15 +2397,22 @@ class InvoiceAppAPI:
         
         # 邮箱连接测试（仅在填写授权码时执行）
         if auth_code:
+            fetcher = None
             try:
                 from email_fetcher import EmailFetcher
                 channel = resolve_channel(email)
                 fetcher = EmailFetcher(email, auth_code, imap_server=channel["imap_host"])
                 if not fetcher.connect():
+                    if getattr(fetcher, "certificate_error", False):
+                        return {"success": False, "message": ImapCertificateError.user_message}
+                    if getattr(fetcher, "timeout_error", False):
+                        return {"success": False, "message": ImapTimeoutError.user_message}
                     return {"success": False, "message": "邮箱 IMAP 登录验证失败"}
-                fetcher.disconnect()
-            except Exception as e:
-                return {"success": False, "message": f"邮箱连接异常: {str(e)[:50]}"}
+            except Exception:
+                return {"success": False, "message": "邮箱连接异常，请检查授权码、IMAP 设置或网络"}
+            finally:
+                if fetcher is not None:
+                    fetcher.disconnect()
         
         if len(api_key) <= 5:
             return {"success": False, "message": "连接失败 - API Key 格式不正确"}
@@ -2315,15 +2457,23 @@ class InvoiceAppAPI:
     def test_email_auth(self, email_address, auth_code):
         if not email_address or not auth_code:
             return {"success": False, "message": "请先填写邮箱地址和授权码"}
-        import imaplib
+        from email_fetcher import EmailFetcher
+        fetcher = None
         try:
             channel = resolve_channel(email_address)
-            mail = imaplib.IMAP4_SSL(channel["imap_host"])
-            mail.login(email_address, auth_code)
-            mail.logout()
+            fetcher = EmailFetcher(email_address, auth_code, imap_server=channel["imap_host"])
+            if not fetcher.connect():
+                if getattr(fetcher, "certificate_error", False):
+                    return {"success": False, "message": ImapCertificateError.user_message}
+                if getattr(fetcher, "timeout_error", False):
+                    return {"success": False, "message": ImapTimeoutError.user_message}
+                return {"success": False, "message": "邮箱授权验证失败，请检查授权码、IMAP 设置或网络"}
             return {"success": True, "message": "邮箱授权验证成功"}
         except Exception:
             return {"success": False, "message": "邮箱授权验证失败，请检查授权码、IMAP 设置或网络"}
+        finally:
+            if fetcher is not None:
+                fetcher.disconnect()
 
 
 
@@ -2375,9 +2525,31 @@ class InvoiceAppAPI:
 
         from email_fetcher import EmailFetcher
         from invoice_extractor import InvoiceExtractor
+        from mailbox_scanner import MailboxScanError
         from run_evidence import RunEvidenceWriter
 
         resources = {"fetcher": None, "pipeline": None}
+
+        def cancelled_imap_abort(fetcher, exc):
+            handle = self._active_run_handle
+            if (
+                not self._stop_requested
+                or self._imap_abort_run_id != request.run_id
+                or handle is None
+                or handle.run_id != request.run_id
+                or self._active_fetcher is not fetcher
+            ):
+                return False
+            if isinstance(exc, MailboxScanError):
+                exc = exc.__cause__
+            return isinstance(exc, (
+                ConnectionAbortedError, ConnectionResetError, BrokenPipeError,
+                imaplib.IMAP4.abort, ssl.SSLEOFError, ssl.SSLZeroReturnError,
+            )) or (
+                isinstance(exc, OSError)
+                and not isinstance(exc, TimeoutError)
+                and exc.errno in {errno.EBADF, errno.ENOTCONN, errno.ECONNRESET, errno.EPIPE}
+            )
 
         account_label = f"{request.channel_id}:{request.account_id}"
 
@@ -2406,12 +2578,19 @@ class InvoiceAppAPI:
                 ),
             )
             resources["fetcher"] = fetcher
+            self._active_fetcher = fetcher
             self._append_log(
                 "运行",
                 f"正在连接邮箱通道 {request.channel_id}（账户 {request.account_id}）...",
                 "text-blue-400",
             )
             if not fetcher.connect():
+                if cancelled_imap_abort(fetcher, getattr(fetcher, "connection_error", None)):
+                    raise RunImapCancelled(request.run_id)
+                if getattr(fetcher, "certificate_error", False):
+                    raise ImapCertificateError("IMAP_TLS_CERTIFICATE_INVALID")
+                if getattr(fetcher, "timeout_error", False):
+                    raise ImapTimeoutError("IMAP_CONNECTION_TIMEOUT")
                 raise ImapLoginError("IMAP_LOGIN_FAILED")
             return fetcher
 
@@ -2430,10 +2609,15 @@ class InvoiceAppAPI:
             self._coordinator_before_date = before_date
             self._append_log("运行", f"原始用户范围：{self._raw_date_range_display}", "text-blue-400")
             self._append_log("运行", f"实际 IMAP 查询：{self._imap_query_range_display}", "text-blue-400")
-            email_ids = fetcher.fetch_emails_by_date(
-                since_date=since_date,
-                before_date=before_date,
-            )
+            try:
+                email_ids = fetcher.fetch_emails_by_date(
+                    since_date=since_date,
+                    before_date=before_date,
+                )
+            except Exception as exc:
+                if cancelled_imap_abort(fetcher, exc):
+                    raise RunImapCancelled(request.run_id) from exc
+                raise
             self.stats["emails"] = len(email_ids)
             self._append_log("信息", f"共匹配到 {len(email_ids)} 封邮件。", "text-emerald-400")
             if self._stop_requested:
@@ -2443,7 +2627,12 @@ class InvoiceAppAPI:
         def candidate(fetcher_email_ids, _request):
             fetcher = resources["fetcher"]
             self._append_log("运行", "正在下载并提取附件...", "text-blue-400")
-            attachments = fetcher.extract_attachments(fetcher_email_ids)
+            try:
+                attachments = fetcher.extract_attachments(fetcher_email_ids)
+            except Exception as exc:
+                if cancelled_imap_abort(fetcher, exc):
+                    raise RunImapCancelled(request.run_id) from exc
+                raise
             self._append_log("信息", f"共提取到 {len(attachments)} 个附件。", "text-emerald-400")
             return attachments
 
@@ -2515,6 +2704,7 @@ class InvoiceAppAPI:
 
         def pipeline_close():
             try:
+                self._active_fetcher = None
                 pipeline = resources.get("pipeline")
                 if pipeline is not None:
                     pipeline.close()
@@ -2522,7 +2712,11 @@ class InvoiceAppAPI:
                 self._sync_run_state_store_from_legacy()
 
         def disconnect_callback(_context, fetcher):
-            fetcher.disconnect()
+            try:
+                fetcher.disconnect()
+            finally:
+                if self._active_fetcher is fetcher:
+                    self._active_fetcher = None
 
         def cleanup_callback(context):
             self._cleanup_temp_folders(
@@ -2671,7 +2865,8 @@ class InvoiceAppAPI:
 
         candidates = CandidatePipeline().collect(attachments_info)
         output_state_dir = self._output_state_dir(save_path)
-        business_records = _extractor.load_processed_records() if _extractor else {}
+        self._migrate_completed_output_state(output_state_dir)
+        business_records = self._load_business_records(save_path, output_state_dir, _extractor)
         working_history = set(self._load_committed_history(output_state_dir))
         sidecar = {}
         sidecar_lock = threading.Lock()
@@ -2892,7 +3087,24 @@ class InvoiceAppAPI:
         import uuid
 
         manual_dir = os.path.join(save_path, MANUAL_REVIEW_FOLDER)
-        os.makedirs(manual_dir, exist_ok=True)
+        has_local_file = bool(source_path and os.path.isfile(source_path))
+        is_url_placeholder = is_url and not has_local_file
+        if is_url_placeholder and not str(source_path).startswith(("http://", "https://")):
+            raise FileNotFoundError("Downloaded manual-review artifact is missing")
+        if is_url and has_local_file:
+            staging = os.path.realpath(self._active_staging_path())
+            source = os.path.realpath(source_path)
+            if os.path.commonpath((staging, source)) != staging:
+                raise ValueError("Downloaded manual-review artifact is outside run staging")
+            was_preserved = self._preserved_staging_dir == staging
+            self._preserved_staging_dir = staging
+
+        try:
+            os.makedirs(manual_dir, exist_ok=True)
+        except OSError:
+            if is_url and has_local_file:
+                self._append_log("错误", f"人工复核副本保存失败，下载原件已保留：{source}", "text-error")
+            raise
         runtime_metadata = dict(metadata or {})
         safe_metadata = self._sanitize_url_persistence_payload(runtime_metadata)
 
@@ -2905,7 +3117,7 @@ class InvoiceAppAPI:
                 filename = filename_local
             return target_path
 
-        if is_url:
+        if is_url_placeholder:
             url_evidence = build_url_evidence(source_path, reason)
             candidate_index = int(runtime_metadata.get("candidate_index", 1) or 1)
             target_path = _unique_path(
@@ -2919,10 +3131,26 @@ class InvoiceAppAPI:
                 return source_path
             original_name = os.path.basename(source_path)
             prefix = "P0_Review"
-            if runtime_metadata.get("file_name"):
+            if runtime_metadata.get("file_name") and not is_url:
                 original_name = os.path.basename(str(runtime_metadata["file_name"]))
             target_path = _unique_path(f"{prefix}_{original_name}")
-            shutil.copy2(source_path, target_path)
+            try:
+                shutil.copy2(source_path, target_path)
+            except OSError:
+                if is_url and has_local_file:
+                    self._append_log(
+                        "错误",
+                        f"人工复核副本保存失败，下载原件已保留：{source}",
+                        "text-error",
+                    )
+                if os.path.exists(target_path):
+                    try:
+                        os.remove(target_path)
+                    except OSError:
+                        pass
+                raise
+            if is_url and has_local_file and not was_preserved:
+                self._preserved_staging_dir = None
 
         sidecar = f"{target_path}.json"
         payload = {
@@ -2930,13 +3158,13 @@ class InvoiceAppAPI:
             "status": "pending_review",
             "reason_hash": stable_hash(reason),
             "source_hash": stable_hash(
-                source_path if is_url else self._user_safe_source_reference(source_path)
+                source_path if is_url_placeholder else self._user_safe_source_reference(source_path)
             ),
             "review_name_hash": stable_hash(os.path.basename(target_path)),
             "captured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "is_url": is_url,
         }
-        if is_url:
+        if is_url_placeholder:
             payload.update(url_evidence)
         if safe_metadata:
             payload["metadata"] = safe_metadata
@@ -2973,7 +3201,8 @@ class InvoiceAppAPI:
 
         cancellations = getattr(self, '_cwt_cancellation_registry', [])
         if not cancellations:
-            return
+            return {}
+        moved_paths = {}
 
         # 从取消知会文件名中提取人名
         # 格式: 酒店预定取消知会-{name}-{date}入住-{city} (CONNECT 订单号：{order}).pdf
@@ -3002,6 +3231,7 @@ class InvoiceAppAPI:
                         continue
                     os.makedirs(manual_dir, exist_ok=True)
                     shutil.move(src, dst)
+                    moved_paths[src] = dst
                     # 写 sidecar
                     sidecar = {
                         "reason": "CWT_CANCELLATION_MATCH",
@@ -3017,6 +3247,7 @@ class InvoiceAppAPI:
                     except Exception:
                         pass
                     self.logs.append({"time": time.strftime("[%H:%M:%S]"), "type": "撮合:", "color": "text-amber-400", "msg": f"匹配到取消对应的预订: {fn} ↔ {cancel_fn}"})
+        return moved_paths
 
     def _record_error_log(
         self,
@@ -3069,6 +3300,8 @@ class InvoiceAppAPI:
 
         for target_path in temp_paths:
             if not target_path or not os.path.exists(target_path) or not os.path.isdir(target_path):
+                continue
+            if staging_dir and os.path.realpath(target_path) == self._preserved_staging_dir:
                 continue
             try:
                 shutil.rmtree(target_path)
@@ -4068,6 +4301,16 @@ class InvoiceAppAPI:
             except Exception:
                 return 0.0
 
+        def _append_text_row(sheet, values, text_columns):
+            clean = [
+                re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "\ufffd", str(value or ""))
+                if index in text_columns else value
+                for index, value in enumerate(values)
+            ]
+            sheet.append(clean)
+            for index in text_columns:
+                sheet.cell(sheet.max_row, index + 1).data_type = "s"
+
         workbook = Workbook()
         summary_sheet = workbook.active
         summary_sheet.title = "分类汇总"
@@ -4083,26 +4326,26 @@ class InvoiceAppAPI:
         if category_summary:
             for category in sorted(category_summary.keys()):
                 bucket = category_summary[category]
-                summary_sheet.append([category, bucket["count"], round(bucket["amount"], 2)])
+                _append_text_row(summary_sheet, [category, bucket["count"], round(bucket["amount"], 2)], {0})
         else:
             summary_sheet.append(["暂无成功记录", 0, 0.0])
 
         success_sheet = workbook.create_sheet("成功明细")
         success_sheet.append(["日期", "金额", "销售方", "分类", "文件路径"])
         for item in self.processed_invoices:
-            success_sheet.append([
+            _append_text_row(success_sheet, [
                 item.get("date", ""),
                 item.get("amount", ""),
                 item.get("merchant", ""),
                 item.get("category", ""),
                 item.get("path", ""),
-            ])
+            ], {0, 1, 2, 3, 4})
 
         error_sheet = workbook.create_sheet("异常记录")
         error_sheet.append(["分组", "状态", "原因", "日期", "金额", "销售方", "文件名", "文件路径"])
         for group in self._group_error_invoices():
             for item in group.get("items", []):
-                error_sheet.append([
+                _append_text_row(error_sheet, [
                     group.get("label", ""),
                     item.get("status", ""),
                     item.get("reason", ""),
@@ -4111,7 +4354,7 @@ class InvoiceAppAPI:
                     item.get("merchant", ""),
                     item.get("name", ""),
                     item.get("path", ""),
-                ])
+                ], set(range(8)))
 
         export_file = os.path.join(target_dir, f"结果明细_{time.strftime('%Y%m%d_%H%M%S')}.xlsx")
         workbook.save(export_file)

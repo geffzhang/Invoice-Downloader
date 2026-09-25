@@ -236,6 +236,94 @@ def _make_dependencies(calls, *, archive_report=None, cancel=lambda: False):
     )
 
 
+def test_cancelled_imap_read_finalizes_once_and_releases_next_run(tmp_path: Path):
+    from report_service import ReportService
+    from run_coordinator import RunCoordinator, RunDependencies, RunImapCancelled, RunRequest
+    from run_lifecycle import RunLifecycle, RunState
+    from run_state_store import RunStateStore
+
+    cancelled = False
+    calls = []
+    lifecycle = RunLifecycle()
+    store = RunStateStore()
+
+    def scan(_session, _request):
+        nonlocal cancelled
+        cancelled = True
+        raise RunImapCancelled(_request.run_id)
+
+    dependencies = RunDependencies(
+        connect=lambda _request: object(), scan=scan,
+        cancel_requested=lambda: cancelled,
+        report_service=ReportService(
+            disconnect_callback=lambda *_args: calls.append("disconnect"),
+            cleanup_callback=lambda *_args: calls.append("cleanup"),
+        ),
+    )
+    coordinator = RunCoordinator(lifecycle, store, dependencies)
+    request = RunRequest("cancelled-read", "2026-06-01", "2026-06-13", str(tmp_path), "", "account", "qq")
+    result = _run_reserved(coordinator, request, tmp_path / "staging-1")
+    assert result.state is RunState.COMPLETED
+    assert result.cancelled is True
+    assert store.terminal_reason == "CANCELLED"
+    assert calls == ["disconnect", "cleanup"]
+    assert lifecycle.can_begin
+
+    cancelled = False
+    dependencies.scan = lambda _session, _request: []
+    next_request = RunRequest("next-read", "2026-06-01", "2026-06-13", str(tmp_path), "", "account", "qq")
+    next_result = _run_reserved(coordinator, next_request, tmp_path / "staging-2")
+    assert next_result.state is RunState.COMPLETED
+    assert not next_result.cancelled
+    assert calls == ["disconnect", "cleanup", "disconnect", "cleanup"]
+
+
+def test_stop_during_archive_failure_stays_failed_and_releases_next_run(tmp_path: Path):
+    from report_service import ReportService
+    from run_coordinator import ArchiveIncompleteError, RunCoordinator, RunDependencies, RunRequest
+    from run_lifecycle import RunLifecycle, RunState
+    from run_state_store import RunStateStore
+
+    stopped = False
+    finalizers = []
+    events = []
+
+    def archive(_outcomes, _request):
+        nonlocal stopped
+        stopped = True
+        raise ArchiveIncompleteError("archive write failed")
+
+    dependencies = RunDependencies(
+        connect=lambda _request: object(),
+        scan=lambda *_args: ["mail"],
+        candidate=lambda *_args: ["candidate"],
+        extract=lambda *_args: ["outcome"],
+        archive=archive,
+        cancel_requested=lambda: stopped,
+        report_service=ReportService(
+            disconnect_callback=lambda *_args: finalizers.append("disconnect"),
+            cleanup_callback=lambda *_args: finalizers.append("cleanup"),
+        ),
+    )
+    lifecycle = RunLifecycle()
+    store = RunStateStore(event_sink=events.append)
+    coordinator = RunCoordinator(lifecycle, store, dependencies)
+    request = RunRequest("archive-stop", "2026-06-01", "2026-06-13", str(tmp_path), "", "account", "qq")
+    result = _run_reserved(coordinator, request, tmp_path / "staging-1")
+    assert result.state is RunState.FAILED
+    assert result.reason_code == "ARCHIVE_INCOMPLETE"
+    assert store.terminal_reason == "ARCHIVE_INCOMPLETE"
+    assert [event["run_state"] for event in events if event["run_state"] in {"failed", "completed"}] == ["failed"]
+    assert finalizers == ["disconnect", "cleanup"]
+    assert lifecycle.can_begin
+
+    stopped = False
+    dependencies.archive = lambda *_args: SimpleNamespace(can_complete=True, archived_count=1)
+    next_request = RunRequest("next-archive", "2026-06-01", "2026-06-13", str(tmp_path), "", "account", "qq")
+    assert _run_reserved(coordinator, next_request, tmp_path / "staging-2").state is RunState.COMPLETED
+    assert finalizers == ["disconnect", "cleanup", "disconnect", "cleanup"]
+
+
 def test_coordinator_runs_real_stages_and_finalizers_before_completed(tmp_path: Path):
     from run_coordinator import RunCoordinator, RunRequest
     from run_lifecycle import RunLifecycle, RunState

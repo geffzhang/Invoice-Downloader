@@ -948,6 +948,144 @@ def test_malformed_uid_search_reaches_one_sanitized_failed_terminal(
     assert all(entry.get("type") != "完成" for entry in api.logs)
 
 
+@pytest.mark.parametrize(
+    ("failure", "expected_state", "expected_reason"),
+    [
+        ("socket_abort", "completed", "CANCELLED"),
+        ("tls_eof", "completed", "CANCELLED"),
+        ("malformed_search", "failed", "MAILBOX_SCAN_FAILED"),
+        ("unrelated_os_error", "failed", "PROCESSING_FAILED"),
+    ],
+)
+def test_stop_only_converts_this_runs_imap_abort_to_cancelled(
+    tmp_path, monkeypatch, failure, expected_state, expected_reason
+):
+    from mailbox_scanner import MailboxScanError
+    import ssl
+
+    monkeypatch.chdir(tmp_path)
+    api = InvoiceAppAPI()
+    terminal_events = []
+    disconnects = []
+
+    class Fetcher:
+        def __init__(self, *args, staging_dir, **kwargs):
+            self.staging_dir = Path(staging_dir)
+
+        def connect(self):
+            return True
+
+        def abort(self):
+            pass
+
+        def fetch_emails_by_date(self, **_kwargs):
+            api._request_safe_stop()
+            if failure == "socket_abort":
+                raise MailboxScanError("IMAP SELECT failed") from ConnectionAbortedError("socket closed")
+            if failure == "tls_eof":
+                raise MailboxScanError("IMAP SELECT failed") from ssl.SSLEOFError(
+                    ssl.SSL_ERROR_EOF, "TLS socket closed"
+                )
+            if failure == "malformed_search":
+                raise MailboxScanError("malformed UID SEARCH ALL response")
+            raise OSError("unrelated local failure")
+
+        def disconnect(self):
+            disconnects.append(True)
+
+    monkeypatch.setattr("email_fetcher.EmailFetcher", Fetcher)
+    monkeypatch.setattr(api, "_start_truth_audit_async", lambda *args: None)
+    monkeypatch.setattr(
+        api,
+        "_safe_emit_run_state_event",
+        lambda old, new: terminal_events.append(new) if new in {"completed", "failed"} else None,
+    )
+
+    run_reserved_worker(
+        api, "", str(tmp_path / "output"),
+        email_address="a@qq.com", auth_code="x", api_key="y",
+    )
+    assert api.run_state == expected_state
+    assert api._run_state_store.terminal_reason == expected_reason
+    assert terminal_events == [expected_state]
+    assert disconnects == [True]
+
+
+@pytest.mark.parametrize("failure", ["imap_abort", "tls_eof", "tls_zero_return"])
+@pytest.mark.parametrize("phase", ["prefetch", "retry"])
+@pytest.mark.parametrize("stop_requested", [False, True])
+def test_real_imap_fetch_disconnect_reaches_run_terminal(
+    tmp_path, monkeypatch, failure, phase, stop_requested
+):
+    import imaplib
+    import ssl
+    import email_fetcher as email_fetcher_module
+    from email_fetcher import EmailFetcher
+
+    monkeypatch.chdir(tmp_path)
+    api = InvoiceAppAPI()
+    terminal_events = []
+    disconnects = []
+    fetch_calls = []
+
+    class Mail:
+        def select(self, _mailbox, readonly=True):
+            assert readonly is True
+            return "OK", [b"1"]
+
+        def uid(self, command, uid_set, query):
+            assert command == "FETCH"
+            fetch_calls.append((uid_set, query))
+            if phase == "retry" and len(fetch_calls) == 1:
+                return "OK", [b"malformed payload"]
+            if stop_requested:
+                api._request_safe_stop()
+            if failure == "imap_abort":
+                raise imaplib.IMAP4.abort("connection closed")
+            if failure == "tls_eof":
+                raise ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "TLS connection closed")
+            raise ssl.SSLZeroReturnError(ssl.SSL_ERROR_ZERO_RETURN, "TLS connection closed")
+
+    class WorkerFetcher(EmailFetcher):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.mail = Mail()
+
+        def connect(self):
+            return True
+
+        def fetch_emails_by_date(self, **_kwargs):
+            return [b"1"]
+
+        def disconnect(self):
+            disconnects.append(True)
+
+    monkeypatch.setattr(email_fetcher_module, "EmailFetcher", WorkerFetcher)
+    monkeypatch.setattr(api, "_start_truth_audit_async", lambda *args: None)
+    monkeypatch.setattr(
+        api, "_safe_emit_run_state_event",
+        lambda old, new: terminal_events.append(new) if new in {"completed", "failed"} else None,
+    )
+    monkeypatch.setattr(
+        api,
+        "_run_processing_loop",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("processing must not start")),
+    )
+
+    run_reserved_worker(
+        api, "", str(tmp_path / "output"),
+        email_address="a@qq.com", auth_code="x", api_key="y",
+    )
+
+    expected_state = "completed" if stop_requested else "failed"
+    expected_reason = "CANCELLED" if stop_requested else "MAILBOX_SCAN_FAILED"
+    assert api.run_state == expected_state
+    assert api._run_state_store.terminal_reason == expected_reason
+    assert terminal_events == [expected_state]
+    assert disconnects == [True]
+    assert len(fetch_calls) == (2 if phase == "retry" else 1)
+
+
 def test_actual_post_fetch_processing_exception_reaches_unresolved_failed_terminal(
     tmp_path, monkeypatch
 ):

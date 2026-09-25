@@ -1,4 +1,6 @@
 import imaplib
+import socket
+import ssl
 import email
 import email.utils
 from email.header import decode_header
@@ -38,7 +40,7 @@ from provider_direct_invoice import (
 from pinned_http import PinnedHttpTransport
 from url_security import PublicUrlPolicy
 from url_trace_sanitizer import sanitize_url_for_log, stable_hash
-from mailbox_scanner import MailboxScanner, UnresolvedMailboxInputError
+from mailbox_scanner import MailboxScanError, MailboxScanner, UnresolvedMailboxInputError
 try:
     from pyzbar.pyzbar import decode
 except ImportError:
@@ -48,6 +50,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 STAGING_PATH_BUDGET = 240
 STAGING_COLLISION_ATTEMPTS = 100
+IMAP_TIMEOUT_SECONDS = 30
 
 
 def _utf16_units(value):
@@ -1201,6 +1204,10 @@ class EmailFetcher:
         self.monitoring_dir = os.path.abspath(monitoring_dir) if monitoring_dir else ""
         self.progress_callback = progress_callback
         self.mail = None
+        self._abort_requested = False
+        self.certificate_error = False
+        self.timeout_error = False
+        self.connection_error = None
         os.makedirs(self.staging_dir, exist_ok=True)
 
     def _emit_progress(self, message):
@@ -1332,6 +1339,8 @@ class EmailFetcher:
             attempt["raw_bytes_len"] = len(raw_bytes)
             if not raw_bytes:
                 attempt["error"] = "uid_fetch_no_payload"
+        except MailboxScanError:
+            raise
         except Exception as exc:
             attempt["status"] = "EXCEPTION"
             attempt["error"] = type(exc).__name__
@@ -1354,10 +1363,24 @@ class EmailFetcher:
         )
 
     def connect(self):
+        self.certificate_error = False
+        self.timeout_error = False
+        self.connection_error = None
         try:
+            if self._abort_requested:
+                raise ConnectionAbortedError("IMAP connection cancelled")
             logging.info(f"Connecting to IMAP server: {self.imap_server}:{self.imap_port}")
-            self.mail = imaplib.IMAP4_SSL(self.imap_server, self.imap_port)
+            self.mail = imaplib.IMAP4_SSL(
+                self.imap_server,
+                self.imap_port,
+                ssl_context=ssl.create_default_context(),
+                timeout=IMAP_TIMEOUT_SECONDS,
+            )
+            if self._abort_requested:
+                raise ConnectionAbortedError("IMAP connection cancelled")
             self.mail.login(self.email_address, self.auth_code)
+            if self._abort_requested:
+                raise ConnectionAbortedError("IMAP connection cancelled")
             # 163 邮箱要求登录后发送 RFC 2971 ID 命令
             from email_channel import resolve_channel
             channel = resolve_channel(self.email_address)
@@ -1366,28 +1389,66 @@ class EmailFetcher:
             logging.info("Successfully connected and logged in.")
             return True
         except Exception as e:
-            logging.error(f"Failed to connect or log in: {e}")
+            self.connection_error = e
+            self.certificate_error = isinstance(e, ssl.SSLCertVerificationError)
+            self.timeout_error = isinstance(e, TimeoutError)
+            mail, self.mail = self.mail, None
+            if mail is not None:
+                try:
+                    mail.shutdown()
+                except Exception:
+                    pass
+            logging.error("Failed to connect or log in: %s", type(e).__name__)
             return False
 
     def _send_imap_id_command(self):
         """发送 RFC 2971 ID 命令（163/Netease IMAP 登录后必需）。"""
-        try:
-            tag = self.mail._new_tag()
-            self.mail.send(tag + b' ID ("name" "InvoiceFlowAI" "version" "1.0")\r\n')
-            while True:
-                line = self.mail.readline()
-                if line.startswith(tag):
-                    break
-        except Exception as e:
-            logging.warning(f"RFC 2971 ID command failed (non-fatal): {e}")
+        tag = self.mail._new_tag()
+        deadline = time.monotonic() + IMAP_TIMEOUT_SECONDS
+        self.mail.send(tag + b' ID ("name" "InvoiceFlowAI" "version" "1.0")\r\n')
+        while time.monotonic() < deadline:
+            if self._abort_requested:
+                raise ConnectionAbortedError("IMAP ID command cancelled")
+            line = self.mail.readline()
+            if not line:
+                raise ConnectionError("IMAP ID response ended before completion")
+            if line.startswith(tag):
+                if not line[len(tag):].strip().upper().startswith(b"OK"):
+                    raise ConnectionError("IMAP ID command rejected")
+                return
+        raise TimeoutError("IMAP ID command timed out")
+
+    def abort(self):
+        """Wake an in-flight IMAP read when the owner cancels this run."""
+        self._abort_requested = True
+        mail = self.mail
+        sock = getattr(mail, "sock", None)
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     def disconnect(self):
-        if self.mail:
+        mail, self.mail = self.mail, None
+        if mail:
             try:
-                self.mail.logout()
-                logging.info("Logged out from IMAP server.")
+                shutdown = getattr(mail, "shutdown", None)
+                if callable(shutdown):
+                    shutdown()
+                else:
+                    mail.logout()
+                logging.info("Closed IMAP connection.")
             except Exception as e:
-                logging.error(f"Error during logout: {e}")
+                try:
+                    mail.shutdown()
+                except Exception:
+                    pass
+                logging.error("Error during logout: %s", type(e).__name__)
 
     def fetch_emails_by_date(self, since_date, before_date=None, mailbox="INBOX"):
         if not self.mail:
@@ -1408,7 +1469,12 @@ class EmailFetcher:
         since = to_date(since_date, "since_date")
         before = to_date(before_date, "before_date")
         self._emit_progress("正在读取邮箱 UID 并进行本地日期过滤。")
-        refs = self._mailbox_scanner().scan(since, before, mailbox=mailbox)
+        try:
+            refs = self._mailbox_scanner().scan(since, before, mailbox=mailbox)
+        except MailboxScanError:
+            self.abort()
+            self.disconnect()
+            raise
         email_ids = [ref.uid for ref in refs]
         logging.info("Local UID date filter retained %s emails.", len(email_ids))
         self._emit_progress(f"本地日期过滤完成，最终保留 {len(email_ids)} 封邮件。")
@@ -2441,6 +2507,8 @@ class EmailFetcher:
                     else:
                         email_diag["terminal_status"] = "no_attachment_parts_detected"
 
+                except MailboxScanError:
+                    raise
                 except Exception as exc:
                     exception_type, exception_fingerprint = _safe_exception_identity(exc)
                     uid_hash = hashlib.sha256(e_id).hexdigest()[:12]

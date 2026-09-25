@@ -40,4 +40,5 @@ Thumbs.db
 
 # Local worktree metadata
 .claude/worktrees/
+.worktrees/
 .gstack/
