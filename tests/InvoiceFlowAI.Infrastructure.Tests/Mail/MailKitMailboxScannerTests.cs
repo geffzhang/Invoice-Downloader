@@ -741,6 +741,43 @@ public sealed class MailKitMailboxScannerTests
 
 public sealed class MailKitMailboxSessionPureTests
 {
+    [Fact]
+    public async Task Session_summary_uid_selection_matches_full_message_fetch_set()
+    {
+        var uids = Enumerable.Range(1, 5).Select(value => new UniqueId((uint)value)).ToArray();
+        var summaryRequests = new List<uint>();
+        var fullMessageRequests = new List<uint>();
+        var summaries = new[]
+        {
+            new MailboxMessageDateSummary(uids[0], new DateTimeOffset(2026, 6, 9, 16, 0, 0, TimeSpan.Zero), null),
+            new MailboxMessageDateSummary(uids[1], new DateTimeOffset(2026, 6, 9, 15, 59, 59, TimeSpan.Zero), null),
+            new MailboxMessageDateSummary(uids[2], null, new DateTimeOffset(2026, 6, 11, 16, 0, 0, TimeSpan.Zero)),
+            new MailboxMessageDateSummary(uids[3], null, null),
+            new MailboxMessageDateSummary(uids[4], new DateTimeOffset(2026, 6, 10, 4, 0, 0, TimeSpan.Zero), null),
+        };
+        var criteria = new MailboxSearchCriteria(null, new DateOnly(2026, 6, 10), new DateOnly(2026, 6, 11));
+
+        var messages = await MailKitMailboxSession.SearchAndFetchAsync(
+            criteria,
+            (_, _) => Task.FromResult<IReadOnlyList<UniqueId>>(uids),
+            (requested, _) =>
+            {
+                summaryRequests.AddRange(requested.Select(uid => uid.Id));
+                return Task.FromResult<IReadOnlyList<MailboxMessageDateSummary>>(summaries);
+            },
+            (uid, _) =>
+            {
+                fullMessageRequests.Add(uid.Id);
+                var message = new MimeMessage { Subject = $"message-{uid.Id}" };
+                return Task.FromResult(message);
+            },
+            CancellationToken.None);
+
+        summaryRequests.Should().Equal(1u, 2u, 3u, 4u, 5u);
+        fullMessageRequests.Should().Equal(1u, 4u, 5u);
+        messages.Select(message => message.Uid).Should().Equal(1L, 4L, 5L);
+    }
+
     [Theory]
     [InlineData("https://dppt.beijing.chinatax.gov.cn/kpfw/fpjfzz/v1/exportdzfpwjewm", "chinatax_direct_invoice")]
     [InlineData("https://fp.bwjf.cn/downsigninvoice?code=x", "bwjf_signed_invoice")]

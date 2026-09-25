@@ -11,17 +11,17 @@
 
 <div align="center">
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)
+![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue)
 ![AI](https://img.shields.io/badge/AI-GLM--4.5V%20%7C%20GLM--OCR-purple)
-![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20macOS-lightblue)
+![Platform](https://img.shields.io/badge/Platform-Windows%20x64-lightblue)
 ![Status](https://img.shields.io/badge/Status-Stable-brightgreen)
 
 **把邮箱中的 PDF、OFD、XML 电子发票和部分发票下载链接，整理成分类文件与 Excel 报销汇总。**
 
 面向每月需要手工收集多张电子发票的个人、自由职业者和小团队。连接自己的 QQ 或 163 邮箱后，可批量收集发票、OCR 识别、分类归档并生成汇总；低置信度结果保留给用户人工检查。
 
-下载：[最新 Windows（安装版 / 免安装版）与 macOS（Apple Silicon）安装包](https://github.com/EthanYoQ/Invoice-Downloader/releases/latest)
+下载：[最新 Windows x64 安装版与免安装版](https://github.com/EthanYoQ/Invoice-Downloader/releases/latest)
 
 *邮件和发票文件在本地处理。启用 GLM OCR / 视觉识别时，发票图片会发送到你配置的模型服务商用于提取。*
 
@@ -30,17 +30,6 @@
 <p align="center">
   <img src="./docs/images/invoiceflowai-hero-zh.png" alt="InvoiceFlowAI 发票助手的启动配置、处理中心、结果分析与安全提示界面" />
 </p>
-
-## DeepSeek Harness 插件
-
-`@ethanyoq/dsh-invoice-downloader` 将本地 IMAP 发票下载、OCR、归档和 Excel 汇总带到 DeepSeek Harness 的右侧边栏。适用于希望把重复整理工作交给本地自动化、同时保留人工复核的报销场景。
-
-```powershell
-dsh plugin --profile web add @ethanyoq/dsh-invoice-downloader
-dsh web --profile web
-```
-
-打开右侧的“发票下载”入口，选择保存位置，安装一次本地引擎后填写 QQ 或 163 邮箱的 IMAP 授权码。首次安装需要联网下载 Python 依赖和 Chromium；`rapidocr-onnxruntime` 的 pip wheel 自带默认 PP-OCRv3 模型，无需额外手动下载模型。发票文件在本地 OCR；OCR 文本发送给当前选择的 DeepSeek 模型提取字段。插件支持 Windows x64 和 macOS Apple Silicon，授权码由 DSH 凭据服务保存，不写入插件设置或扫描日志。
 
 ---
 
@@ -222,15 +211,9 @@ flowchart TD
 
 ### Windows（安装版 / 免安装版）
 
-1. 安装版：运行 `InvoiceFlowAI-*-windows-x64-setup.exe`；免安装版：解压 `InvoiceFlowAI-*-windows-x64-portable.zip` 到普通文件夹（避免云盘同步目录），并保持 `_internal` 文件夹与 `InvoiceFlowAI.exe` 同级。
+1. 安装版：运行 `InvoiceFlowAI-*-windows-x64-setup.msi`；免安装版：解压 `InvoiceFlowAI-*-windows-x64-portable.zip` 到普通文件夹（避免云盘同步目录），保留压缩包中的目录结构。
 2. 双击 `InvoiceFlowAI.exe`；首次启动会自动弹出设置界面。
 3. 填入邮箱地址与授权码（QQ 或 163）、GLM API Key，保存后点击「开始扫描」。发票会自动归档到桌面「发票整理」文件夹。
-
-### macOS（Apple Silicon）
-
-1. 打开 `InvoiceFlowAI-*-macos-arm64.dmg`，将 `InvoiceFlowAI` 拖入“应用程序”文件夹。
-2. 首次启动会自动弹出设置界面。此版本未签名、未公证；若 macOS 阻止打开，请在“系统设置 → 隐私与安全性”中确认仍要打开。
-3. 填入邮箱地址与授权码（QQ 或 163）、GLM API Key，保存后点击「开始扫描」。
 
 ---
 
@@ -302,7 +285,7 @@ flowchart TD
 ## 🛡️ 隐私与安全
 
 - 所有邮件、发票文件均在**本地处理**，不上传任何服务器
-- 邮箱凭据在 Windows 通过 **DPAPI** 加密存储，在 macOS 通过 **Keychain** 存储
+- 邮箱凭据在 Windows 通过 **DPAPI** 加密存储
 - GLM API 仅接收**发票图片**（Base64）用于文字识别，不发送邮件原文内容
 
 ---

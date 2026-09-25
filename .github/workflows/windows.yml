@@ -1,19 +1,16 @@
-# Windows x64 .NET 10 build pipeline (Task 11).
+# Windows x64 .NET 10 build and release pipeline.
 #
 # - Self-hosted or windows-latest runner with .NET SDK 10.0.100 + WiX 5.0.2.
 # - Runs the toolchain check, locked-mode restore, full test suite,
-#   then publish + manifest emission + WiX packaging.
-#
-# The publish + manifest + WiX steps are gated on the test suite passing;
-# they emit two immutable artifacts: the signed MSI and the
-# release manifest (the model manifest is bundled into the MSI as a
-# heat-harvested component, not separately uploaded).
+# then publish + manifest emission + WiX packaging. Tagged releases contain
+# only the Windows .NET installer, portable publish tree, and checksums.
 
-name: Windows x64 .NET 10 build
+name: Windows x64 .NET 10
 
 on:
   push:
     branches: [dotnet, main]
+    tags: ['v*']
   pull_request:
     branches: [dotnet, main]
   workflow_dispatch: {}
@@ -49,19 +46,18 @@ jobs:
         shell: pwsh
         run: dotnet test -c Release --no-build --nologo
 
-      - name: Publish self-contained win-x64
+      - name: Publish self-contained win-x64 app, worker, model, and manifests
         shell: pwsh
-        run: dotnet publish src/InvoiceFlowAI.App -c Release -r win-x64 --self-contained true -o publish/win-x64 --no-build
+        run: pwsh -File build/windows/publish_dotnet_app.ps1 -Configuration Release -PublishRoot publish/win-x64
 
-      - name: Generate model manifest
+      - name: Audit publish tree for Python runtime residue
         shell: pwsh
-        run: pwsh -File build/model-manifest.ps1 -PublishRoot publish/win-x64 -Output publish/win-x64/manifests/model.json
+        run: |
+          $env:INVOICEFLOWAI_PUBLISH_ROOT = (Resolve-Path publish/win-x64).Path
+          dotnet test tests/InvoiceFlowAI.App.Tests/InvoiceFlowAI.App.Tests.csproj -c Release --no-build --no-restore --nologo --filter "FullyQualifiedName~Configured_publish_tree_passes_no_python_runtime_release_audit"
+          if ($LASTEXITCODE -ne 0) { throw "Python-free publish audit failed with exit code $LASTEXITCODE." }
 
-      - name: Generate release manifest
-        shell: pwsh
-        run: pwsh -File build/release-manifest.ps1 -PublishRoot publish/win-x64 -Output publish/win-x64/manifests/release.json
-
-      - name: Upload publish + manifests
+      - name: Upload publish + manifests artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64-publish
@@ -90,16 +86,60 @@ jobs:
         shell: pwsh
         run: dotnet tool install --global wix --version 5.0.2
 
-      - name: Build signed MSI
+      - name: Build MSI
         shell: pwsh
         run: |
           $env:WIX_PATH = "$env:USERPROFILE\.dotnet\tools"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
           wix build src/InvoiceFlowAI.Installer/Product.wxs -arch x64 -out dist/InvoiceFlowAI-setup.msi
 
-      - name: Upload MSI
+      - name: Prepare Windows release assets
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $assetRoot = Join-Path $PWD "dist/release-assets"
+          New-Item -ItemType Directory -Force -Path $assetRoot | Out-Null
+          Copy-Item dist/InvoiceFlowAI-setup.msi (Join-Path $assetRoot "InvoiceFlowAI-$tag-windows-x64-setup.msi")
+          Compress-Archive -Path "publish/win-x64/*" -DestinationPath (Join-Path $assetRoot "InvoiceFlowAI-$tag-windows-x64-portable.zip") -CompressionLevel Optimal
+          Copy-Item publish/win-x64/manifests/release.json (Join-Path $assetRoot "InvoiceFlowAI-$tag-release-manifest.json")
+          $checksumLines = Get-ChildItem -LiteralPath $assetRoot -File | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          }
+          [System.IO.File]::WriteAllLines(
+            (Join-Path $assetRoot "InvoiceFlowAI-$tag-SHA256SUMS.txt"),
+            $checksumLines,
+            [System.Text.UTF8Encoding]::new($false))
+
+      - name: Upload Windows release assets
         uses: actions/upload-artifact@v4
         with:
-          name: windows-x64-msi
+          name: windows-x64-release-assets
           if-no-files-found: error
-          path: dist/InvoiceFlowAI-setup.msi
+          path: dist/release-assets/
           retention-days: 7
+
+  publish_release:
+    name: Publish Windows x64 .NET release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-release-assets
+          path: release-assets
+
+      - name: Verify checksums and publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cd release-assets
+          sha256sum --check "InvoiceFlowAI-${RELEASE_TAG}-SHA256SUMS.txt"
+          gh release create "$RELEASE_TAG" InvoiceFlowAI-"$RELEASE_TAG"-* \
+            --verify-tag --title "InvoiceFlowAI $RELEASE_TAG" \
+            --notes "Windows x64 desktop release built from the C#/.NET runtime. macOS desktop and DSH plugin releases have been retired."

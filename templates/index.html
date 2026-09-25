@@ -1153,6 +1153,26 @@
             -webkit-backdrop-filter: blur(20px);
         }
 
+        .app-shell--initial-setup::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            z-index: 40;
+            background: rgba(4,7,14,0.66);
+            backdrop-filter: blur(12px);
+        }
+
+        .app-shell--initial-setup .app-main {
+            position: fixed;
+            z-index: 41;
+            inset: 3vh auto;
+            width: min(1100px, calc(100vw - 24px));
+            height: 94vh;
+            left: 50%;
+            transform: translateX(-50%);
+            box-shadow: var(--shadow-panel);
+        }
+
         .modal-card {
             width: min(720px, 100%);
             border-radius: 28px;

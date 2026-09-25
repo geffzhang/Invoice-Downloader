@@ -1,3 +1,5 @@
+using System.IO.Compression;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using FluentAssertions;
@@ -5,9 +7,12 @@ using InvoiceFlowAI.Application.Candidates;
 using InvoiceFlowAI.Application.Mail;
 using InvoiceFlowAI.Application.Persistence;
 using InvoiceFlowAI.Application.Pipeline;
+using InvoiceFlowAI.Application.Runs;
 using InvoiceFlowAI.Application.Url;
 using InvoiceFlowAI.Domain.Candidates;
+using InvoiceFlowAI.Domain.Runs;
 using InvoiceFlowAI.Infrastructure;
+using InvoiceFlowAI.Infrastructure.Url;
 using InvoiceFlowAI.Infrastructure.Url.Worker;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -56,6 +61,69 @@ public sealed class UrlRecoveryPipelineIntegrationTests : IDisposable
         Directory.GetFileSystemEntries(_jobRoot).Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task Direct_provider_identity_mismatch_becomes_unresolved_and_blocks_completed_run()
+    {
+        const string expectedInvoiceNumber = "11111111111111111111";
+        const string providerInvoiceNumber = "22222222222222222222";
+        var archive = CreateZip(
+            ("invoice.xml", Encoding.UTF8.GetBytes($"<?xml version=\"1.0\"?><Invoice><InvoiceNumber>{providerInvoiceNumber}</InvoiceNumber></Invoice>")),
+            ("first.pdf", Encoding.ASCII.GetBytes("%PDF-1.7 first")),
+            ("second.pdf", Encoding.ASCII.GetBytes("%PDF-1.7 second")));
+        var transport = new FakeDirectTransport(new UrlTransportResponse(HttpStatusCode.OK, archive, "application/zip", null));
+        var policy = new PublicUrlPolicy((_, _) => Task.FromResult<IReadOnlyList<IPAddress>>([IPAddress.Parse("203.0.114.7")]));
+        var recoveryClient = new PublicUrlRecoveryClient(policy, transport, 4096, TimeSpan.FromSeconds(2));
+        var strategy = new DirectInvoiceRecoveryStrategy(new DirectArtifactProbe(
+            recoveryClient, maxAttempts: 1, delayAsync: static (_, _) => Task.CompletedTask));
+        var urlCandidate = new MailboxUrlCandidate(
+            "acct", "INBOX", "validity", "77", new Uri("https://files.example/invoices.zip"),
+            "chinatax_direct_invoice", "mismatch-group",
+            new Dictionary<string, string> { ["invoice_number"] = expectedInvoiceNumber }, 0);
+        var group = new UrlCandidateGroup(
+            urlCandidate.ProviderFamily,
+            [urlCandidate],
+            new Dictionary<string, string> { ["invoice_number"] = expectedInvoiceNumber },
+            new Dictionary<string, IReadOnlyList<ExpectedFieldEvidence>>(),
+            DocumentIdentity.Create("mismatch-group"));
+        var candidate = new DocumentCandidate(DocumentIdentity.Create("source-candidate"), 1, "corr", "77",
+            "invoice.zip", "application/zip", 0, 0, "url", urlCandidate.SourceUrl);
+        var stage = new UrlRecoveryStage(new DirectStrategyClient(strategy));
+
+        var recovered = await stage.ExecuteAsync(new CandidateBatch([
+            new CandidateWorkItem(candidate, ReadOnlyMemory<byte>.Empty,
+                SourceUrlCandidate: urlCandidate, SourceUrlGroup: group)]), CancellationToken.None);
+        var terminal = new TerminalDecisionService().Decide(
+            "run-provider-mismatch",
+            recovered.EffectiveTerminalResults,
+            null,
+            cancellationRequested: false,
+            allCandidatesArrived: true,
+            Array.Empty<RunFailure>(),
+            DateTimeOffset.UnixEpoch);
+
+        recovered.Items.Should().BeEmpty();
+        recovered.EffectiveTerminalResults.Should().ContainSingle().Which.Status.Should().Be(CandidateStatus.Unresolved);
+        recovered.EffectiveTerminalResults[0].Failure!.ReasonCode.Should().Be("DIRECT_INVOICE_PDF_ENTITY_MISMATCH");
+        terminal.Status.Should().Be(RunTerminalStatus.PartialSuccess);
+        terminal.Summary.UnresolvedCount.Should().Be(1);
+        terminal.Status.Should().NotBe(RunTerminalStatus.Completed);
+        transport.Requests.Should().ContainSingle();
+    }
+
+    private static byte[] CreateZip(params (string Name, byte[] Content)[] members)
+    {
+        using var output = new MemoryStream();
+        using (var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var member in members)
+            {
+                using var stream = archive.CreateEntry(member.Name).Open();
+                stream.Write(member.Content);
+            }
+        }
+        return output.ToArray();
+    }
+
     private static UrlCandidateGroup Group()
     {
         var candidate = new MailboxUrlCandidate("acct", "INBOX", "77", "500",
@@ -97,6 +165,30 @@ public sealed class UrlRecoveryPipelineIntegrationTests : IDisposable
             ContentSha256 = contentSha256;
             SourceGroupIdentity = sourceGroupIdentity;
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class DirectStrategyClient(DirectInvoiceRecoveryStrategy strategy) : IUrlRecoveryClient
+    {
+        public Task<UrlRecoveryResult> RecoverAsync(Uri sourceUrl, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<UrlRecoveryResult> RecoverAsync(UrlCandidateGroup group, CancellationToken cancellationToken)
+            => strategy.RecoverAsync(group, cancellationToken);
+    }
+
+    private sealed class FakeDirectTransport(UrlTransportResponse response) : IUrlRecoveryTransport
+    {
+        public List<UrlTransportRequest> Requests { get; } = [];
+
+        public Task<UrlTransportResponse> SendAsync(
+            UrlTransportRequest request,
+            int maxResponseBytes,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(response);
         }
     }
 

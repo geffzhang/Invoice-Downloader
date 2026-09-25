@@ -11,17 +11,17 @@
 
 <div align="center">
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)
+![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue)
 ![AI](https://img.shields.io/badge/AI-GLM--4.5V%20%7C%20GLM--OCR-purple)
-![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20macOS-lightblue)
+![Platform](https://img.shields.io/badge/Platform-Windows%20x64-lightblue)
 ![Status](https://img.shields.io/badge/Status-Stable-brightgreen)
 
 **Turn PDF, OFD, and XML e-invoices from your mailbox, plus supported invoice download links, into organized files and an Excel reimbursement summary.**
 
 Designed for individuals, freelancers, and small teams that manually collect multiple e-invoices each month. Connect your own QQ Mail or 163 Mail account to collect invoices in batches, run OCR, archive them by category, and create a summary while retaining low-confidence results for human review.
 
-Download: [latest Windows installer / portable package and macOS (Apple Silicon) installer](https://github.com/EthanYoQ/Invoice-Downloader/releases/latest)
+Download: [latest Windows x64 installer and portable package](https://github.com/EthanYoQ/Invoice-Downloader/releases/latest)
 
 *Email and invoice files are processed locally. If you enable GLM OCR / vision recognition, invoice images are sent to your configured model provider for extraction.*
 
@@ -30,17 +30,6 @@ Download: [latest Windows installer / portable package and macOS (Apple Silicon)
 <p align="center">
   <img src="./docs/images/invoiceflowai-hero-en.png" alt="InvoiceFlowAI desktop invoice assistant with setup, processing, analysis, and safety screens" />
 </p>
-
-## DeepSeek Harness Plugin
-
-`@ethanyoq/dsh-invoice-downloader` brings local IMAP invoice download, OCR, archiving, and Excel summaries to a right-side DeepSeek Harness panel. It is intended for reimbursement workflows that automate repetitive organizing while keeping a human review step.
-
-```sh
-dsh plugin --profile web add @ethanyoq/dsh-invoice-downloader
-dsh web --profile web
-```
-
-Open **Invoice Downloader** from the right-side entry, choose an output directory, install the local engine once, and enter a QQ Mail or 163 Mail IMAP authorization code. First-time setup needs network access to download Python dependencies and Chromium; the `rapidocr-onnxruntime` pip wheel includes the default PP-OCRv3 models, so no separate manual model download is required. Invoice files are OCRed locally; OCR text is sent to the currently selected DeepSeek model for field extraction. The plugin supports Windows x64 and macOS Apple Silicon. The DSH credential service stores authorization codes, never plugin settings or scan logs.
 
 ---
 
@@ -220,17 +209,11 @@ The system uses **GLM-4.5V** (multimodal vision) and **GLM-OCR** to recognize in
 
 ## 🚀 Quick Start
 
-### Windows (installer / portable)
+### Windows x64 (installer / portable)
 
-1. Installer: run `InvoiceFlowAI-*-windows-x64-setup.exe`. Portable: extract `InvoiceFlowAI-*-windows-x64-portable.zip` to a regular folder (avoid cloud-sync directories) and keep `_internal` beside `InvoiceFlowAI.exe`.
+1. Installer: run `InvoiceFlowAI-*-windows-x64-setup.msi`. Portable: extract `InvoiceFlowAI-*-windows-x64-portable.zip` to a regular folder (avoid cloud-sync directories) and preserve the archive's directory structure.
 2. Double-click `InvoiceFlowAI.exe`; the settings interface appears on first launch.
 3. Enter your email address and authorization code (QQ or 163) and GLM API Key, then click "Start Scanning". Invoices are archived to the "Invoice Organizer" folder on your desktop.
-
-### macOS (Apple Silicon)
-
-1. Open `InvoiceFlowAI-*-macos-arm64.dmg` and drag `InvoiceFlowAI` to Applications.
-2. The settings interface appears on first launch. This build is unsigned and not notarized; if macOS blocks it, confirm opening it in **System Settings → Privacy & Security**.
-3. Enter your email address and authorization code (QQ or 163) and GLM API Key, then click "Start Scanning".
 
 ---
 
@@ -302,7 +285,7 @@ This is normal. When AI recognition confidence is insufficient, the system autom
 ## 🛡️ Privacy & Security
 
 - All emails and invoice files are processed **locally** and are never uploaded to any server
-- Mailbox credentials are encrypted with **DPAPI** on Windows and stored in **Keychain** on macOS
+- Mailbox credentials are encrypted with **DPAPI** on Windows
 - The GLM API only receives **invoice images** (Base64) for text recognition and does not send the original email content
 
 ---

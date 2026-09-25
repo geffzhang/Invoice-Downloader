@@ -338,7 +338,7 @@ async function loadShellState() {
     }
 
     window.invoiceFlowRememberSettings = settings.remember_settings;
-    return { settings, runSettings, runContext };
+    return { settings, runSettings, runContext, needsInitialSetup: SettingsRpc.needsInitialSetup(loaded) };
 }
 
 let settingsWriteQueue = Promise.resolve();
@@ -698,9 +698,9 @@ function AppWindowChrome({ active }) {
     );
 }
 
-function AppShell({ active, onOpenDisclaimer, children, footerLeft, footerRight, contentClassName = "", contentScrollable = true }) {
+function AppShell({ active, onOpenDisclaimer, children, footerLeft, footerRight, contentClassName = "", contentScrollable = true, initialSetup = false }) {
     return (
-        <div className="app-shell">
+        <div className={joinClasses("app-shell", initialSetup && "app-shell--initial-setup")}>
             <Sidebar active={active} onOpenDisclaimer={onOpenDisclaimer} />
             <main className="app-main">
                 <AppWindowChrome active={active} />
@@ -851,6 +851,7 @@ function SettingsPage({ onOpenDisclaimer }) {
     const [apiStatus, setApiStatus] = useState({ status: "idle", message: "" });
     const [bootstrapState, setBootstrapState] = useState("bootstrapping");
     const [bootstrapError, setBootstrapError] = useState("");
+    const [initialSetup, setInitialSetup] = useState(false);
     const [starting, setStarting] = useState(false);
     const saveTimerRef = useRef(null);
     const autostartTimerRef = useRef(null);
@@ -865,6 +866,7 @@ function SettingsPage({ onOpenDisclaimer }) {
                 setSettings(state.settings);
                 setRunSettings(state.runSettings);
                 setRunContext(state.runContext);
+                setInitialSetup(state.needsInitialSetup && !hasExplicitQaRunContext(state.runContext));
                 setBootstrapError("");
                 setBootstrapState("bootstrapped");
             } catch (error) {
@@ -1042,6 +1044,7 @@ function SettingsPage({ onOpenDisclaimer }) {
         <AppShell
             active="settings"
             onOpenDisclaimer={onOpenDisclaimer}
+            initialSetup={initialSetup}
             footerLeft={
                 <label className="toggle-row">
                     <input type="checkbox" checked={settings.remember_settings !== false} onChange={(event) => updateSetting("remember_settings", event.target.checked)} />

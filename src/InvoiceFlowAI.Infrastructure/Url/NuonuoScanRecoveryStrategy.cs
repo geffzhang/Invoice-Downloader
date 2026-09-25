@@ -11,14 +11,24 @@ public sealed class NuonuoScanRecoveryStrategy : IUrlRecoveryStrategy
 {
     private static readonly string[] ArtifactUrlProperties = ["xmlUrl", "url", "ofdDownloadUrl"];
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan[] RetryDelays = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(8)];
     private readonly PublicUrlRecoveryClient _client;
     private readonly TimeSpan _timeout;
+    private readonly int _maxAttempts;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
 
-    public NuonuoScanRecoveryStrategy(PublicUrlRecoveryClient client, TimeSpan? timeout = null)
+    public NuonuoScanRecoveryStrategy(
+        PublicUrlRecoveryClient client,
+        TimeSpan? timeout = null,
+        int maxAttempts = 3,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _timeout = timeout ?? DefaultTimeout;
         if (_timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
+        if (maxAttempts <= 0) throw new ArgumentOutOfRangeException(nameof(maxAttempts));
+        _maxAttempts = maxAttempts;
+        _delayAsync = delayAsync ?? Task.Delay;
     }
 
     public IReadOnlyCollection<string> ProviderFamilies { get; } = ["nuonuo_scan_invoice"];
@@ -26,6 +36,32 @@ public sealed class NuonuoScanRecoveryStrategy : IUrlRecoveryStrategy
     public async Task<UrlRecoveryResult> RecoverAsync(UrlCandidateGroup group, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(group);
+        for (var attempt = 0; attempt < _maxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return await RecoverOnceAsync(group, cancellationToken).ConfigureAwait(false);
+            }
+            catch (UrlRecoveryException exception) when (
+                attempt + 1 < _maxAttempts
+                && exception.ReasonCode is not "URL_POLICY_REJECTED"
+                    and not "NUONUO_MISSING_PARAM_LIST"
+                    and not "NUONUO_ARTIFACT_SELECTION_AMBIGUOUS")
+            {
+                var delay = RetryDelays[Math.Min(attempt, RetryDelays.Length - 1)];
+                if (delay > TimeSpan.Zero)
+                {
+                    await _delayAsync(delay, cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        throw new InvalidOperationException("Nuonuo recovery retry loop exited without a result.");
+    }
+
+    private async Task<UrlRecoveryResult> RecoverOnceAsync(UrlCandidateGroup group, CancellationToken cancellationToken)
+    {
         if (group.Candidates.Count == 0)
         {
             throw new ArgumentException("URL recovery group must contain candidates.", nameof(group));

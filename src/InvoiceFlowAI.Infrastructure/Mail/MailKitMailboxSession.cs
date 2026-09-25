@@ -50,18 +50,41 @@ public sealed class MailKitMailboxSession : IMailboxSession
     public async Task<IReadOnlyList<MailboxFetchedMessage>> SearchAsync(MailboxSearchCriteria criteria, CancellationToken cancellationToken)
     {
         var folder = _folder ?? throw new InvalidOperationException("Mailbox folder has not been opened.");
+        return await SearchAndFetchAsync(
+            criteria,
+            async (query, token) => (await folder.SearchAsync(query, token).ConfigureAwait(false)).ToArray(),
+            async (uids, token) =>
+            {
+                var summaries = await folder.FetchAsync(
+                    uids.ToList(),
+                    new FetchRequest(MessageSummaryItems.UniqueId | MessageSummaryItems.InternalDate | MessageSummaryItems.Envelope),
+                    token).ConfigureAwait(false);
+                return summaries.Select(summary => new MailboxMessageDateSummary(
+                    summary.UniqueId,
+                    summary.Envelope?.Date,
+                    summary.InternalDate)).ToArray();
+            },
+            (uid, token) => folder.GetMessageAsync(uid, token, null),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task<IReadOnlyList<MailboxFetchedMessage>> SearchAndFetchAsync(
+        MailboxSearchCriteria criteria,
+        Func<SearchQuery, CancellationToken, Task<IReadOnlyList<UniqueId>>> searchAsync,
+        Func<IReadOnlyList<UniqueId>, CancellationToken, Task<IReadOnlyList<MailboxMessageDateSummary>>> fetchSummariesAsync,
+        Func<UniqueId, CancellationToken, Task<MimeMessage>> getMessageAsync,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(criteria);
+        ArgumentNullException.ThrowIfNull(searchAsync);
+        ArgumentNullException.ThrowIfNull(fetchSummariesAsync);
+        ArgumentNullException.ThrowIfNull(getMessageAsync);
+
         var query = BuildSearchQuery(criteria);
         var uids = FilterUidsAfterCursor(
-            await folder.SearchAsync(query, cancellationToken).ConfigureAwait(false),
+            await searchAsync(query, cancellationToken).ConfigureAwait(false),
             criteria.SinceUid);
-        var summaries = await folder.FetchAsync(
-            uids.ToList(),
-            new FetchRequest(MessageSummaryItems.UniqueId | MessageSummaryItems.InternalDate | MessageSummaryItems.Envelope),
-            cancellationToken).ConfigureAwait(false);
-        var dateSummaries = summaries.Select(summary => new MailboxMessageDateSummary(
-            summary.UniqueId,
-            summary.Envelope?.Date,
-            summary.InternalDate)).ToArray();
+        var dateSummaries = await fetchSummariesAsync(uids, cancellationToken).ConfigureAwait(false);
         var summaryByUid = dateSummaries.ToDictionary(summary => summary.Uid);
         var selectedUids = FilterUidsByDateWindow(uids, dateSummaries, criteria);
         var messages = new List<MailboxFetchedMessage>(selectedUids.Count);
@@ -69,7 +92,7 @@ public sealed class MailKitMailboxSession : IMailboxSession
         foreach (var uid in selectedUids)
         {
             summaryByUid.TryGetValue(uid, out var summary);
-            var message = await folder.GetMessageAsync(uid, cancellationToken, null).ConfigureAwait(false);
+            var message = await getMessageAsync(uid, cancellationToken).ConfigureAwait(false);
             messages.Add(ProjectMessage(uid.Id, message, summary?.InternalDateUtc));
         }
 

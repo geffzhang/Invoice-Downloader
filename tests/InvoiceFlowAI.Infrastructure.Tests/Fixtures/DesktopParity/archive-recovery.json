@@ -1,0 +1,54 @@
+{
+  "cases": [
+    {
+      "caseId": "final-present-matching-hash",
+      "tempState": "valid",
+      "finalState": "valid",
+      "expectedState": "Committed",
+      "expectedReason": "",
+      "expectedAuditCount": 1,
+      "expectedFinalExists": true,
+      "expectedTempExists": true
+    },
+    {
+      "caseId": "final-present-hash-mismatch",
+      "tempState": "valid",
+      "finalState": "mismatch",
+      "expectedState": "RecoveryRequired",
+      "expectedReason": "ARCHIVE_HASH_MISMATCH",
+      "expectedAuditCount": 0,
+      "expectedFinalExists": true,
+      "expectedTempExists": true
+    },
+    {
+      "caseId": "temp-only-valid-hash",
+      "tempState": "valid",
+      "finalState": "missing",
+      "expectedState": "Committed",
+      "expectedReason": "",
+      "expectedAuditCount": 0,
+      "expectedFinalExists": true,
+      "expectedTempExists": false
+    },
+    {
+      "caseId": "temp-only-hash-mismatch",
+      "tempState": "mismatch",
+      "finalState": "missing",
+      "expectedState": "RecoveryRequired",
+      "expectedReason": "ARCHIVE_TEMP_HASH_MISMATCH",
+      "expectedAuditCount": 0,
+      "expectedFinalExists": false,
+      "expectedTempExists": true
+    },
+    {
+      "caseId": "both-files-missing",
+      "tempState": "missing",
+      "finalState": "missing",
+      "expectedState": "RecoveryRequired",
+      "expectedReason": "ARCHIVE_BOTH_FILES_MISSING",
+      "expectedAuditCount": 0,
+      "expectedFinalExists": false,
+      "expectedTempExists": false
+    }
+  ]
+}

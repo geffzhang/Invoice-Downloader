@@ -31,6 +31,24 @@ public sealed class NuonuoScanRecoveryStrategyTests
     }
 
     [Fact]
+    public async Task Retries_transient_detail_failure_before_selecting_pdf()
+    {
+        const string successJson = "{\"status\":\"0000\",\"data\":{\"invoiceSimpleVo\":{\"url\":\"https://files.example/invoice.pdf\"}}}";
+        var transport = new FakeTransport(
+            Response("text/html", []),
+            Response("application/json", Encoding.UTF8.GetBytes("{\"status\":\"1001\"}")),
+            Response("text/html", []),
+            Response("application/json", Encoding.UTF8.GetBytes(successJson)),
+            Response("application/pdf", Encoding.ASCII.GetBytes("%PDF-1.7\\nfixture")));
+
+        var result = await NewStrategy(transport).RecoverAsync(Group(), CancellationToken.None);
+
+        result.SelectedArtifact.Should().NotBeNull();
+        result.SelectedArtifact!.Kind.Should().Be(RecoveredArtifactKind.Pdf);
+        transport.Requests.Should().HaveCount(5);
+    }
+
+    [Fact]
     public async Task Selects_single_xml_when_no_pdf_is_available()
     {
         const string detailJson = "{\"status\":\"0000\",\"data\":{\"invoiceSimpleVo\":{\"xmlUrl\":\"https://files.example/invoice.xml\"}}}";
@@ -50,8 +68,7 @@ public sealed class NuonuoScanRecoveryStrategyTests
     public async Task Maps_invalid_detail_json_to_safe_failure()
     {
         var transport = new FakeTransport(
-            Response("text/html", []),
-            Response("application/json", Encoding.UTF8.GetBytes("{")));
+            RepeatedDetailResponse("{"));
 
         var act = () => NewStrategy(transport).RecoverAsync(Group(), CancellationToken.None);
 
@@ -65,8 +82,7 @@ public sealed class NuonuoScanRecoveryStrategyTests
     public async Task Maps_unsuccessful_or_empty_detail_response_to_safe_failure(string body, string reasonCode)
     {
         var transport = new FakeTransport(
-            Response("text/html", []),
-            Response("application/json", Encoding.UTF8.GetBytes(body)));
+            RepeatedDetailResponse(body));
 
         var act = () => NewStrategy(transport).RecoverAsync(Group(), CancellationToken.None);
 
@@ -125,7 +141,7 @@ public sealed class NuonuoScanRecoveryStrategyTests
     {
         var policy = new PublicUrlPolicy((_, _) => Task.FromResult<IReadOnlyList<IPAddress>>([IPAddress.Parse("203.0.114.7")]));
         var client = new PublicUrlRecoveryClient(policy, transport, 1024, TimeSpan.FromSeconds(2));
-        return new NuonuoScanRecoveryStrategy(client);
+        return new NuonuoScanRecoveryStrategy(client, delayAsync: static (_, _) => Task.CompletedTask);
     }
 
     private static UrlCandidateGroup Group(string? fieldName = null, string? fieldValue = null)
@@ -143,6 +159,15 @@ public sealed class NuonuoScanRecoveryStrategyTests
 
     private static UrlTransportResponse Response(string contentType, byte[] body)
         => new(HttpStatusCode.OK, body, contentType, null);
+
+    private static UrlTransportResponse[] RepeatedDetailResponse(string body)
+        => Enumerable.Range(0, 3)
+            .SelectMany(_ => new[]
+            {
+                Response("text/html", []),
+                Response("application/json", Encoding.UTF8.GetBytes(body)),
+            })
+            .ToArray();
 
     private sealed class FakeTransport(params UrlTransportResponse[] responses) : IUrlRecoveryTransport
     {
