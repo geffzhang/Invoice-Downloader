@@ -49,6 +49,10 @@ namespace InvoiceFlowAI.Infrastructure.Persistence.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("FinalFilePath")
+                        .HasMaxLength(1024)
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("ProcessingRevision")
                         .HasColumnType("INTEGER");
 
@@ -70,6 +74,10 @@ namespace InvoiceFlowAI.Infrastructure.Persistence.Migrations
                     b.Property<string>("State")
                         .IsRequired()
                         .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TempFilePath")
+                        .HasMaxLength(1024)
                         .HasColumnType("TEXT");
 
                     b.HasKey("ArtifactId");
@@ -294,8 +302,8 @@ namespace InvoiceFlowAI.Infrastructure.Persistence.Migrations
                     b.HasKey("InvoiceItemId");
 
                     b.HasIndex("InvoiceId", "Ordinal")
-                        .HasDatabaseName("IX_InvoiceItems_Ordinal")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasDatabaseName("IX_InvoiceItems_Ordinal");
 
                     b.ToTable("InvoiceItems", (string)null);
                 });

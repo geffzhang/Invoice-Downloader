@@ -34,6 +34,58 @@ public sealed class ArchiveCommitCoordinatorTests
     }
 
     [Fact]
+    public async Task Commit_preserves_source_file_and_its_bytes()
+    {
+        var fakes = new Fakes();
+        const string sourcePath = "source-1.bin";
+        await fakes.FileSystem.WriteTempAsync(sourcePath, "immutable-source");
+        var sourceHash = Sha256Hex("immutable-source");
+        var coordinator = new ArchiveCommitCoordinator(fakes.UowFactory, fakes.Store, fakes.FileSystem, fakes.AuditStore);
+
+        await coordinator.CommitAsync(NewRequest(sourceHash, sourcePath), CancellationToken.None);
+
+        (await fakes.FileSystem.FileExistsAsync(sourcePath, CancellationToken.None)).Should().BeTrue();
+        (await fakes.FileSystem.ComputeSha256Async(sourcePath, CancellationToken.None)).Should().Be(sourceHash);
+    }
+
+    [Fact]
+    public async Task Commit_does_not_overwrite_an_existing_destination()
+    {
+        var fakes = new Fakes();
+        await fakes.FileSystem.WriteTempAsync("source-1.bin", "new-content");
+        await fakes.FileSystem.WriteTempAsync("archive/final-1.bin", "pre-existing-content");
+        var existingHash = Sha256Hex("pre-existing-content");
+        var coordinator = new ArchiveCommitCoordinator(fakes.UowFactory, fakes.Store, fakes.FileSystem, fakes.AuditStore);
+
+        var act = () => coordinator.CommitAsync(NewRequest(Sha256Hex("new-content"), "source-1.bin"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<IOException>();
+        (await fakes.FileSystem.ComputeSha256Async("archive/final-1.bin", CancellationToken.None)).Should().Be(existingHash);
+        (await fakes.FileSystem.FileExistsAsync("source-1.bin", CancellationToken.None)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Move_interruption_after_prepare_keeps_source_and_recovery_copy()
+    {
+        var fakes = new Fakes();
+        const string sourcePath = "source-1.bin";
+        await fakes.FileSystem.WriteTempAsync(sourcePath, "prepared-content");
+        var hash = Sha256Hex("prepared-content");
+        fakes.FileSystem.ThrowOnMove = true;
+        var coordinator = new ArchiveCommitCoordinator(fakes.UowFactory, fakes.Store, fakes.FileSystem, fakes.AuditStore);
+
+        var act = () => coordinator.CommitAsync(NewRequest(hash, sourcePath), CancellationToken.None);
+
+        await act.Should().ThrowAsync<IOException>();
+        var snapshot = fakes.Store.Get(hash);
+        snapshot.State.Should().Be(ArchiveArtifactState.Prepared);
+        snapshot.TempFilePath.Should().NotBe(sourcePath);
+        (await fakes.FileSystem.FileExistsAsync(snapshot.TempFilePath, CancellationToken.None)).Should().BeTrue();
+        (await fakes.FileSystem.FileExistsAsync(sourcePath, CancellationToken.None)).Should().BeTrue();
+        (await fakes.FileSystem.ComputeSha256Async(sourcePath, CancellationToken.None)).Should().Be(hash);
+    }
+
+    [Fact]
     public async Task IdempotentRetry_with_same_hash_returns_AlreadyExisted()
     {
         var fakes = new Fakes();
@@ -99,7 +151,8 @@ public sealed class ArchiveCommitCoordinatorTests
 
     private static ArchiveCommitRequest NewRequest(string hash, string tempPath) => new(
         Key: new ArchiveArtifactKey("run-1", "doc-1", 1, "Invoice", hash),
-        TempFilePath: tempPath,
+        SourceFilePath: tempPath,
+        FinalFilePath: "archive/final-1.bin",
         FinalRelativePath: "archive/final-1.bin",
         FileName: "final-1.bin");
 
@@ -139,7 +192,9 @@ public sealed class ArchiveCommitCoordinatorTests
     private sealed class FakeArchiveFileSystem : IArchiveFileSystem
     {
         private readonly Dictionary<string, byte[]> _files = new();
+        private int _tempCounter;
         public string? TamperFinalPath { get; set; }
+        public bool ThrowOnMove { get; set; }
 
         public async Task WriteTempAsync(string path, string content)
         {
@@ -162,12 +217,22 @@ public sealed class ArchiveCommitCoordinatorTests
         public Task<bool> FileExistsAsync(string path, CancellationToken cancellationToken)
             => Task.FromResult(_files.ContainsKey(path));
 
+        public Task<string> CopyToSiblingTempAsync(string sourcePath, string finalFilePath, CancellationToken cancellationToken)
+        {
+            if (!_files.TryGetValue(sourcePath, out var sourceBytes)) throw new FileNotFoundException(sourcePath);
+            var tempPath = $"{finalFilePath}.private-{++_tempCounter}";
+            _files[tempPath] = sourceBytes.ToArray();
+            return Task.FromResult(tempPath);
+        }
+
         public Task AtomicMoveAsync(string sourcePath, string targetPath, CancellationToken cancellationToken)
         {
+            if (ThrowOnMove) throw new IOException("Simulated move interruption.");
             if (!_files.TryGetValue(sourcePath, out var bytes))
             {
                 throw new FileNotFoundException(sourcePath);
             }
+            if (_files.ContainsKey(targetPath)) throw new IOException("Archive destination already exists.");
             _files.Remove(sourcePath);
             _files[targetPath] = bytes;
             // If the test rigged a tamper for this target, swap the contents.

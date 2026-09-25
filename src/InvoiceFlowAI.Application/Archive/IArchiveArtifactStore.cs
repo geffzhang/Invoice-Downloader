@@ -28,4 +28,5 @@ public sealed record ArchiveArtifactSnapshot(
     string ExpectedContentHash,
     ArchiveArtifactState State,
     DateTimeOffset CreatedAtUtc,
-    DateTimeOffset? CommittedAtUtc);
+    DateTimeOffset? CommittedAtUtc,
+    string? FinalFilePath = null);

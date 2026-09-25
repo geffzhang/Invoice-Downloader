@@ -65,7 +65,7 @@ public sealed class ArtifactPairingStageTests
         batch.CandidateResults.Should().OnlyContain(result => result.Status == CandidateStatus.ManualReview);
         batch.CandidateResults.Select(result => result.Failure!.ReasonCode)
             .Should()
-            .OnlyContain(reason => reason == "PAIRING_UNMATCHED");
+            .OnlyContain(reason => reason == "PAIRING_COUNTERPART_MISSING");
         batch.Results.Should().HaveCount(2);
         batch.Results.SelectMany(result => result.UnmatchedInvoices.Concat(result.UnmatchedCompanions))
             .Should()
@@ -90,7 +90,46 @@ public sealed class ArtifactPairingStageTests
         batch.CandidateResults.Should().OnlyContain(result => result.Status == CandidateStatus.ManualReview);
         batch.CandidateResults.Select(result => result.Failure!.ReasonCode)
             .Should()
-            .OnlyContain(reason => reason == "PAIRING_AMBIGUOUS");
+            .OnlyContain(reason => reason == "PAIRING_AMBIGUOUS_OPTIMUM");
+    }
+
+    [Fact]
+    public async Task No_compatible_edge_maps_specific_safe_reason_to_each_candidate()
+    {
+        var stage = new ArtifactPairingStage(new PairingEngine());
+        var input = new ExtractionBatch(new[]
+        {
+            CreateResult("ride-invoice", InvoiceDocumentType.RideInvoice, 100m, "INBOX", "uid-1", provider: "Didi"),
+            CreateResult("ride-itinerary", InvoiceDocumentType.RideItinerary, 100m, "INBOX", "uid-1", provider: "Uber"),
+        });
+
+        var batch = await stage.ExecuteAsync(input, CancellationToken.None);
+
+        batch.CandidateResults.Should().OnlyContain(result => result.Status == CandidateStatus.ManualReview);
+        batch.CandidateResults.Select(result => result.Failure!.ReasonCode)
+            .Should()
+            .OnlyContain(reason => reason == "PAIRING_NO_COMPATIBLE_EDGE");
+        batch.CandidateResults.Select(result => result.Failure!.SafeMessage)
+            .Should()
+            .OnlyContain(message => !message.Contains("ride-", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Globally_unmatched_candidate_uses_global_assignment_reason()
+    {
+        var stage = new ArtifactPairingStage(new PairingEngine());
+        var preferredInvoice = CreateResult("preferred-invoice", InvoiceDocumentType.RideInvoice, 100m, "INBOX", "shared-uid");
+        var lowerScoreInvoice = CreateResult("lower-score-invoice", InvoiceDocumentType.RideInvoice, 100.4m, "INBOX", "other-uid");
+        var itinerary = CreateResult("itinerary", InvoiceDocumentType.RideItinerary, 103m, "INBOX", "shared-uid");
+        var input = new ExtractionBatch(new[] { preferredInvoice, lowerScoreInvoice, itinerary });
+
+        var batch = await stage.ExecuteAsync(input, CancellationToken.None);
+
+        batch.CandidateResults.Single(result => result.Candidate.DocumentId.Value == "preferred-invoice")
+            .Status.Should().Be(CandidateStatus.Resolved);
+        var unmatched = batch.CandidateResults.Single(result => result.Candidate.DocumentId.Value == "lower-score-invoice");
+        unmatched.Status.Should().Be(CandidateStatus.ManualReview);
+        unmatched.Failure!.ReasonCode.Should().Be("PAIRING_UNMATCHED_BY_GLOBAL_ASSIGNMENT");
     }
 
     [Fact]
@@ -141,7 +180,8 @@ public sealed class ArtifactPairingStageTests
         decimal amount,
         string mailbox,
         string sourceUid,
-        CandidateStatus status = CandidateStatus.Resolved)
+        CandidateStatus status = CandidateStatus.Resolved,
+        string provider = "synthetic-provider")
     {
         var candidate = new DocumentCandidate(
             DocumentIdentity.Create(id),
@@ -156,7 +196,7 @@ public sealed class ArtifactPairingStageTests
             Metadata: new Dictionary<string, string>
             {
                 ["mailbox"] = mailbox,
-                ["provider"] = "synthetic-provider",
+                ["provider"] = provider,
             });
         var invoice = new InvoiceDocument(
             id,

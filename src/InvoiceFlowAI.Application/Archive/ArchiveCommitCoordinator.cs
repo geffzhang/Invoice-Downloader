@@ -43,7 +43,8 @@ public sealed class ArchiveCommitCoordinator : IArchiveCommitCoordinator
     public async Task<ArchiveCommitResult> CommitAsync(ArchiveCommitRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ArgumentException.ThrowIfNullOrEmpty(request.TempFilePath);
+        ArgumentException.ThrowIfNullOrEmpty(request.SourceFilePath);
+        ArgumentException.ThrowIfNullOrEmpty(request.FinalFilePath);
         ArgumentException.ThrowIfNullOrEmpty(request.FinalRelativePath);
 
         var key = request.Key;
@@ -53,85 +54,209 @@ public sealed class ArchiveCommitCoordinator : IArchiveCommitCoordinator
             throw new ArgumentException("ExpectedContentHash required.", nameof(request));
         }
 
-        var now = DateTimeOffset.UtcNow;
-
-        // Phase A — hash temp, ensure DB row in State=Prepared.
-        var tempHash = await _fileSystem.ComputeSha256Async(request.TempFilePath, cancellationToken).ConfigureAwait(false);
-        if (!string.Equals(tempHash, key.ExpectedContentHash, StringComparison.OrdinalIgnoreCase))
+        var existing = await _store.FindByKeyAsync(key, cancellationToken).ConfigureAwait(false);
+        if (existing is not null)
         {
-            throw new InvalidOperationException(
-                $"Temp file hash {tempHash} does not match expected {key.ExpectedContentHash}.");
+            EnsureSameContent(existing, key);
+            if (existing.State == ArchiveArtifactState.Committed)
+            {
+                return BuildResult(existing, alreadyExisted: true);
+            }
+            if (existing.State == ArchiveArtifactState.RecoveryRequired)
+            {
+                return BuildResult(existing, alreadyExisted: true, reasonCode: "ARCHIVE_RECOVERY_REQUIRED");
+            }
+            if (existing.State == ArchiveArtifactState.Prepared)
+            {
+                return await CompletePreparedAsync(existing, request, alreadyExisted: true, cancellationToken).ConfigureAwait(false);
+            }
         }
 
-        var artifactId = _artifactIdFactory(key);
-        var snapshot = new ArchiveArtifactSnapshot(
-            ArtifactId: artifactId,
-            Key: key,
-            TempFilePath: request.TempFilePath,
-            FinalRelativePath: request.FinalRelativePath,
-            FileName: request.FileName,
-            ExpectedContentHash: key.ExpectedContentHash,
-            State: ArchiveArtifactState.Prepared,
-            CreatedAtUtc: now,
-            CommittedAtUtc: null);
-
-        await using (var txA = await _uowFactory.BeginAsync(TransactionPurpose.ArchivePrepare, cancellationToken).ConfigureAwait(false))
+        if (await _fileSystem.FileExistsAsync(request.FinalFilePath, cancellationToken).ConfigureAwait(false))
         {
-            var existing = await _store.FindByKeyAsync(key, cancellationToken).ConfigureAwait(false);
-            if (existing is not null)
+            throw new ArchivePathCollisionException(request.FinalFilePath);
+        }
+
+        var tempFilePath = await _fileSystem.CopyToSiblingTempAsync(
+            request.SourceFilePath,
+            request.FinalFilePath,
+            cancellationToken).ConfigureAwait(false);
+        var phaseAPersisted = false;
+        var phaseACommitAttempted = false;
+        ArchiveArtifactSnapshot preparedSnapshot;
+        var now = DateTimeOffset.UtcNow;
+        try
+        {
+            var tempHash = await _fileSystem.ComputeSha256Async(tempFilePath, cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(tempHash, key.ExpectedContentHash, StringComparison.OrdinalIgnoreCase))
             {
-                if (!string.Equals(existing.ExpectedContentHash, key.ExpectedContentHash, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Archive copy does not match the expected source hash.");
+            }
+
+            var artifactId = _artifactIdFactory(key);
+            preparedSnapshot = new ArchiveArtifactSnapshot(
+                ArtifactId: artifactId,
+                Key: key,
+                TempFilePath: tempFilePath,
+                FinalRelativePath: request.FinalRelativePath,
+                FileName: request.FileName,
+                ExpectedContentHash: key.ExpectedContentHash,
+                State: ArchiveArtifactState.Prepared,
+                CreatedAtUtc: now,
+                CommittedAtUtc: null,
+                FinalFilePath: request.FinalFilePath);
+
+            await using var txA = await _uowFactory.BeginAsync(TransactionPurpose.ArchivePrepare, cancellationToken).ConfigureAwait(false);
+            var current = await _store.FindByKeyAsync(key, cancellationToken).ConfigureAwait(false);
+            if (current is not null)
+            {
+                EnsureSameContent(current, key);
+                if (current.State == ArchiveArtifactState.Committed)
                 {
-                    throw new InvalidOperationException(
-                        $"Hash mismatch on idempotent retry: existing={existing.ExpectedContentHash}, new={key.ExpectedContentHash}.");
+                    await txA.RollbackAsync(cancellationToken).ConfigureAwait(false);
+                    await _fileSystem.DeleteAsync(tempFilePath, cancellationToken).ConfigureAwait(false);
+                    return BuildResult(current, alreadyExisted: true);
                 }
-                if (existing.State == ArchiveArtifactState.Committed)
+                if (current.State != ArchiveArtifactState.Prepared)
                 {
-                    return new ArchiveCommitResult(
-                        existing.ArtifactId,
-                        ArchiveArtifactState.Committed,
-                        existing.FinalRelativePath,
-                        existing.ExpectedContentHash,
-                        AlreadyExisted: true);
+                    throw new InvalidOperationException("An archive retry is already marked for recovery.");
                 }
+                preparedSnapshot = current;
+                phaseACommitAttempted = true;
+                await txA.CommitAsync(cancellationToken).ConfigureAwait(false);
+                phaseAPersisted = true;
+                await _fileSystem.DeleteAsync(tempFilePath, cancellationToken).ConfigureAwait(false);
             }
             else
             {
-                await _store.InsertPreparedAsync(snapshot, txA, cancellationToken).ConfigureAwait(false);
+                await _store.InsertPreparedAsync(preparedSnapshot, txA, cancellationToken).ConfigureAwait(false);
+                await _auditStore.AppendAsync(BuildAudit(
+                    key.RunId, "archive.prepare", request, now, key.ExpectedContentHash), txA, cancellationToken).ConfigureAwait(false);
+                phaseACommitAttempted = true;
+                await txA.CommitAsync(cancellationToken).ConfigureAwait(false);
+                phaseAPersisted = true;
             }
-
-            await _auditStore.AppendAsync(BuildAudit(
-                key.RunId, "archive.prepare", request, now, key.ExpectedContentHash), txA, cancellationToken).ConfigureAwait(false);
-
-            await txA.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
-
-        // Phase B — atomic move, fsync, hash final, persist Committed state.
-        await _fileSystem.AtomicMoveAsync(request.TempFilePath, request.FinalRelativePath, cancellationToken).ConfigureAwait(false);
-        await _fileSystem.FlushToDiskAsync(request.FinalRelativePath, cancellationToken).ConfigureAwait(false);
-
-        var finalHash = await _fileSystem.ComputeSha256Async(request.FinalRelativePath, cancellationToken).ConfigureAwait(false);
-        if (!string.Equals(finalHash, key.ExpectedContentHash, StringComparison.OrdinalIgnoreCase))
+        catch
         {
-            // Orphan: the final file does not match the DB-asserted hash. Mark
-            // RecoveryRequired so the user is notified and the file is not
-            // silently deleted.
-            await using var txOrphan = await _uowFactory.BeginAsync(TransactionPurpose.ArchiveCommit, cancellationToken).ConfigureAwait(false);
-            await _store.MarkRecoveryRequiredAsync(artifactId, "ARCHIVE_HASH_MISMATCH", txOrphan, cancellationToken).ConfigureAwait(false);
-            await txOrphan.CommitAsync(cancellationToken).ConfigureAwait(false);
-            return new ArchiveCommitResult(artifactId, ArchiveArtifactState.RecoveryRequired, request.FinalRelativePath, finalHash, AlreadyExisted: false);
+            if (!phaseAPersisted && !phaseACommitAttempted)
+            {
+                await _fileSystem.DeleteAsync(tempFilePath, CancellationToken.None).ConfigureAwait(false);
+            }
+            throw;
         }
 
-        await using (var txB = await _uowFactory.BeginAsync(TransactionPurpose.ArchiveCommit, cancellationToken).ConfigureAwait(false))
-        {
-            await _store.MarkCommittedAsync(artifactId, now, txB, cancellationToken).ConfigureAwait(false);
-            await _auditStore.AppendAsync(BuildAudit(
-                key.RunId, "archive.commit", request, now, finalHash), txB, cancellationToken).ConfigureAwait(false);
-            await txB.CommitAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        return new ArchiveCommitResult(artifactId, ArchiveArtifactState.Committed, request.FinalRelativePath, finalHash, AlreadyExisted: false);
+        return await CompletePreparedAsync(preparedSnapshot, request, alreadyExisted: false, cancellationToken).ConfigureAwait(false);
     }
+
+    private async Task<ArchiveCommitResult> CompletePreparedAsync(
+        ArchiveArtifactSnapshot snapshot,
+        ArchiveCommitRequest request,
+        bool alreadyExisted,
+        CancellationToken cancellationToken)
+    {
+        var finalFilePath = snapshot.FinalFilePath ?? request.FinalFilePath;
+        if (await _fileSystem.FileExistsAsync(finalFilePath, cancellationToken).ConfigureAwait(false))
+        {
+            var existingFinalHash = await _fileSystem.ComputeSha256Async(finalFilePath, cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(existingFinalHash, snapshot.ExpectedContentHash, StringComparison.OrdinalIgnoreCase))
+            {
+                return await MarkRecoveryRequiredAsync(snapshot, "ARCHIVE_HASH_MISMATCH", existingFinalHash, cancellationToken).ConfigureAwait(false);
+            }
+            return await MarkCommittedAsync(snapshot, request, existingFinalHash, alreadyExisted, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!await _fileSystem.FileExistsAsync(snapshot.TempFilePath, cancellationToken).ConfigureAwait(false))
+        {
+            return await MarkRecoveryRequiredAsync(snapshot, "ARCHIVE_BOTH_FILES_MISSING", snapshot.ExpectedContentHash, cancellationToken).ConfigureAwait(false);
+        }
+
+        var tempHash = await _fileSystem.ComputeSha256Async(snapshot.TempFilePath, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(tempHash, snapshot.ExpectedContentHash, StringComparison.OrdinalIgnoreCase))
+        {
+            return await MarkRecoveryRequiredAsync(snapshot, "ARCHIVE_TEMP_HASH_MISMATCH", tempHash, cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            await _fileSystem.AtomicMoveAsync(snapshot.TempFilePath, finalFilePath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            if (await _fileSystem.FileExistsAsync(finalFilePath, cancellationToken).ConfigureAwait(false))
+            {
+                return await MarkRecoveryRequiredAsync(
+                    snapshot,
+                    ArchivePathCollisionException.StableReasonCode,
+                    snapshot.ExpectedContentHash,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            throw;
+        }
+        await _fileSystem.FlushToDiskAsync(finalFilePath, cancellationToken).ConfigureAwait(false);
+        var finalHash = await _fileSystem.ComputeSha256Async(finalFilePath, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(finalHash, snapshot.ExpectedContentHash, StringComparison.OrdinalIgnoreCase))
+        {
+            return await MarkRecoveryRequiredAsync(snapshot, "ARCHIVE_HASH_MISMATCH", finalHash, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await MarkCommittedAsync(snapshot, request, finalHash, alreadyExisted, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ArchiveCommitResult> MarkCommittedAsync(
+        ArchiveArtifactSnapshot snapshot,
+        ArchiveCommitRequest request,
+        string contentHash,
+        bool alreadyExisted,
+        CancellationToken cancellationToken)
+    {
+        var committedAtUtc = DateTimeOffset.UtcNow;
+        await using var transaction = await _uowFactory.BeginAsync(TransactionPurpose.ArchiveCommit, cancellationToken).ConfigureAwait(false);
+        await _store.MarkCommittedAsync(snapshot.ArtifactId, committedAtUtc, transaction, cancellationToken).ConfigureAwait(false);
+        await _auditStore.AppendAsync(BuildAudit(
+            snapshot.Key.RunId, "archive.commit", request, committedAtUtc, contentHash), transaction, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new ArchiveCommitResult(snapshot.ArtifactId, ArchiveArtifactState.Committed, snapshot.FinalRelativePath, contentHash, alreadyExisted);
+    }
+
+    private async Task<ArchiveCommitResult> MarkRecoveryRequiredAsync(
+        ArchiveArtifactSnapshot snapshot,
+        string reasonCode,
+        string contentHash,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await _uowFactory.BeginAsync(TransactionPurpose.ArchiveCommit, cancellationToken).ConfigureAwait(false);
+        await _store.MarkRecoveryRequiredAsync(snapshot.ArtifactId, reasonCode, transaction, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new ArchiveCommitResult(
+            snapshot.ArtifactId,
+            ArchiveArtifactState.RecoveryRequired,
+            snapshot.FinalRelativePath,
+            contentHash,
+            AlreadyExisted: false,
+            ReasonCode: reasonCode);
+    }
+
+    private static void EnsureSameContent(ArchiveArtifactSnapshot existing, ArchiveArtifactKey requestedKey)
+    {
+        if (!string.Equals(existing.ExpectedContentHash, requestedKey.ExpectedContentHash, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Hash mismatch on idempotent retry: existing={existing.ExpectedContentHash}, new={requestedKey.ExpectedContentHash}.");
+        }
+    }
+
+    private static ArchiveCommitResult BuildResult(
+        ArchiveArtifactSnapshot snapshot,
+        bool alreadyExisted,
+        string? reasonCode = null) =>
+        new(
+            snapshot.ArtifactId,
+            snapshot.State,
+            snapshot.FinalRelativePath,
+            snapshot.ExpectedContentHash,
+            alreadyExisted,
+            reasonCode);
 
     private static AuditEventRecord BuildAudit(
         string runId,

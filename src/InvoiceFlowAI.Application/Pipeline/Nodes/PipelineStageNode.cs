@@ -53,7 +53,7 @@ public abstract class PipelineStageNode<TInput, TOutput> : PipelineNode
         try
         {
             var output = await _implementation.ExecuteAsync(item.Payload, cancellationToken).ConfigureAwait(false);
-            _output.Emit(new PipelineItem<TOutput>(item.RunId, output, item.Sequence, item.IsFinal), packet.SequenceNumber);
+            _output.Emit(new PipelineItem<TOutput>(item.RunId, output, item.Sequence, item.IsFinal, item.OutputRoot), packet.SequenceNumber);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

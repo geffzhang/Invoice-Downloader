@@ -48,7 +48,7 @@ public sealed class ScanMailboxNode : PipelineNode
             var result = await _scanner.ScanAsync(
                 new MailboxScanRequest(request.AccountId, request.DateFrom, SinceUid: null, UidValidity: null),
                 cancellationToken).ConfigureAwait(false);
-            _messages.Emit(new PipelineItem<MailboxScanResult>(request.RunId, result, packet.SequenceNumber, IsFinal: true), packet.SequenceNumber);
+            _messages.Emit(new PipelineItem<MailboxScanResult>(request.RunId, result, packet.SequenceNumber, IsFinal: true, OutputRoot: request.SavePath), packet.SequenceNumber);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -94,10 +94,66 @@ public sealed class PairArtifactsNode : PipelineStageNode<ExtractionBatch, Pairi
         : base(id, name, "pair-artifacts", stage, "Results", "Pairs") { }
 }
 
-public sealed class ArchiveDocumentsNode : PipelineStageNode<PairingBatch, ArchiveBatch>
+public sealed class ArchiveDocumentsNode : PipelineNode
 {
+    private readonly IDocumentArchivingStage _stage;
+    private readonly InputPort<PipelineItem<PairingBatch>> _input;
+    private readonly OutputPort<PipelineItem<ArchiveBatch>> _output;
+    private readonly OutputPort<RunFailure> _failure;
+    private bool _failureEndPending;
+
     public ArchiveDocumentsNode(IDocumentArchivingStage stage, string id = "archive-documents", string name = "Archive documents")
-        : base(id, name, "archive-documents", stage, "Pairs", "Archived") { }
+        : base(id, name)
+    {
+        _stage = stage ?? throw new ArgumentNullException(nameof(stage));
+        _input = AddInputPort<PipelineItem<PairingBatch>>("Pairs", 1, BackpressurePolicy.Block);
+        _output = AddOutputPort<PipelineItem<ArchiveBatch>>("Archived");
+        _failure = AddOutputPort<RunFailure>("Failure");
+    }
+
+    protected override async Task OnExecuteAsync(PipelineContext context, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_failureEndPending)
+        {
+            _failure.EmitEndOfStream(context.CycleId);
+            _failureEndPending = false;
+            return;
+        }
+        if (!_input.TryReceive(out var packet)) return;
+        if (packet.IsEndOfStream)
+        {
+            _output.EmitEndOfStream(packet.SequenceNumber);
+            _failure.EmitEndOfStream(packet.SequenceNumber);
+            return;
+        }
+
+        var item = packet.Payload;
+        try
+        {
+            var output = await _stage.ExecuteAsync(
+                new ArchiveStageRequest(item.RunId, item.OutputRoot ?? string.Empty, item.Payload),
+                cancellationToken).ConfigureAwait(false);
+            _output.Emit(new PipelineItem<ArchiveBatch>(item.RunId, output, item.Sequence, item.IsFinal, item.OutputRoot), packet.SequenceNumber);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _failure.Emit(new RunFailure(
+                item.RunId,
+                "archive-documents",
+                "ARCHIVE_DOCUMENTS_FAILED",
+                FailureCategory.Internal,
+                Retryable: false,
+                SafeMessage: "The documents could not be archived.",
+                ExceptionType: exception.GetType().FullName ?? exception.GetType().Name), packet.SequenceNumber);
+            _output.EmitEndOfStream(packet.SequenceNumber);
+            _failureEndPending = true;
+        }
+    }
 }
 
 public sealed class ExportReportNode : PipelineNode

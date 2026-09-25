@@ -14,6 +14,8 @@ public sealed class ArchivedArtifactRow
     public int ProcessingRevision { get; set; }
     public string Role { get; set; } = string.Empty;
     public string RelativePath { get; set; } = string.Empty;
+    public string? TempFilePath { get; set; }
+    public string? FinalFilePath { get; set; }
     public string FileName { get; set; } = string.Empty;
     public string ContentHash { get; set; } = string.Empty;
     public string State { get; set; } = "Prepared";

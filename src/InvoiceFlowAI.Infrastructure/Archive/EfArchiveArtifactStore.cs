@@ -44,6 +44,8 @@ public sealed class EfArchiveArtifactStore : IArchiveArtifactStore
             ProcessingRevision = snapshot.Key.ProcessingRevision,
             Role = snapshot.Key.Role,
             RelativePath = snapshot.FinalRelativePath,
+            TempFilePath = snapshot.TempFilePath,
+            FinalFilePath = snapshot.FinalFilePath,
             FileName = snapshot.FileName,
             ContentHash = snapshot.ExpectedContentHash,
             State = "Prepared",
@@ -103,13 +105,14 @@ public sealed class EfArchiveArtifactStore : IArchiveArtifactStore
         new(
             ArtifactId: row.ArtifactId,
             Key: new ArchiveArtifactKey(row.RunId, row.DocumentId, row.ProcessingRevision, row.Role, row.ContentHash),
-            TempFilePath: row.RelativePath,
+            TempFilePath: row.TempFilePath ?? string.Empty,
             FinalRelativePath: row.RelativePath,
             FileName: row.FileName,
             ExpectedContentHash: row.ContentHash,
             State: ParseState(row.State),
             CreatedAtUtc: row.CreatedAtUtc,
-            CommittedAtUtc: row.CommittedAtUtc);
+            CommittedAtUtc: row.CommittedAtUtc,
+            FinalFilePath: row.FinalFilePath ?? row.RelativePath);
 
     private static ArchiveArtifactState ParseState(string state) => state switch
     {

@@ -15,6 +15,9 @@ namespace InvoiceFlowAI.Infrastructure.Tests.Archive;
 
 public sealed class ArchiveRecoveryServiceTests
 {
+    private const string FinalRelativePath = "archive/final-1.bin";
+    private const string FinalFilePath = "output-root/archive/final-1.bin";
+
     [Fact]
     public async Task Final_present_with_matching_hash_commits()
     {
@@ -33,7 +36,7 @@ public sealed class ArchiveRecoveryServiceTests
     {
         var fakes = SetupPrepared(content: "actual-bytes");
         // Replace the final file with mismatching bytes.
-        fakes.FileSystem.ReplaceFinal("archive/final-1.bin", "tampered-bytes");
+        fakes.FileSystem.ReplaceFinal(FinalFilePath, "tampered-bytes");
         var recovery = new ArchiveRecoveryService(fakes.UowFactory, fakes.Store, fakes.FileSystem, fakes.AuditStore);
 
         var entries = await recovery.ScanAsync("run-1", CancellationToken.None);
@@ -48,14 +51,15 @@ public sealed class ArchiveRecoveryServiceTests
     {
         var fakes = SetupPrepared(content: "archive-content");
         // Delete the final file.
-        await fakes.FileSystem.DeleteAsync("archive/final-1.bin", CancellationToken.None);
+        await fakes.FileSystem.DeleteAsync(FinalFilePath, CancellationToken.None);
         var recovery = new ArchiveRecoveryService(fakes.UowFactory, fakes.Store, fakes.FileSystem, fakes.AuditStore);
 
         var entries = await recovery.ScanAsync("run-1", CancellationToken.None);
         var decision = await recovery.ResolveAsync(entries[0], CancellationToken.None);
 
         decision.ResolvedState.Should().Be(ArchiveArtifactState.Committed);
-        (await fakes.FileSystem.FileExistsAsync("archive/final-1.bin", CancellationToken.None)).Should().BeTrue();
+        (await fakes.FileSystem.FileExistsAsync(FinalFilePath, CancellationToken.None)).Should().BeTrue();
+        (await fakes.FileSystem.FileExistsAsync(FinalRelativePath, CancellationToken.None)).Should().BeFalse();
         (await fakes.FileSystem.FileExistsAsync("temp-1.bin", CancellationToken.None)).Should().BeFalse();
     }
 
@@ -63,7 +67,7 @@ public sealed class ArchiveRecoveryServiceTests
     public async Task Both_files_missing_surfaces_recovery_without_silent_delete()
     {
         var fakes = SetupPrepared(content: "archive-content");
-        await fakes.FileSystem.DeleteAsync("archive/final-1.bin", CancellationToken.None);
+        await fakes.FileSystem.DeleteAsync(FinalFilePath, CancellationToken.None);
         await fakes.FileSystem.DeleteAsync("temp-1.bin", CancellationToken.None);
         var recovery = new ArchiveRecoveryService(fakes.UowFactory, fakes.Store, fakes.FileSystem, fakes.AuditStore);
 
@@ -74,7 +78,7 @@ public sealed class ArchiveRecoveryServiceTests
         decision.ReasonCode.Should().Be("ARCHIVE_BOTH_FILES_MISSING");
         // RecoveryRequired is never an excuse to delete files silently — we
         // verify that neither file was recreated by the recovery attempt.
-        (await fakes.FileSystem.FileExistsAsync("archive/final-1.bin", CancellationToken.None)).Should().BeFalse();
+        (await fakes.FileSystem.FileExistsAsync(FinalFilePath, CancellationToken.None)).Should().BeFalse();
         (await fakes.FileSystem.FileExistsAsync("temp-1.bin", CancellationToken.None)).Should().BeFalse();
     }
 
@@ -92,23 +96,40 @@ public sealed class ArchiveRecoveryServiceTests
         second.ResolvedState.Should().Be(ArchiveArtifactState.Committed);
     }
 
+    [Fact]
+    public async Task Resolve_reconciles_pairing_state_from_updated_run_artifact_snapshots()
+    {
+        var fakes = SetupPrepared(content: "archive-content");
+        var recovery = new ArchiveRecoveryService(fakes.UowFactory, fakes.Store, fakes.FileSystem, fakes.AuditStore, fakes.PairingStore);
+
+        var entries = await recovery.ScanAsync("run-1", CancellationToken.None);
+        var decision = await recovery.ResolveAsync(entries[0], CancellationToken.None);
+
+        decision.ResolvedState.Should().Be(ArchiveArtifactState.Committed);
+        fakes.PairingStore.ReconcileRuns.Should().ContainSingle().Which.Should().Be("run-1");
+        fakes.PairingStore.ReconciledSnapshots.Should().ContainSingle()
+            .Which.State.Should().Be(ArchiveArtifactState.Committed);
+        fakes.UowFactory.Purposes.Should().Contain(TransactionPurpose.ArchiveCommit);
+    }
+
     private static Fakes SetupPrepared(string content)
     {
         var fakes = new Fakes();
         fakes.FileSystem.WriteFile("temp-1.bin", content);
-        fakes.FileSystem.WriteFile("archive/final-1.bin", content);
+        fakes.FileSystem.WriteFile(FinalFilePath, content);
         var hash = Sha256Hex(content);
         fakes.Store.AddPrepared(
             new ArchiveArtifactSnapshot(
                 ArtifactId: "archive-1",
                 Key: new ArchiveArtifactKey("run-1", "doc-1", 1, "Invoice", hash),
                 TempFilePath: "temp-1.bin",
-                FinalRelativePath: "archive/final-1.bin",
+                FinalRelativePath: FinalRelativePath,
                 FileName: "final-1.bin",
                 ExpectedContentHash: hash,
                 State: ArchiveArtifactState.Prepared,
                 CreatedAtUtc: DateTimeOffset.UtcNow,
-                CommittedAtUtc: null));
+                CommittedAtUtc: null,
+                FinalFilePath: FinalFilePath));
         return fakes;
     }
 
@@ -125,23 +146,41 @@ public sealed class ArchiveRecoveryServiceTests
         public FakeArchiveFileSystem FileSystem { get; } = new();
         public FakeArchiveArtifactStore Store { get; } = new();
         public FakeAuditStore AuditStore { get; } = new();
+        public FakePairingStore PairingStore { get; } = new();
     }
 
     private sealed class FakeUowFactory : IUnitOfWorkFactory
     {
         public int CommitCount { get; private set; }
+        public List<TransactionPurpose> Purposes { get; } = [];
         public Task<IUnitOfWork> BeginAsync(TransactionPurpose purpose, CancellationToken cancellationToken)
-            => Task.FromResult<IUnitOfWork>(new FakeUow(this));
+        {
+            Purposes.Add(purpose);
+            return Task.FromResult<IUnitOfWork>(new FakeUow(this, purpose));
+        }
         private sealed class FakeUow : IUnitOfWork
         {
             private readonly FakeUowFactory _factory;
-            public FakeUow(FakeUowFactory factory) { _factory = factory; TransactionId = Guid.NewGuid().ToString("N"); Purpose = TransactionPurpose.ArchiveCommit; }
+            public FakeUow(FakeUowFactory factory, TransactionPurpose purpose) { _factory = factory; TransactionId = Guid.NewGuid().ToString("N"); Purpose = purpose; }
             public string TransactionId { get; }
             public TransactionPurpose Purpose { get; }
             public bool IsCompleted { get; private set; }
             public Task CommitAsync(CancellationToken cancellationToken) { IsCompleted = true; _factory.CommitCount++; return Task.CompletedTask; }
             public Task RollbackAsync(CancellationToken cancellationToken) { IsCompleted = true; return Task.CompletedTask; }
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class FakePairingStore : IPairingStore
+    {
+        public List<string> ReconcileRuns { get; } = [];
+        public IReadOnlyList<ArchiveArtifactSnapshot> ReconciledSnapshots { get; private set; } = Array.Empty<ArchiveArtifactSnapshot>();
+        public Task UpsertAsync(PairingRecord record, IUnitOfWork transaction, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task ReconcileArchiveStateAsync(string runId, IReadOnlyList<ArchiveArtifactSnapshot> artifacts, IUnitOfWork transaction, CancellationToken cancellationToken)
+        {
+            ReconcileRuns.Add(runId);
+            ReconciledSnapshots = artifacts;
+            return Task.CompletedTask;
         }
     }
 
@@ -167,6 +206,14 @@ public sealed class ArchiveRecoveryServiceTests
 
         public Task<bool> FileExistsAsync(string path, CancellationToken cancellationToken)
             => Task.FromResult(_files.ContainsKey(path));
+
+        public Task<string> CopyToSiblingTempAsync(string sourcePath, string finalFilePath, CancellationToken cancellationToken)
+        {
+            if (!_files.TryGetValue(sourcePath, out var bytes)) throw new FileNotFoundException(sourcePath);
+            var tempPath = $"{finalFilePath}.private-copy";
+            _files[tempPath] = bytes.ToArray();
+            return Task.FromResult(tempPath);
+        }
 
         public Task AtomicMoveAsync(string sourcePath, string targetPath, CancellationToken cancellationToken)
         {

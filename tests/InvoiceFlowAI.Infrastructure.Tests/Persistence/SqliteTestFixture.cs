@@ -85,6 +85,8 @@ public sealed class SqliteTestFixture : IAsyncLifetime
                 VALUES ('20260923_InitialSchema', '10.0.12');
             INSERT INTO __EFMigrationsHistory (MigrationId, ProductVersion)
                 VALUES ('20260924_AddMailboxDefaultMailbox', '10.0.12');
+            INSERT INTO __EFMigrationsHistory (MigrationId, ProductVersion)
+                VALUES ('20260925003448_PersistArchivePaths', '10.0.12');
             CREATE TRIGGER AuditEvents_NoUpdate
                 BEFORE UPDATE ON AuditEvents
                 BEGIN

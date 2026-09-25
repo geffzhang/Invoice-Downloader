@@ -3,6 +3,8 @@
 // file into memory at once.
 
 using System.Security.Cryptography;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using InvoiceFlowAI.Application.Archive;
 
 namespace InvoiceFlowAI.Infrastructure.Archive;
@@ -20,6 +22,33 @@ public sealed class PhysicalArchiveFileSystem : IArchiveFileSystem
     public Task<bool> FileExistsAsync(string path, CancellationToken cancellationToken)
         => Task.FromResult(File.Exists(path));
 
+    public async Task<string> CopyToSiblingTempAsync(string sourcePath, string finalFilePath, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourcePath);
+        ArgumentException.ThrowIfNullOrEmpty(finalFilePath);
+        var targetDirectory = Path.GetDirectoryName(Path.GetFullPath(finalFilePath))!;
+        Directory.CreateDirectory(targetDirectory);
+        var tempPath = Path.Combine(targetDirectory, $".{Path.GetFileName(finalFilePath)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await using var source = new FileStream(
+                sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                bufferSize: 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await using var destination = new FileStream(
+                tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                bufferSize: 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await source.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+            await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+            destination.Flush(flushToDisk: true);
+            return tempPath;
+        }
+        catch
+        {
+            if (File.Exists(tempPath)) File.Delete(tempPath);
+            throw;
+        }
+    }
+
     public Task AtomicMoveAsync(string sourcePath, string targetPath, CancellationToken cancellationToken)
     {
         var targetDir = Path.GetDirectoryName(targetPath);
@@ -29,31 +58,46 @@ public sealed class PhysicalArchiveFileSystem : IArchiveFileSystem
         }
         if (File.Exists(targetPath))
         {
-            // Atomic replace on Windows requires File.Move with overwrite=true,
-            // which uses MoveFileEx semantics. The original file is preserved
-            // until the rename completes.
-            File.Replace(sourcePath, targetPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            throw new IOException("Archive destination already exists.");
         }
-        else
-        {
-            File.Move(sourcePath, targetPath);
-        }
+        File.Move(sourcePath, targetPath);
         return Task.CompletedTask;
     }
 
     public Task FlushToDiskAsync(string path, CancellationToken cancellationToken)
     {
-        // On Windows the OS commits the rename on the volume when the file
-        // handle is closed. We force a flush of the parent directory so a
-        // crash after this point still sees the file.
+        cancellationToken.ThrowIfCancellationRequested();
+        // Windows commits the rename on the volume when the file handle is closed.
+        if (OperatingSystem.IsWindows()) return Task.CompletedTask;
+
         var directory = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory))
         {
-            using var dirHandle = File.Open(directory, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            dirHandle.Flush(true);
+            var descriptor = NativeOpen(directory, 0);
+            if (descriptor < 0) throw new IOException("Could not open the archive directory for synchronization.", new Win32Exception(Marshal.GetLastPInvokeError()));
+            try
+            {
+                if (NativeFsync(descriptor) != 0)
+                {
+                    throw new IOException("Could not synchronize the archive directory.", new Win32Exception(Marshal.GetLastPInvokeError()));
+                }
+            }
+            finally
+            {
+                NativeClose(descriptor);
+            }
         }
         return Task.CompletedTask;
     }
+
+    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    private static extern int NativeOpen(string path, int flags);
+
+    [DllImport("libc", EntryPoint = "fsync", SetLastError = true)]
+    private static extern int NativeFsync(int fileDescriptor);
+
+    [DllImport("libc", EntryPoint = "close", SetLastError = true)]
+    private static extern int NativeClose(int fileDescriptor);
 
     public Task DeleteAsync(string path, CancellationToken cancellationToken)
     {

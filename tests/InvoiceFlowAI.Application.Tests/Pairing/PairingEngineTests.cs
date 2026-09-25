@@ -155,7 +155,87 @@ public sealed class PairingEngineTests
         var result = _engine.Pair(PairingFamily.Ride, new[] { invoice }, new[] { companion });
 
         result.Pairs.Should().BeEmpty();
+        GetReasonCode(result, "inv-1").Should().Be("PAIRING_NO_COMPATIBLE_EDGE");
+        GetEvidenceCodes(result, "inv-1").Should().Contain("REQUIRED_AMOUNT_MISSING");
     }
+
+    [Fact]
+    public void Missing_counterpart_has_a_distinct_review_reason()
+    {
+        var result = _engine.Pair(PairingFamily.Ride, new[] { NewRide("inv-1", 100m) }, Array.Empty<PairingDocument>());
+
+        GetReasonCode(result, "inv-1").Should().Be("PAIRING_COUNTERPART_MISSING");
+    }
+
+    [Fact]
+    public void No_compatible_edge_reports_sorted_provider_and_amount_evidence()
+    {
+        var invoice = NewRide("inv-1", amount: 100m, provider: "Didi");
+        var companion = NewItinerary("it-1", amount: 200m, provider: "Uber");
+
+        var result = _engine.Pair(PairingFamily.Ride, new[] { invoice }, new[] { companion });
+
+        GetReasonCode(result, "inv-1").Should().Be("PAIRING_NO_COMPATIBLE_EDGE");
+        GetReasonCode(result, "it-1").Should().Be("PAIRING_NO_COMPATIBLE_EDGE");
+        GetEvidenceCodes(result, "inv-1").Should().Equal("AMOUNT_OUT_OF_TOLERANCE", "PROVIDER_MISMATCH");
+    }
+
+    [Fact]
+    public void Ambiguous_optimum_marks_every_member_with_ambiguity_reason()
+    {
+        var invoices = new[] { NewRide("inv-a", 100m), NewRide("inv-b", 100m) };
+        var companions = new[] { NewItinerary("it-a", 100m), NewItinerary("it-b", 100m) };
+
+        var result = _engine.Pair(PairingFamily.Ride, invoices, companions);
+
+        result.Ambiguities.Should().ContainSingle();
+        foreach (var id in new[] { "inv-a", "inv-b", "it-a", "it-b" })
+        {
+            GetReasonCode(result, id).Should().Be("PAIRING_AMBIGUOUS_OPTIMUM");
+        }
+    }
+
+    [Fact]
+    public void Globally_unmatched_compatible_document_gets_reason_and_selected_edge_score()
+    {
+        var preferredInvoice = NewRide("inv-preferred", 100m, sourceUid: "shared-uid");
+        var lowerScoreInvoice = NewRide("inv-lower-score", 100.4m, sourceUid: "other-uid");
+        var companion = NewItinerary("it-1", 103m, sourceUid: "shared-uid");
+
+        var result = _engine.Pair(
+            PairingFamily.Ride,
+            new[] { preferredInvoice, lowerScoreInvoice },
+            new[] { companion });
+
+        result.Pairs.Should().ContainSingle();
+        result.Pairs[0].Invoice.Id.Should().Be("inv-preferred");
+        GetAssignmentScore(result.Pairs[0]).Should().Be(170);
+        GetReasonCode(result, "inv-lower-score").Should().Be("PAIRING_UNMATCHED_BY_GLOBAL_ASSIGNMENT");
+    }
+
+    [Fact]
+    public void Hotel_date_incompatibility_is_reported_as_evidence()
+    {
+        var invoice = NewHotel("hotel-invoice", 500m, new DateOnly(2026, 9, 15));
+        var folio = NewFolio("hotel-folio", 500m, new DateOnly(2026, 9, 25));
+
+        var result = _engine.Pair(PairingFamily.Hotel, new[] { invoice }, new[] { folio });
+
+        GetReasonCode(result, "hotel-invoice").Should().Be("PAIRING_NO_COMPATIBLE_EDGE");
+        GetEvidenceCodes(result, "hotel-invoice").Should().Contain("DATE_OUT_OF_TOLERANCE");
+    }
+
+    private static string GetReasonCode(PairingResult result, string documentId)
+        => GetReviewReason(result, documentId).ReasonCode;
+
+    private static string[] GetEvidenceCodes(PairingResult result, string documentId)
+        => GetReviewReason(result, documentId).EvidenceCodes.ToArray();
+
+    private static PairingDocumentReviewReason GetReviewReason(PairingResult result, string documentId)
+        => result.ReviewReasons.Single(reason => string.Equals(reason.DocumentId, documentId, StringComparison.Ordinal));
+
+    private static int GetAssignmentScore(PairingAssignment assignment)
+        => assignment.Score;
 
     [Fact]
     public void Merchant_token_overlap_increases_score_and_picks_better_pairing()

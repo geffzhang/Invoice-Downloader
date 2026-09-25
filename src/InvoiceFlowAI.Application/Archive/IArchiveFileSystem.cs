@@ -11,6 +11,8 @@ public interface IArchiveFileSystem
 
     Task<bool> FileExistsAsync(string path, CancellationToken cancellationToken);
 
+    Task<string> CopyToSiblingTempAsync(string sourcePath, string finalFilePath, CancellationToken cancellationToken);
+
     Task AtomicMoveAsync(string sourcePath, string targetPath, CancellationToken cancellationToken);
 
     Task FlushToDiskAsync(string path, CancellationToken cancellationToken);

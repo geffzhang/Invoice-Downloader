@@ -143,6 +143,40 @@ public sealed class AppendOnlyAuditTests : IClassFixture<SqliteTestFixture>
         await act.Should().ThrowAsync<DbUpdateException>();
     }
 
+    [Fact]
+    public async Task Zero_sequence_archive_events_receive_unique_run_local_sequences()
+    {
+        await _fixture.ResetAsync();
+        await using var context = _fixture.CreateContext();
+        var uow = await SeedAuditAsync(context, "run-zero-sequence");
+        var store = new EfAuditStore(context);
+
+        await store.AppendAsync(NewZeroSequenceEvent("event-zero-1", "run-zero-sequence"), uow, CancellationToken.None);
+        await store.AppendAsync(NewZeroSequenceEvent("event-zero-2", "run-zero-sequence"), uow, CancellationToken.None);
+        await uow.CommitAsync(CancellationToken.None);
+
+        var sequences = await context.AuditEvents.AsNoTracking()
+            .Where(row => row.RunId == "run-zero-sequence")
+            .OrderBy(row => row.EventSequence)
+            .Select(row => row.EventSequence)
+            .ToListAsync();
+        sequences.Should().Equal(1, 2);
+    }
+
+    private static AuditEventRecord NewZeroSequenceEvent(string id, string runId) => new(
+        AuditEventId: id,
+        RunId: runId,
+        EventSequence: 0,
+        EventType: "archive.commit",
+        Stage: "archive",
+        NodeId: "archive",
+        DocumentId: id,
+        ProcessingRevision: 1,
+        ReasonCode: "archive.commit",
+        PayloadJson: "{}",
+        PayloadHash: new string('a', 64),
+        OccurredAtUtc: DateTimeOffset.UtcNow);
+
     private async Task<IUnitOfWork> SeedAuditAsync(InvoiceFlowDbContext context, string runId)
     {
         // A Run row is required so the AuditEvents FK is satisfied.

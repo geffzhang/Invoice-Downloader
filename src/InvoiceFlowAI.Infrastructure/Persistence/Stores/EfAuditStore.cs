@@ -20,11 +20,27 @@ public sealed class EfAuditStore : IAuditEventStore
             throw new InvalidOperationException("AuditStore writes must use EfUnitOfWork.");
         }
 
+        var eventSequence = record.EventSequence;
+        if (eventSequence == 0)
+        {
+            var persistedMaximum = await _context.AuditEvents
+                .Where(row => row.RunId == record.RunId)
+                .Select(row => (long?)row.EventSequence)
+                .MaxAsync(cancellationToken)
+                .ConfigureAwait(false) ?? 0;
+            var pendingMaximum = _context.ChangeTracker.Entries<AuditEventRow>()
+                .Where(entry => entry.State == EntityState.Added && entry.Entity.RunId == record.RunId)
+                .Select(entry => entry.Entity.EventSequence)
+                .DefaultIfEmpty(0)
+                .Max();
+            eventSequence = Math.Max(persistedMaximum, pendingMaximum) + 1;
+        }
+
         _context.AuditEvents.Add(new AuditEventRow
         {
             AuditEventId = record.AuditEventId,
             RunId = record.RunId,
-            EventSequence = record.EventSequence,
+            EventSequence = eventSequence,
             EventType = record.EventType,
             Stage = record.Stage,
             NodeId = record.NodeId,
