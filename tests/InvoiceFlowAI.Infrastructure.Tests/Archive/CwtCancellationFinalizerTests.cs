@@ -93,6 +93,85 @@ public sealed class CwtCancellationFinalizerTests
         }
     }
 
+    [Fact]
+    public async Task Matches_every_archived_inventory_candidate_by_source_filename_not_parsed_document_type()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"invoice-flow-cwt-inventory-{Guid.NewGuid():N}");
+        const string relativePath = "archive/run-cwt/住宿发票/other-classified-document.pdf";
+        const string fileName = "20260610_其他分类_张三酒店.pdf";
+        const string content = "synthetic archived hotel inventory artifact";
+        var fullPath = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        await File.WriteAllTextAsync(fullPath, content);
+        try
+        {
+            var snapshot = Snapshot("artifact-inventory-hotel", "doc-inventory-hotel", relativePath, fullPath,
+                fileName, Hash(content), "standalone");
+            var store = new FakeArchiveArtifactStore(snapshot);
+            var finalizer = new CwtCancellationFinalizer(new ArchiveNamingPolicy(), store,
+                new PhysicalArchiveFileSystem(), new FakeManualReviewItemStore(), new FakeUnitOfWorkFactory(),
+                new FakePairingStore(), new FakeAuditEventStore());
+            var candidates = new[]
+            {
+                Candidate("doc-cancel", "酒店预定取消知会-张三-20260610入住-上海.pdf", InvoiceDocumentType.AccommodationConfirmation,
+                    new Dictionary<string, string> { ["source_is_cwt"] = "true" }),
+                Candidate("doc-inventory-hotel", fileName, InvoiceDocumentType.Other),
+            };
+
+            var result = await finalizer.FinalizeAsync("run-cwt", root, candidates, CancellationToken.None);
+
+            result.Matches.Should().ContainSingle().Which.Should().Be("doc-inventory-hotel");
+            result.UpdatedRelativePaths["doc-inventory-hotel"].Should().Contain("/review/");
+            File.Exists(fullPath).Should().BeFalse();
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Reports_recovery_required_when_file_rollback_fails_after_database_update_failure()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"invoice-flow-cwt-rollback-{Guid.NewGuid():N}");
+        const string relativePath = "archive/run-cwt/住宿发票/confirmation.pdf";
+        const string fileName = "20260610_住宿确认单_张三酒店.pdf";
+        const string content = "rollback recovery artifact";
+        var sourcePath = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+        await File.WriteAllTextAsync(sourcePath, content);
+        try
+        {
+            var snapshot = Snapshot("artifact-rollback", "doc-rollback", relativePath, sourcePath,
+                fileName, Hash(content), "standalone");
+            var fileSystem = new RollbackFailingArchiveFileSystem();
+            var store = new FakeArchiveArtifactStore(snapshot) { ThrowOnLocationUpdate = true };
+            var finalizer = new CwtCancellationFinalizer(new ArchiveNamingPolicy(), store, fileSystem,
+                new FakeManualReviewItemStore(), new FakeUnitOfWorkFactory(), new FakePairingStore(), new FakeAuditEventStore());
+            var candidates = new[]
+            {
+                Candidate("doc-cancel", "酒店预定取消知会-张三-20260610入住-上海.pdf", InvoiceDocumentType.Other,
+                    new Dictionary<string, string> { ["source_is_cwt"] = "true" }),
+                Candidate("doc-rollback", fileName, InvoiceDocumentType.Other),
+            };
+
+            var result = await finalizer.FinalizeAsync("run-cwt", root, candidates, CancellationToken.None);
+
+            result.Matches.Should().BeEmpty();
+            result.Failures.Should().ContainSingle().Which.ReasonCode.Should().Be("CWT_MATCH_RECOVERY_REQUIRED");
+            var current = await store.ListByRunAsync("run-cwt", CancellationToken.None);
+            current.Single().State.Should().Be(ArchiveArtifactState.RecoveryRequired);
+            current.Single().FinalRelativePath.Should().Contain("/review/");
+            File.Exists(sourcePath).Should().BeFalse();
+            File.Exists(current.Single().FinalFilePath!).Should().BeTrue();
+            File.Exists(current.Single().FinalFilePath + ".json").Should().BeTrue();
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static ArchiveArtifactSnapshot Snapshot(
         string artifactId, string documentId, string relativePath, string fullPath, string fileName, string hash, string role)
         => new(artifactId, new ArchiveArtifactKey("run-cwt", documentId, 1, role, hash), string.Empty,
@@ -118,6 +197,7 @@ public sealed class CwtCancellationFinalizerTests
     {
         private readonly List<ArchiveArtifactSnapshot> _snapshots = [.. snapshots];
         public IReadOnlyList<ArchiveArtifactSnapshot> Snapshots => _snapshots;
+        public bool ThrowOnLocationUpdate { get; set; }
         public Task<ArchiveArtifactSnapshot?> FindByKeyAsync(ArchiveArtifactKey key, CancellationToken cancellationToken)
             => Task.FromResult(_snapshots.FirstOrDefault(snapshot => snapshot.Key == key));
         public Task InsertPreparedAsync(ArchiveArtifactSnapshot snapshot, IUnitOfWork transaction, CancellationToken cancellationToken)
@@ -125,16 +205,46 @@ public sealed class CwtCancellationFinalizerTests
         public Task MarkCommittedAsync(string artifactId, DateTimeOffset committedAtUtc, IUnitOfWork transaction, CancellationToken cancellationToken)
             => throw new NotSupportedException();
         public Task MarkRecoveryRequiredAsync(string artifactId, string reasonCode, IUnitOfWork transaction, CancellationToken cancellationToken)
-            => throw new NotSupportedException();
+        {
+            var index = _snapshots.FindIndex(snapshot => snapshot.ArtifactId == artifactId);
+            _snapshots[index] = _snapshots[index] with { State = ArchiveArtifactState.RecoveryRequired };
+            return Task.CompletedTask;
+        }
         public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListByRunAsync(string runId, CancellationToken cancellationToken)
             => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(_snapshots.Where(snapshot => snapshot.Key.RunId == runId).ToArray());
         public Task UpdateCommittedLocationAsync(string artifactId, string relativePath, string finalPath, string fileName,
             IUnitOfWork transaction, CancellationToken cancellationToken)
         {
+            if (ThrowOnLocationUpdate)
+            {
+                ThrowOnLocationUpdate = false;
+                throw new InvalidOperationException("synthetic persistence failure");
+            }
             var index = _snapshots.FindIndex(snapshot => snapshot.ArtifactId == artifactId);
             _snapshots[index] = _snapshots[index] with { FinalRelativePath = relativePath, FinalFilePath = finalPath, FileName = fileName };
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class RollbackFailingArchiveFileSystem : IArchiveFileSystem
+    {
+        private readonly PhysicalArchiveFileSystem _inner = new();
+        private string? _movedTarget;
+        public Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken) => _inner.ComputeSha256Async(path, cancellationToken);
+        public Task<bool> FileExistsAsync(string path, CancellationToken cancellationToken) => _inner.FileExistsAsync(path, cancellationToken);
+        public Task<string> CopyToSiblingTempAsync(string sourcePath, string finalFilePath, CancellationToken cancellationToken)
+            => _inner.CopyToSiblingTempAsync(sourcePath, finalFilePath, cancellationToken);
+        public Task AtomicMoveAsync(string sourcePath, string targetPath, CancellationToken cancellationToken)
+        {
+            if (_movedTarget is not null && sourcePath == _movedTarget)
+                throw new IOException("synthetic rollback move failure");
+            _movedTarget = targetPath;
+            return _inner.AtomicMoveAsync(sourcePath, targetPath, cancellationToken);
+        }
+        public Task FlushToDiskAsync(string path, CancellationToken cancellationToken) => _inner.FlushToDiskAsync(path, cancellationToken);
+        public Task DeleteAsync(string path, CancellationToken cancellationToken) => _inner.DeleteAsync(path, cancellationToken);
+        public Task WriteTextAtomicAsync(string path, string content, CancellationToken cancellationToken)
+            => _inner.WriteTextAtomicAsync(path, content, cancellationToken);
     }
 
     private sealed class FakeManualReviewItemStore : IManualReviewItemStore

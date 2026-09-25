@@ -69,7 +69,22 @@ public sealed class RunExecutionServiceTests
     public async Task Candidate_result_is_finalized_and_its_event_is_published_after_commit()
     {
         var order = new List<string>();
-        var candidateResult = NewCandidateResult();
+        var candidateResult = NewCandidateResult() with
+        {
+            Candidate = NewCandidateResult().Candidate with
+            {
+                SourceUrl = new Uri("https://invoice.example/capability-segment?token=QUERY-SECRET"),
+                Metadata = new Dictionary<string, string>
+                {
+                    ["sender"] = "SENDER-SECRET",
+                    ["subject"] = "MAILBOX-SUBJECT-SECRET",
+                    ["invoice_number"] = "INVOICE-NUMBER-SECRET",
+                },
+            },
+            Failure = new CandidateFailure("URL_RECOVERY_WORKER_FAILED", FailureScope.Candidate,
+                FailureCategory.Network, true, "Invoice link could not be recovered."),
+            Status = CandidateStatus.Unresolved,
+        };
         var services = new ServiceCollection();
         services.AddInvoiceFlowApplication();
         services.AddSingleton<IMailboxScanner, EmptyMailboxScanner>();
@@ -98,6 +113,11 @@ public sealed class RunExecutionServiceTests
         candidateEvent.Sequence.Should().Be(coordinator.PacketRequests.Single(item => item.EventType == "run.candidate").EventSequence);
         candidateEvent.Payload.Should().BeOfType<RunCandidateEventPayload>()
             .Which.DocumentId.Should().Be("document-1");
+        var durablePayload = coordinator.PacketRequests.Single(item => item.EventType == "run.candidate").EventPayloadJson;
+        durablePayload.Should().Contain("document-1").And.Contain("Unresolved").And.Contain("URL_RECOVERY_WORKER_FAILED");
+        durablePayload.Should().NotContain("capability-segment").And.NotContain("QUERY-SECRET")
+            .And.NotContain("SENDER-SECRET").And.NotContain("MAILBOX-SUBJECT-SECRET")
+            .And.NotContain("INVOICE-NUMBER-SECRET").And.NotContain("LOG-EXCEPTION-SECRET");
         order.IndexOf("commit:2").Should().BeLessThan(order.IndexOf("publish:2"));
         JsonSerializer.Serialize(candidateEvent.Payload).Should().NotContain("TOP_SECRET");
     }
