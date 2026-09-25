@@ -7,6 +7,7 @@ using InvoiceFlowAI.Application.Persistence;
 using InvoiceFlowAI.Application.Security;
 using InvoiceFlowAI.Application.Parsers;
 using InvoiceFlowAI.Application.Pipeline;
+using InvoiceFlowAI.Application.Reports;
 using InvoiceFlowAI.Application.Url;
 using InvoiceFlowAI.Application.Mail;
 using InvoiceFlowAI.Infrastructure.Persistence.Stores;
@@ -20,6 +21,7 @@ using InvoiceFlowAI.Infrastructure.Url;
 using InvoiceFlowAI.Infrastructure.Url.Worker;
 using InvoiceFlowAI.Infrastructure.Security;
 using InvoiceFlowAI.Infrastructure.Mail;
+using InvoiceFlowAI.Infrastructure.Reports;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -40,6 +42,7 @@ public static class InvoiceFlowAIInfrastructureServiceCollectionExtensions
         services.AddScoped<IMailboxConnectionTester, MailKitMailboxConnectionTester>();
         services.AddScoped<IProviderConnectionTester, DeepSeekProviderConnectionTester>();
         services.TryAddSingleton<IMailboxSessionFactory, MailboxSessionFactory>();
+        services.AddScoped<IMailboxScanner, MailKitMailboxScanner>();
         services.AddScoped<IChatCompletionService>(serviceProvider =>
             new DeepSeekChatCompletionService(serviceProvider.GetRequiredService<ISecretStore>()));
         services.AddScoped<InvoiceNormalizer>();
@@ -53,7 +56,21 @@ public static class InvoiceFlowAIInfrastructureServiceCollectionExtensions
         services.AddScoped<IPairingStore, EfPairingStore>();
         services.AddScoped<IManualReviewItemStore, EfManualReviewItemStore>();
         services.AddScoped<IAuditEventStore, EfAuditStore>();
+        services.AddScoped<IRunLifecycleStore, EfRunLifecycleStore>();
+        services.AddScoped<IRunCheckpointStore, EfRunCheckpointStore>();
+        services.AddScoped<IEventReplayStore, EfEventReplayStore>();
         services.AddScoped<IUnitOfWorkFactory, EfUnitOfWorkFactory>();
+        services.AddScoped<EfReportRunDataStore>();
+        services.AddScoped<IReportRunDataSource>(provider => provider.GetRequiredService<EfReportRunDataStore>());
+        services.AddScoped<IReportPathStore>(provider => provider.GetRequiredService<EfReportRunDataStore>());
+        services.TryAddSingleton<IReportOpenTokenStore, InMemoryReportOpenTokenStore>();
+        services.TryAddScoped<IReportExporter>(provider => new ClosedXmlReportExporter(
+            provider.GetRequiredService<IArchiveFileSystem>(),
+            relativePath => Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "InvoiceFlowAI",
+                relativePath)));
+        services.AddScoped<IReportApplicationService, ReportApplicationService>();
         services.AddScoped<IArchiveArtifactStore, EfArchiveArtifactStore>();
         services.AddSingleton<IArchiveFileSystem, PhysicalArchiveFileSystem>();
         services.AddSingleton<IArchiveNamingPolicy, ArchiveNamingPolicy>();

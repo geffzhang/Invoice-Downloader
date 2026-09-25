@@ -2,17 +2,44 @@ using System.Text.Json;
 using FluentAssertions;
 using InvoiceFlowAI.App.Rpc;
 using InvoiceFlowAI.Application.Persistence;
+using InvoiceFlowAI.Application.Pipeline;
+using InvoiceFlowAI.Application.Runs;
+using InvoiceFlowAI.Application.Reports;
 using InvoiceFlowAI.Contracts.Accounts;
+using InvoiceFlowAI.Contracts.Errors;
+using InvoiceFlowAI.Contracts.Reports;
 using InvoiceFlowAI.Contracts.Rpc;
 using InvoiceFlowAI.Contracts.Settings;
+using InvoiceFlowAI.Infrastructure.Mail;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
+using InvoiceFlowAI.Infrastructure.Reports;
+using InvoiceFlowAI.Application.Mail;
 
 namespace InvoiceFlowAI.App.Tests.Rpc;
 
 public sealed class AppServiceProviderFactoryTests
 {
+    [Fact]
+    public async Task Create_applies_test_service_overrides_before_building_provider()
+    {
+        var appDataDirectory = Path.Combine(Path.GetTempPath(), $"invoiceflow-app-override-{Guid.NewGuid():N}");
+        try
+        {
+            await using var provider = AppServiceProviderFactory.Create(
+                appDataDirectory,
+                services => services.AddSingleton<IMailboxSessionFactory, TestMailboxSessionFactory>());
+
+            provider.GetRequiredService<IMailboxSessionFactory>()
+                .Should().BeOfType<TestMailboxSessionFactory>();
+        }
+        finally
+        {
+            if (Directory.Exists(appDataDirectory)) Directory.Delete(appDataDirectory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Create_migrates_database_bootstraps_default_settings_and_registers_rpc_services()
     {
@@ -22,6 +49,38 @@ public sealed class AppServiceProviderFactoryTests
             await using (var provider = AppServiceProviderFactory.Create(appDataDirectory))
             await using (var scope = provider.CreateAsyncScope())
             {
+                provider.GetRequiredService<IRunEventPublisher>()
+                    .Should().BeSameAs(provider.GetRequiredService<WebViewRunEventPublisher>());
+                provider.GetRequiredService<IDesktopRunExecutorLeaseFactory>()
+                    .Should().BeOfType<ScopedDesktopRunExecutorLeaseFactory>();
+                scope.ServiceProvider.GetRequiredService<IDesktopRunService>().Should().NotBeNull();
+                scope.ServiceProvider.GetRequiredService<IDesktopRunExecutor>().Should().NotBeNull();
+                scope.ServiceProvider.GetRequiredService<IMailboxScanner>().Should().BeOfType<MailKitMailboxScanner>();
+                scope.ServiceProvider.GetRequiredService<IRunCoordinator>().Should().NotBeNull();
+                scope.ServiceProvider.GetRequiredService<IRunLifecycleStore>().Should().NotBeNull();
+                scope.ServiceProvider.GetRequiredService<IRunCheckpointStore>().Should().NotBeNull();
+                scope.ServiceProvider.GetRequiredService<IEventReplayStore>().Should().NotBeNull();
+                scope.ServiceProvider.GetRequiredService<IAuditEventStore>().Should().NotBeNull();
+                scope.ServiceProvider.GetRequiredService<IReportRunDataSource>().Should().BeOfType<EfReportRunDataStore>();
+                scope.ServiceProvider.GetRequiredService<IReportPathStore>()
+                    .Should().BeSameAs(scope.ServiceProvider.GetRequiredService<IReportRunDataSource>());
+                scope.ServiceProvider.GetRequiredService<IReportExporter>().Should().BeOfType<ClosedXmlReportExporter>();
+                scope.ServiceProvider.GetRequiredService<IReportOpenTokenStore>().Should().NotBeNull();
+                scope.ServiceProvider.GetRequiredService<IReportApplicationService>().Should().BeOfType<ReportApplicationService>();
+                scope.ServiceProvider.GetRequiredService<IReportExportStage>().Should().BeOfType<ReportExportStage>();
+                scope.ServiceProvider.GetRequiredService<RunResultsQueryService>().Should().NotBeNull();
+                scope.ServiceProvider.GetRequiredService<RunContextRpcHandler>().Should().NotBeNull();
+                scope.ServiceProvider.GetRequiredService<RunStartRpcHandler>().Should().NotBeNull();
+                scope.ServiceProvider.GetRequiredService<RunStatusRpcHandler>().Should().NotBeNull();
+                scope.ServiceProvider.GetRequiredService<RunStopRpcHandler>().Should().NotBeNull();
+                scope.ServiceProvider.GetRequiredService<ReportExportRpcHandler>().Should().NotBeNull();
+                scope.ServiceProvider.GetRequiredService<RunResultsGetRpcHandler>().Should().NotBeNull();
+                await using var secondScope = provider.CreateAsyncScope();
+                secondScope.ServiceProvider.GetRequiredService<ActiveRunRegistry>()
+                    .Should().BeSameAs(scope.ServiceProvider.GetRequiredService<ActiveRunRegistry>());
+                secondScope.ServiceProvider.GetRequiredService<IDesktopRunService>()
+                    .Should().NotBeSameAs(scope.ServiceProvider.GetRequiredService<IDesktopRunService>());
+
                 var settings = await scope.ServiceProvider.GetRequiredService<IUserSettingsStore>()
                     .LoadAsync(CancellationToken.None);
 
@@ -42,7 +101,7 @@ public sealed class AppServiceProviderFactoryTests
     }
 
     [Fact]
-    public async Task Settings_slice_dispatches_through_scopes_without_exposing_secrets_or_run_methods()
+    public async Task Typed_rpc_surface_dispatches_without_exposing_secrets_or_legacy_methods()
     {
         var appDataDirectory = Path.Combine(Path.GetTempPath(), $"invoiceflow-rpc-{Guid.NewGuid():N}");
         try
@@ -90,7 +149,44 @@ public sealed class AppServiceProviderFactoryTests
 
                 var directory = await DispatchAsync(dispatcher, "directory.choose", parameters: null);
                 directory.GetProperty("cancelled").GetBoolean().Should().BeTrue();
-                dispatcher.RegisteredMethods.Should().NotContain("run.start");
+                dispatcher.RegisteredMethods.Should().Contain("run.start");
+                dispatcher.RegisteredMethods.Should().Contain("run.results.get");
+                dispatcher.RegisteredMethods.Should().Contain([
+                    "run.folder.open",
+                    "run.manual-review.open",
+                    "run.file.open",
+                    "window.minimize",
+                    "window.maximize",
+                    "window.close",
+                ]);
+
+                var unavailableFolder = await DispatchAsync(dispatcher, "run.folder.open", parameters: null);
+                unavailableFolder.GetProperty("succeeded").GetBoolean().Should().BeFalse();
+
+                var context = await DispatchAsync(dispatcher, "run.context.get", parameters: null);
+                context.GetProperty("explicitRunContext").GetBoolean().Should().BeFalse();
+
+                var status = await DispatchAsync(dispatcher, "run.progress.get", parameters: null);
+                status.GetProperty("isRunning").GetBoolean().Should().BeFalse();
+
+                var invalidStart = await dispatcher.DispatchAsync(
+                    new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, "invalid-run", "run.start", null),
+                    CancellationToken.None);
+                invalidStart.Ok.Should().BeFalse();
+                invalidStart.Error!.Code.Should().Be(RpcDispatcher.InvalidParamsCode);
+
+                var missingReport = await dispatcher.DispatchAsync(
+                    new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, "missing-report", "run.report.export",
+                        JsonSerializer.SerializeToElement(new ReportExportRequest("missing-run"), JsonOptions.Default)),
+                    CancellationToken.None);
+                missingReport.Ok.Should().BeFalse();
+                missingReport.Error!.Code.Should().Be(RpcErrorCodes.ReportExportFailed);
+
+                var missingResults = await dispatcher.DispatchAsync(
+                    new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, "missing-results", "run.results.get", null),
+                    CancellationToken.None);
+                missingResults.Ok.Should().BeFalse();
+                missingResults.Error!.Code.Should().Be(RpcErrorCodes.RunNotFound);
             }
         }
         finally
@@ -112,5 +208,10 @@ public sealed class AppServiceProviderFactoryTests
             CancellationToken.None);
         response.Ok.Should().BeTrue(response.Error?.UserMessage);
         return response.Result!.Value;
+    }
+
+    private sealed class TestMailboxSessionFactory : IMailboxSessionFactory
+    {
+        public IMailboxSession Create() => throw new NotSupportedException();
     }
 }

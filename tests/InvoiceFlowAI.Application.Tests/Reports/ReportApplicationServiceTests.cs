@@ -93,7 +93,33 @@ public sealed class ReportApplicationServiceTests
         var act = () => harness.Service.OpenAsync(request, CancellationToken.None);
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*absolute*");
+            .WithMessage("*output root*");
+    }
+
+    [Fact]
+    public async Task Open_rejects_path_or_hash_not_bound_to_the_persisted_report()
+    {
+        var harness = new Harness(ttl: TimeSpan.FromMinutes(5));
+        var wrongPath = NewRequest() with { ReportPath = "reports/other/report.xlsx" };
+        var wrongHash = NewRequest() with { ContentHash = "other-hash" };
+
+        var pathAct = () => harness.Service.OpenAsync(wrongPath, CancellationToken.None);
+        var hashAct = () => harness.Service.OpenAsync(wrongHash, CancellationToken.None);
+
+        await pathAct.Should().ThrowAsync<InvalidOperationException>();
+        await hashAct.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task Open_rejects_parent_traversal()
+    {
+        var harness = new Harness(ttl: TimeSpan.FromMinutes(5));
+        var request = NewRequest() with { ReportPath = "reports/run-1/../../secrets.json" };
+
+        var act = () => harness.Service.OpenAsync(request, CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*output root*");
     }
 
     [Fact]
@@ -110,6 +136,20 @@ public sealed class ReportApplicationServiceTests
         result.ContentHash.Should().NotBeNullOrEmpty();
         harness.PathStore.LastSavedRunId.Should().Be("run-1");
         harness.PathStore.LastSavedHash.Should().Be(result.ContentHash);
+    }
+
+    [Fact]
+    public async Task Export_uses_persisted_candidate_counts_in_summary()
+    {
+        var harness = new Harness(ttl: TimeSpan.FromMinutes(5));
+        harness.DataSource.Setup(NewRunData());
+
+        await harness.Service.ExportAsync(new ReportExportRequest("run-1"), CancellationToken.None);
+
+        harness.Exporter.LastWorkItem!.Summary.Should().Be(new ReportSummaryRow(
+            "run-1", "Completed", "RUN_COMPLETED",
+            2, 3, 4, 5, 6, 7, 8, 9, 10,
+            new DateTimeOffset(2026, 9, 15, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [Fact]
@@ -138,7 +178,8 @@ public sealed class ReportApplicationServiceTests
         ManualReviews: new List<ReportManualReviewRow>().AsReadOnly(),
         FailureReasonCounts: new Dictionary<string, int>(),
         ExistingRelativePath: null,
-        ExistingContentHash: null);
+        ExistingContentHash: null,
+        CandidateCounts: new ReportCandidateCounts(2, 3, 4, 5, 6, 7, 8, 9, 10));
 
     private sealed class Harness
     {
@@ -151,6 +192,11 @@ public sealed class ReportApplicationServiceTests
             UowFactory = new FakeUowFactory();
             Service = new ReportApplicationService(
                 Exporter, PathStore, DataSource, TokenStore, UowFactory, ttl);
+            DataSource.Setup(NewRunData() with
+            {
+                ExistingRelativePath = "reports/run-1/report.xlsx",
+                ExistingContentHash = "hash-1",
+            });
         }
 
         public ReportApplicationService Service { get; }
@@ -185,11 +231,16 @@ public sealed class ReportApplicationServiceTests
 
     private sealed class FakeExporter : IReportExporter
     {
+        public ReportExportWorkItem? LastWorkItem { get; private set; }
+
         public Task<ReportExportOutcome> ExportAsync(ReportExportWorkItem workItem, CancellationToken cancellationToken)
-            => Task.FromResult(new ReportExportOutcome(
+        {
+            LastWorkItem = workItem;
+            return Task.FromResult(new ReportExportOutcome(
                 RelativePath: workItem.RelativePath,
                 ContentHash: "hash-exported",
                 AlreadyExisted: false));
+        }
     }
 
     private sealed class FakeTokenStore : IReportOpenTokenStore

@@ -50,6 +50,8 @@
            CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
         <Content Include="..\..\templates\settings_rpc.js" Link="Web\settings_rpc.js"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
+            <Content Include="..\..\templates\run_page_rpc.js" Link="Web\run_page_rpc.js"
+              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
     <Content Include="..\..\templates\bridge-bootstrap.js" Link="Web\bridge-bootstrap.js"
            CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
     <Content Include="..\..\templates\static\**" Link="Web\static\%(RecursiveDir)%(Filename)%(Extension)"

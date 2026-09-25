@@ -32,7 +32,7 @@ public sealed class ClosedXmlReportExporter : IReportExporter
     {
         ArgumentNullException.ThrowIfNull(workItem);
 
-        var absolutePath = _resolveAbsolutePath(workItem.RelativePath);
+        var absolutePath = ResolveAbsolutePath(workItem);
         var existed = await _fileSystem.FileExistsAsync(absolutePath, cancellationToken).ConfigureAwait(false);
 
         var bytes = Render(workItem);
@@ -44,6 +44,30 @@ public sealed class ClosedXmlReportExporter : IReportExporter
         var hash = ComputeCanonicalHash(workItem);
 
         return new ReportExportOutcome(workItem.RelativePath, hash, AlreadyExisted: existed);
+    }
+
+    private string ResolveAbsolutePath(ReportExportWorkItem workItem)
+    {
+        if (string.IsNullOrWhiteSpace(workItem.OutputRoot))
+        {
+            return _resolveAbsolutePath(workItem.RelativePath);
+        }
+
+        if (Path.IsPathRooted(workItem.RelativePath)
+            || workItem.RelativePath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)
+                .Any(segment => segment is "." or ".."))
+        {
+            throw new ArgumentException("Report path must stay under the output root.", nameof(workItem));
+        }
+
+        var root = Path.GetFullPath(workItem.OutputRoot);
+        var absolute = Path.GetFullPath(Path.Combine(root, workItem.RelativePath));
+        var rootPrefix = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
+        if (!absolute.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("Report path must stay under the output root.", nameof(workItem));
+        }
+        return absolute;
     }
 
     private static byte[] Render(ReportExportWorkItem workItem)
@@ -65,6 +89,29 @@ public sealed class ClosedXmlReportExporter : IReportExporter
         summary.Cell("B6").Value = workItem.Summary.ManualReviewCount;
         summary.Cell("A7").Value = "TemplateVersion";
         summary.Cell("B7").Value = workItem.TemplateVersion;
+        summary.Cell("A8").Value = "Duplicate";
+        summary.Cell("B8").Value = workItem.Summary.DuplicateCount;
+        summary.Cell("A9").Value = "Retained";
+        summary.Cell("B9").Value = workItem.Summary.RetainedCount;
+        summary.Cell("A10").Value = "Unresolved";
+        summary.Cell("B10").Value = workItem.Summary.UnresolvedCount;
+        summary.Cell("A11").Value = "Cancelled";
+        summary.Cell("B11").Value = workItem.Summary.CancelledCount;
+        summary.Cell("A12").Value = "QuotaExhausted";
+        summary.Cell("B12").Value = workItem.Summary.QuotaExhaustedCount;
+        summary.Cell("A13").Value = "AuthFailed";
+        summary.Cell("B13").Value = workItem.Summary.AuthFailedCount;
+        summary.Cell("A14").Value = "Timeout";
+        summary.Cell("B14").Value = workItem.Summary.TimeoutCount;
+        summary.Cell("A16").Value = "FailureReason";
+        summary.Cell("B16").Value = "Count";
+        var failureRow = 17;
+        foreach (var failure in workItem.Failures)
+        {
+            summary.Cell(failureRow, 1).Value = failure.ReasonCode;
+            summary.Cell(failureRow, 2).Value = failure.Count;
+            failureRow++;
+        }
 
         var invoices = workbook.Worksheets.Add("Invoices");
         invoices.Cell("A1").Value = "InvoiceId";
@@ -85,7 +132,7 @@ public sealed class ClosedXmlReportExporter : IReportExporter
         foreach (var inv in workItem.Invoices)
         {
             invoices.Cell(row, 1).Value = inv.InvoiceId;
-            invoices.Cell(row, 2).Value = inv.InvoiceDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            invoices.Cell(row, 2).Value = inv.InvoiceDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "";
             invoices.Cell(row, 3).Value = inv.Purchaser;
             invoices.Cell(row, 4).Value = inv.Seller;
             invoices.Cell(row, 5).Value = inv.Amount.ToString("0.00", CultureInfo.InvariantCulture);
@@ -148,12 +195,19 @@ public sealed class ClosedXmlReportExporter : IReportExporter
         sb.Append("s.reason=").Append(workItem.Summary.ReasonCode).Append('|');
         sb.Append("s.completed=").Append(workItem.Summary.CompletedAtUtc.UtcDateTime.ToString("o", CultureInfo.InvariantCulture)).Append('|');
         sb.Append("s.resolved=").Append(workItem.Summary.ResolvedCount).Append('|');
+        sb.Append("s.duplicate=").Append(workItem.Summary.DuplicateCount).Append('|');
+        sb.Append("s.retained=").Append(workItem.Summary.RetainedCount).Append('|');
         sb.Append("s.mr=").Append(workItem.Summary.ManualReviewCount).Append('|');
+        sb.Append("s.unresolved=").Append(workItem.Summary.UnresolvedCount).Append('|');
+        sb.Append("s.cancelled=").Append(workItem.Summary.CancelledCount).Append('|');
+        sb.Append("s.quota=").Append(workItem.Summary.QuotaExhaustedCount).Append('|');
+        sb.Append("s.auth=").Append(workItem.Summary.AuthFailedCount).Append('|');
+        sb.Append("s.timeout=").Append(workItem.Summary.TimeoutCount).Append('|');
         sb.Append("inv[");
         foreach (var inv in workItem.Invoices)
         {
             sb.Append(inv.InvoiceId).Append(',')
-              .Append(inv.InvoiceDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)).Append(',')
+              .Append(inv.InvoiceDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? string.Empty).Append(',')
               .Append(inv.Purchaser).Append(',')
               .Append(inv.Seller).Append(',')
               .Append(inv.Amount.ToString(CultureInfo.InvariantCulture)).Append(',')

@@ -29,7 +29,10 @@ public sealed class MailboxSessionFactory : IMailboxSessionFactory
 
 public sealed record MailboxSessionInfo(long UidValidity);
 
-public sealed record MailboxSearchCriteria(long? SinceUid, DateOnly? SinceDate);
+public sealed record MailboxSearchCriteria(
+    long? SinceUid,
+    DateOnly? SinceDate,
+    DateOnly? BeforeDateExclusive = null);
 
 public sealed record MailboxFetchedAttachment(
     string FileName,
@@ -39,7 +42,7 @@ public sealed record MailboxFetchedAttachment(
 
 public sealed record MailboxFetchedMessage(
     long Uid,
-    DateTimeOffset SentAtUtc,
+    DateTimeOffset? SentAtUtc,
     string Subject,
     string FromAddress,
     string BodyText,

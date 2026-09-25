@@ -28,7 +28,8 @@ public sealed record MailboxScanRequest(
     string AccountId,
     DateOnly? SinceDate,
     long? SinceUid,
-    string? UidValidity);
+    string? UidValidity,
+    DateOnly? BeforeDateExclusive = null);
 
 public sealed record MailboxScanResult(
     IReadOnlyList<MailboxMessage> Messages,

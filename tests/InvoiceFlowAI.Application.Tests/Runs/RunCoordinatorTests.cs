@@ -121,17 +121,22 @@ public sealed class RunCoordinatorTests
                 },
                 RunFailure: null,
                 FinalizerFailures: Array.Empty<RunFailure>(),
-                CompletedAtUtc: DateTimeOffset.UtcNow),
+                CompletedAtUtc: DateTimeOffset.UtcNow,
+                ReportPath: "reports/run-1/report.xlsx",
+                ReportContentHash: "report-hash"),
             CancellationToken.None);
 
         decision.Status.Should().Be(RunTerminalStatus.Completed);
         decision.FinalBarrierReached.Should().BeTrue();
         decision.ReasonCode.Should().Be(RunTerminalReasonCodes.Completed);
+        decision.TerminalEventSequence.Should().Be(4);
 
         fakes.EventStore.Count.Should().Be(1); // run.terminal event appended
         fakes.EventStore.LastType.Should().Be("run.terminal");
         fakes.AuditStore.Count.Should().Be(1);
         fakes.LifecycleStore.LastTerminalStateWritten.Should().Be(RunLifecycleState.Completed);
+        fakes.LifecycleStore.LastTerminalSummary!.ReportPath.Should().Be("reports/run-1/report.xlsx");
+        fakes.LifecycleStore.LastTerminalSummary.ReportContentHash.Should().Be("report-hash");
         fakes.UowFactory.CommitCount.Should().Be(1);
     }
 
@@ -162,6 +167,7 @@ public sealed class RunCoordinatorTests
 
         decision.Status.Should().Be(RunTerminalStatus.Completed);
         decision.FinalBarrierReached.Should().BeTrue();
+        decision.TerminalEventSequence.Should().Be(5);
         fakes.EventStore.Count.Should().Be(0);
         fakes.UowFactory.CommitCount.Should().Be(0);
     }
@@ -281,6 +287,7 @@ public sealed class RunCoordinatorTests
         private readonly Dictionary<string, RunStateSnapshot> _states = new();
         public long? LastSequenceWritten { get; private set; }
         public RunLifecycleState? LastTerminalStateWritten { get; private set; }
+    public RunSummary? LastTerminalSummary { get; private set; }
 
         public void SetState(string runId, RunStateSnapshot snapshot) => _states[runId] = snapshot;
 
@@ -290,10 +297,27 @@ public sealed class RunCoordinatorTests
             return Task.FromResult<RunStateSnapshot?>(s);
         }
 
+        public Task<bool> TryCreateAsync(RunCreationRequest request, IUnitOfWork transaction, CancellationToken cancellationToken)
+        {
+            if (_states.Values.Any(state => state.State is RunLifecycleState.Created or RunLifecycleState.Running or RunLifecycleState.Recovering))
+                return Task.FromResult(false);
+            _states[request.RunId] = new RunStateSnapshot(request.RunId, RunLifecycleState.Created, "admitted", null, 0, null, null);
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> TryMarkRunningAsync(string runId, string stage, IUnitOfWork transaction, CancellationToken cancellationToken)
+        {
+            if (!_states.TryGetValue(runId, out var state) || state.State != RunLifecycleState.Created)
+                return Task.FromResult(false);
+            _states[runId] = state with { State = RunLifecycleState.Running, Stage = stage };
+            return Task.FromResult(true);
+        }
+
         public Task UpdateTerminalStateAsync(RunStateSnapshot snapshot, IUnitOfWork transaction, CancellationToken cancellationToken)
         {
             _states[snapshot.RunId] = snapshot;
             LastTerminalStateWritten = snapshot.State;
+            LastTerminalSummary = snapshot.Summary;
             return Task.CompletedTask;
         }
 
@@ -307,13 +331,14 @@ public sealed class RunCoordinatorTests
             return Task.CompletedTask;
         }
 
-        public Task RequestCancellationAsync(string runId, DateTimeOffset requestedAtUtc, IUnitOfWork? transaction, CancellationToken cancellationToken)
+        public Task<bool> TryRequestCancellationAsync(string runId, DateTimeOffset requestedAtUtc, IUnitOfWork transaction, CancellationToken cancellationToken)
         {
-            if (_states.TryGetValue(runId, out var existing))
-            {
-                _states[runId] = existing with { CancellationRequestedAtUtc = requestedAtUtc };
-            }
-            return Task.CompletedTask;
+            if (!_states.TryGetValue(runId, out var existing)
+                || existing.State is not (RunLifecycleState.Created or RunLifecycleState.Running or RunLifecycleState.Recovering)
+                || existing.CancellationRequestedAtUtc is not null)
+                return Task.FromResult(false);
+            _states[runId] = existing with { CancellationRequestedAtUtc = requestedAtUtc };
+            return Task.FromResult(true);
         }
 
         public Task<bool> IsCancellationRequestedAsync(string runId, CancellationToken cancellationToken)

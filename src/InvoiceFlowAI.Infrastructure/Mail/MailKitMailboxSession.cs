@@ -11,6 +11,7 @@ namespace InvoiceFlowAI.Infrastructure.Mail;
 
 public sealed class MailKitMailboxSession : IMailboxSession
 {
+    private static readonly TimeZoneInfo ShanghaiTimeZone = TimeZoneInfo.FindSystemTimeZoneById("China Standard Time");
     private static readonly Regex HtmlTagPattern = new("<[^>]+>", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private readonly ImapClient _client;
     private IMailFolder? _folder;
@@ -53,12 +54,23 @@ public sealed class MailKitMailboxSession : IMailboxSession
         var uids = FilterUidsAfterCursor(
             await folder.SearchAsync(query, cancellationToken).ConfigureAwait(false),
             criteria.SinceUid);
-        var messages = new List<MailboxFetchedMessage>(uids.Count);
+        var summaries = await folder.FetchAsync(
+            uids.ToList(),
+            new FetchRequest(MessageSummaryItems.UniqueId | MessageSummaryItems.InternalDate | MessageSummaryItems.Envelope),
+            cancellationToken).ConfigureAwait(false);
+        var dateSummaries = summaries.Select(summary => new MailboxMessageDateSummary(
+            summary.UniqueId,
+            summary.Envelope?.Date,
+            summary.InternalDate)).ToArray();
+        var summaryByUid = dateSummaries.ToDictionary(summary => summary.Uid);
+        var selectedUids = FilterUidsByDateWindow(uids, dateSummaries, criteria);
+        var messages = new List<MailboxFetchedMessage>(selectedUids.Count);
 
-        foreach (var uid in uids)
+        foreach (var uid in selectedUids)
         {
+            summaryByUid.TryGetValue(uid, out var summary);
             var message = await folder.GetMessageAsync(uid, cancellationToken, null).ConfigureAwait(false);
-            messages.Add(ProjectMessage(uid.Id, message, null));
+            messages.Add(ProjectMessage(uid.Id, message, summary?.InternalDateUtc));
         }
 
         return messages;
@@ -124,13 +136,41 @@ public sealed class MailKitMailboxSession : IMailboxSession
             }
         }
 
-        if (criteria.SinceDate.HasValue)
+        return query;
+    }
+
+    internal static bool IsInDateWindow(DateTimeOffset? effectiveDate, MailboxSearchCriteria criteria)
+    {
+        ArgumentNullException.ThrowIfNull(criteria);
+        if (!effectiveDate.HasValue)
         {
-            var sinceDate = criteria.SinceDate.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-            query = query.And(SearchQuery.DeliveredOn(sinceDate).Or(SearchQuery.DeliveredAfter(sinceDate)));
+            return true;
         }
 
-        return query;
+        var localDay = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(effectiveDate.Value, ShanghaiTimeZone).DateTime);
+        return (!criteria.SinceDate.HasValue || localDay >= criteria.SinceDate.Value)
+            && (!criteria.BeforeDateExclusive.HasValue || localDay < criteria.BeforeDateExclusive.Value);
+    }
+
+    internal static IReadOnlyList<UniqueId> FilterUidsByDateWindow(
+        IReadOnlyList<UniqueId> uids,
+        IReadOnlyList<MailboxMessageDateSummary> summaries,
+        MailboxSearchCriteria criteria)
+    {
+        ArgumentNullException.ThrowIfNull(uids);
+        ArgumentNullException.ThrowIfNull(summaries);
+        ArgumentNullException.ThrowIfNull(criteria);
+
+        var byUid = summaries.ToDictionary(summary => summary.Uid);
+        return uids.Where(uid =>
+        {
+            if (!byUid.TryGetValue(uid, out var summary))
+            {
+                return true;
+            }
+
+            return IsInDateWindow(summary.HeaderDateUtc ?? summary.InternalDateUtc, criteria);
+        }).ToArray();
     }
 
     internal static string ExtractBodyText(MimeMessage message)
@@ -251,14 +291,14 @@ public sealed class MailKitMailboxSession : IMailboxSession
         return part.IsAttachment ? ContentDisposition.Attachment : ContentDisposition.Inline;
     }
 
-    private static DateTimeOffset ResolveSentAtUtc(MimeMessage message, DateTimeOffset? internalDateUtc)
+    private static DateTimeOffset? ResolveSentAtUtc(MimeMessage message, DateTimeOffset? internalDateUtc)
     {
-        if (internalDateUtc.HasValue)
+        if (message.Date != default)
         {
-            return internalDateUtc.Value.ToUniversalTime();
+            return message.Date.ToUniversalTime();
         }
 
-        return message.Date == default ? DateTimeOffset.MinValue : message.Date.ToUniversalTime();
+        return internalDateUtc?.ToUniversalTime();
     }
 
     private static string ResolveFromAddress(MimeMessage message)
@@ -270,3 +310,8 @@ public sealed class MailKitMailboxSession : IMailboxSession
     private static string NormalizeWhitespace(string text)
         => string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }
+
+internal sealed record MailboxMessageDateSummary(
+    UniqueId Uid,
+    DateTimeOffset? HeaderDateUtc,
+    DateTimeOffset? InternalDateUtc);

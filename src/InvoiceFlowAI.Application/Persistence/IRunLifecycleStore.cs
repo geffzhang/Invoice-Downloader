@@ -3,11 +3,24 @@
 // LastEventSequence cursor that event-replay depends on. The application
 // layer never sees the EF row types.
 
+using InvoiceFlowAI.Domain.Runs;
+
 namespace InvoiceFlowAI.Application.Persistence;
 
 public interface IRunLifecycleStore
 {
     Task<RunStateSnapshot?> FindAsync(string runId, CancellationToken cancellationToken);
+
+    Task<bool> TryCreateAsync(
+        RunCreationRequest request,
+        IUnitOfWork transaction,
+        CancellationToken cancellationToken);
+
+    Task<bool> TryMarkRunningAsync(
+        string runId,
+        string stage,
+        IUnitOfWork transaction,
+        CancellationToken cancellationToken);
 
     Task UpdateTerminalStateAsync(
         RunStateSnapshot snapshot,
@@ -20,14 +33,29 @@ public interface IRunLifecycleStore
         IUnitOfWork transaction,
         CancellationToken cancellationToken);
 
-    Task RequestCancellationAsync(
+    Task<bool> TryRequestCancellationAsync(
         string runId,
         DateTimeOffset requestedAtUtc,
-        IUnitOfWork? transaction,
+        IUnitOfWork transaction,
         CancellationToken cancellationToken);
 
     Task<bool> IsCancellationRequestedAsync(string runId, CancellationToken cancellationToken);
 }
+
+public sealed record RunCreationRequest(
+    string RunId,
+    DateOnly DateFrom,
+    DateOnly DateToExclusive,
+    string? AccountId,
+    int? AccountRevision,
+    string? Mailbox,
+    string? OutputRoot,
+    int? SettingsRevision,
+    string? RuleSetId,
+    int? RuleSetVersion,
+    string? ConfigurationFingerprint,
+    string? RecipeVersion,
+    DateTimeOffset StartedAtUtc);
 
 public enum RunLifecycleState
 {
@@ -48,4 +76,5 @@ public sealed record RunStateSnapshot(
     string? TerminalReasonCode,
     long LastEventSequence,
     DateTimeOffset? EndedAtUtc,
-    DateTimeOffset? CancellationRequestedAtUtc);
+    DateTimeOffset? CancellationRequestedAtUtc,
+    RunSummary? Summary = null);
