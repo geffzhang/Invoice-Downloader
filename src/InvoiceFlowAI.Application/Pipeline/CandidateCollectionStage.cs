@@ -53,6 +53,12 @@ public sealed class CandidateCollectionStage : ICandidateCollectionStage
 
             var candidateSequence = sequence++;
             var candidate = CreateCandidate(input, source, identity, candidateSequence);
+            if (source.UrlCandidates is { } sourceUrls && sourceUrls.Any(static url => !IsValidHttpUrl(url.SourceUrl)))
+            {
+                terminalResults.Add(Terminal(candidate, CandidateStatus.ManualReview, "MALFORMED_URL_CANDIDATE"));
+                continue;
+            }
+
             if (!seenIdentities.Add(identity.Value))
             {
                 terminalResults.Add(Terminal(candidate, CandidateStatus.Duplicate, "CURRENT_RUN_DUPLICATE_SKIP"));
@@ -264,7 +270,7 @@ public sealed class CandidateCollectionStage : ICandidateCollectionStage
             0,
             0,
             "url",
-            url.SourceUrl,
+            IsValidHttpUrl(url.SourceUrl) ? url.SourceUrl : null,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["mailbox"] = url.Mailbox,
@@ -272,6 +278,10 @@ public sealed class CandidateCollectionStage : ICandidateCollectionStage
                 ["provider_group_id"] = url.ProviderGroupId,
             });
     }
+
+    private static bool IsValidHttpUrl(Uri sourceUrl)
+        => sourceUrl.IsAbsoluteUri
+            && (sourceUrl.Scheme == Uri.UriSchemeHttp || sourceUrl.Scheme == Uri.UriSchemeHttps);
 
     private static bool IsCwtSource(MailboxScanResult scan, string mailbox, string messageUid)
     {

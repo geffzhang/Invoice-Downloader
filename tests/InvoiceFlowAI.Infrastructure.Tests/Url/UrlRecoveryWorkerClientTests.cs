@@ -29,6 +29,29 @@ public sealed class UrlRecoveryWorkerClientTests : IDisposable
     }
 
     [Fact]
+    public async Task Cleanup_failure_overrides_success_with_safe_failure()
+    {
+        var runner = new FakeRunner(artifactBytes: Encoding.ASCII.GetBytes("%PDF-1.7 worker"));
+        var client = new UrlRecoveryWorkerClient(
+            runner,
+            new UrlRecoveryWorkerManifestStore(),
+            _root,
+            TimeSpan.FromSeconds(2),
+            _ => false);
+        var group = Group("https://files.example/invoice.pdf?token=source-secret&cookie=cookie-secret&header=header-secret");
+
+        var act = () => client.RecoverAsync(group, CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<UrlRecoveryException>();
+        exception.Which.ReasonCode.Should().Be("URL_RECOVERY_WORKER_CLEANUP_FAILED");
+        exception.Which.ToString().Should().NotContain("files.example");
+        exception.Which.ToString().Should().NotContain("source-secret");
+        exception.Which.ToString().Should().NotContain("cookie-secret");
+        exception.Which.ToString().Should().NotContain("header-secret");
+        Directory.Exists(runner.JobDirectory).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task Rejects_digest_mismatch_and_cleans_job_directory()
     {
         var runner = new FakeRunner(artifactBytes: Encoding.ASCII.GetBytes("%PDF-1.7 worker"), corruptDigest: true);
@@ -112,9 +135,9 @@ public sealed class UrlRecoveryWorkerClientTests : IDisposable
     private UrlRecoveryWorkerClient NewClient(FakeRunner runner)
         => new(runner, new UrlRecoveryWorkerManifestStore(), _root, TimeSpan.FromSeconds(2));
 
-    private static UrlCandidateGroup Group()
+    private static UrlCandidateGroup Group(string sourceUrl = "https://files.example/invoice.pdf")
     {
-        var candidate = new MailboxUrlCandidate("acct", "INBOX", "1", "1", new Uri("https://files.example/invoice.pdf"),
+        var candidate = new MailboxUrlCandidate("acct", "INBOX", "1", "1", new Uri(sourceUrl),
             "unknown", "opaque-group", new Dictionary<string, string>(), 0);
         return new UrlCandidateGroup("unknown", [candidate], new Dictionary<string, string>(),
             new Dictionary<string, IReadOnlyList<ExpectedFieldEvidence>>(), DocumentIdentity.Create("opaque-group"));

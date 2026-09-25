@@ -102,6 +102,30 @@ public sealed class CandidateCollectionStageTests
     }
 
     [Fact]
+    public async Task Retains_malformed_unknown_provider_url_for_manual_review()
+    {
+        var identityFactory = new CandidateIdentityFactory(new FixedIdentityKeyProvider());
+        var stage = new CandidateCollectionStage(identityFactory, new FakeHistoryReader());
+        var malformed = Url("message-1", 0, "https://fixture.invalid/placeholder") with
+        {
+            SourceUrl = new Uri("malformed relative url", UriKind.Relative),
+            ProviderFamily = string.Empty,
+        };
+
+        var batch = await stage.ExecuteAsync(
+            Scan([Message("message-1")], Array.Empty<MailboxAttachmentCandidate>(), [malformed]),
+            CancellationToken.None);
+
+        batch.Items.Should().BeEmpty();
+        batch.EffectiveTerminalResults.Should().ContainSingle();
+        var result = batch.EffectiveTerminalResults[0];
+        result.Status.Should().Be(CandidateStatus.ManualReview);
+        result.Failure!.ReasonCode.Should().Be("MALFORMED_URL_CANDIDATE");
+        result.Candidate.SourceUrl.Should().BeNull();
+        result.Candidate.DocumentId.Value.Should().NotContain("malformed relative url");
+    }
+
+    [Fact]
     public async Task Coalesces_run_duplicates_and_omits_candidates_found_in_history()
     {
         var history = new FakeHistoryReader("identity-history.pdf");
@@ -206,6 +230,12 @@ public sealed class CandidateCollectionStageTests
             ReadOnlyMemory<byte> content,
             CancellationToken cancellationToken)
             => Task.FromResult(DocumentIdentity.Create($"recovered:{sourceGroupIdentity.Value}:{kind}:{content.Length}"));
+    }
+
+    private sealed class FixedIdentityKeyProvider : ICandidateIdentityKeyProvider
+    {
+        public Task<CandidateIdentityKey> GetCurrentKeyAsync(CancellationToken cancellationToken)
+            => Task.FromResult(new CandidateIdentityKey("test", Enumerable.Range(1, 32).Select(value => (byte)value).ToArray()));
     }
 
     private sealed class FakeHistoryReader(params string[] fileNames) : ICandidateHistoryReader

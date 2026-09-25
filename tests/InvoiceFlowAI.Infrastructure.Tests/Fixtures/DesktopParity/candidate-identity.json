@@ -1,0 +1,35 @@
+{
+  "cases": [
+    {
+      "caseId": "provider-group-order-independent",
+      "accountId": "account-fixture",
+      "mailbox": "INBOX",
+      "uidValidity": "validity-fixture",
+      "messageUid": "uid-fixture",
+      "providerFamily": "synthetic_provider",
+      "urls": [
+        "https://fixture.invalid/first?token=synthetic-one",
+        "https://fixture.invalid/second?token=synthetic-two"
+      ],
+      "expectedIdentityPrefix": "g2_",
+      "mustNotContain": [
+        "fixture.invalid",
+        "synthetic-one",
+        "synthetic-two"
+      ]
+    },
+    {
+      "caseId": "malformed-url-retained-for-review",
+      "accountId": "account-fixture",
+      "mailbox": "INBOX",
+      "uidValidity": "validity-fixture",
+      "messageUid": "uid-fixture",
+      "providerFamily": "",
+      "urls": ["malformed synthetic relative marker"],
+      "expectedIdentityPrefix": "g2_",
+      "mustNotContain": ["malformed synthetic relative marker"],
+      "expectedStatus": "ManualReview",
+      "expectedReasonCode": "MALFORMED_URL_CANDIDATE"
+    }
+  ]
+}

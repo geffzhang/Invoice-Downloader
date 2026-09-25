@@ -12,15 +12,27 @@ public sealed class UrlRecoveryWorkerClient : IUrlRecoveryClient
     private readonly UrlRecoveryWorkerManifestStore _manifestStore;
     private readonly string _jobRoot;
     private readonly TimeSpan _timeout;
+    private readonly Func<string, bool> _cleanupJobDirectory;
 
     public UrlRecoveryWorkerClient(
         IUrlRecoveryWorkerProcessRunner processRunner,
         UrlRecoveryWorkerManifestStore manifestStore,
         string? jobRoot = null,
         TimeSpan? timeout = null)
+        : this(processRunner, manifestStore, jobRoot, timeout, TryDeleteJobDirectory)
+    {
+    }
+
+    internal UrlRecoveryWorkerClient(
+        IUrlRecoveryWorkerProcessRunner processRunner,
+        UrlRecoveryWorkerManifestStore manifestStore,
+        string? jobRoot,
+        TimeSpan? timeout,
+        Func<string, bool> cleanupJobDirectory)
     {
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _manifestStore = manifestStore ?? throw new ArgumentNullException(nameof(manifestStore));
+        _cleanupJobDirectory = cleanupJobDirectory ?? throw new ArgumentNullException(nameof(cleanupJobDirectory));
         _jobRoot = Path.GetFullPath(jobRoot ?? Path.Combine(Path.GetTempPath(), "InvoiceFlowAI", "url-recovery"));
         _timeout = timeout ?? TimeSpan.FromMinutes(2);
         if (_timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
@@ -158,7 +170,7 @@ public sealed class UrlRecoveryWorkerClient : IUrlRecoveryClient
         }
         finally
         {
-            if (!TryDeleteJobDirectory(jobDirectory))
+            if (!_cleanupJobDirectory(jobDirectory))
             {
                 throw new UrlRecoveryException("URL_RECOVERY_WORKER_CLEANUP_FAILED", "Invoice recovery temporary data could not be removed.", false, false);
             }
