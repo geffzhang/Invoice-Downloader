@@ -47,6 +47,31 @@ public sealed class ArchiveRecoveryServiceTests
     }
 
     [Fact]
+    public async Task Temp_present_with_different_hash_remains_untouched_and_recovery_required()
+    {
+        var fakes = SetupPrepared(content: "archive-content");
+        await fakes.FileSystem.DeleteAsync(FinalFilePath, CancellationToken.None);
+        fakes.FileSystem.WriteFile("temp-1.bin", "tampered-temp-bytes");
+        var recovery = new ArchiveRecoveryService(
+            fakes.UowFactory, fakes.Store, fakes.FileSystem, fakes.AuditStore, fakes.PairingStore);
+
+        var entries = await recovery.ScanAsync("run-1", CancellationToken.None);
+        var decision = await recovery.ResolveAsync(entries[0], CancellationToken.None);
+        var snapshots = await fakes.Store.ListByRunAsync("run-1", CancellationToken.None);
+
+        decision.ResolvedState.Should().Be(ArchiveArtifactState.RecoveryRequired);
+        decision.ReasonCode.Should().Be("ARCHIVE_TEMP_HASH_MISMATCH");
+        (await fakes.FileSystem.FileExistsAsync(FinalFilePath, CancellationToken.None)).Should().BeFalse();
+        (await fakes.FileSystem.FileExistsAsync("temp-1.bin", CancellationToken.None)).Should().BeTrue();
+        (await fakes.FileSystem.ComputeSha256Async("temp-1.bin", CancellationToken.None))
+            .Should().NotBe(entries[0].ExpectedContentHash);
+        snapshots.Should().ContainSingle().Which.State.Should().Be(ArchiveArtifactState.RecoveryRequired);
+        fakes.AuditStore.Count.Should().Be(0);
+        fakes.PairingStore.ReconciledSnapshots.Should().ContainSingle()
+            .Which.State.Should().Be(ArchiveArtifactState.RecoveryRequired);
+    }
+
+    [Fact]
     public async Task Only_temp_present_removes_temp_and_marks_committed()
     {
         var fakes = SetupPrepared(content: "archive-content");
@@ -233,6 +258,9 @@ public sealed class ArchiveRecoveryServiceTests
             _files.Remove(path);
             return Task.CompletedTask;
         }
+
+        public Task WriteTextAtomicAsync(string path, string content, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
     }
 
     private sealed class FakeArchiveArtifactStore : IArchiveArtifactStore
@@ -274,6 +302,10 @@ public sealed class ArchiveRecoveryServiceTests
             _byKey[KeyOf(existing.Key)] = _byId[artifactId];
             return Task.CompletedTask;
         }
+
+        public Task UpdateCommittedLocationAsync(string artifactId, string relativePath, string finalPath, string fileName,
+            IUnitOfWork transaction, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
 
         public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListByRunAsync(string runId, CancellationToken cancellationToken)
             => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(_byId.Values.Where(s => s.Key.RunId == runId).ToList());

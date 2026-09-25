@@ -46,6 +46,81 @@ public sealed class NuonuoScanRecoveryStrategyTests
         result.SelectedArtifact.Should().BeSameAs(result.Artifacts[0]);
     }
 
+    [Fact]
+    public async Task Maps_invalid_detail_json_to_safe_failure()
+    {
+        var transport = new FakeTransport(
+            Response("text/html", []),
+            Response("application/json", Encoding.UTF8.GetBytes("{")));
+
+        var act = () => NewStrategy(transport).RecoverAsync(Group(), CancellationToken.None);
+
+        await act.Should().ThrowAsync<UrlRecoveryException>()
+            .Where(exception => exception.ReasonCode == "NUONUO_DETAIL_API_INVALID_RESPONSE");
+    }
+
+    [Theory]
+    [InlineData("{\"status\":\"1001\"}", "NUONUO_DETAIL_API_UNSUCCESSFUL")]
+    [InlineData("{\"status\":\"0000\",\"data\":{\"invoiceSimpleVo\":{}}}", "NUONUO_ARTIFACT_DOWNLOAD_FAILED")]
+    public async Task Maps_unsuccessful_or_empty_detail_response_to_safe_failure(string body, string reasonCode)
+    {
+        var transport = new FakeTransport(
+            Response("text/html", []),
+            Response("application/json", Encoding.UTF8.GetBytes(body)));
+
+        var act = () => NewStrategy(transport).RecoverAsync(Group(), CancellationToken.None);
+
+        await act.Should().ThrowAsync<UrlRecoveryException>()
+            .Where(exception => exception.ReasonCode == reasonCode);
+    }
+
+    [Fact]
+    public async Task Deduplicates_duplicate_artifact_urls_before_download()
+    {
+        const string detailJson = "{\"status\":\"0000\",\"data\":{\"invoiceSimpleVo\":{\"xmlUrl\":\"https://files.example/invoice.pdf\",\"url\":\"https://files.example/invoice.pdf\"}}}";
+        var transport = new FakeTransport(
+            Response("text/html", []),
+            Response("application/json", Encoding.UTF8.GetBytes(detailJson)),
+            Response("application/pdf", Encoding.ASCII.GetBytes("%PDF-1.7\nfixture")));
+
+        var result = await NewStrategy(transport).RecoverAsync(Group(), CancellationToken.None);
+
+        result.Artifacts.Should().ContainSingle().Which.Kind.Should().Be(RecoveredArtifactKind.Pdf);
+        transport.Requests.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public async Task Rejects_multiple_valid_pdfs_as_ambiguous()
+    {
+        const string detailJson = "{\"status\":\"0000\",\"data\":{\"invoiceSimpleVo\":{\"xmlUrl\":\"https://files.example/first.pdf\",\"url\":\"https://files.example/second.pdf\"}}}";
+        var transport = new FakeTransport(
+            Response("text/html", []),
+            Response("application/json", Encoding.UTF8.GetBytes(detailJson)),
+            Response("application/pdf", Encoding.ASCII.GetBytes("%PDF-1.7\nfirst")),
+            Response("application/pdf", Encoding.ASCII.GetBytes("%PDF-1.7\nsecond")));
+
+        var act = () => NewStrategy(transport).RecoverAsync(Group(), CancellationToken.None);
+
+        await act.Should().ThrowAsync<UrlRecoveryException>()
+            .Where(exception => exception.ReasonCode == "NUONUO_ARTIFACT_SELECTION_AMBIGUOUS");
+    }
+
+    [Fact]
+    public async Task Selects_valid_xml_when_pdf_download_fails()
+    {
+        const string detailJson = "{\"status\":\"0000\",\"data\":{\"invoiceSimpleVo\":{\"xmlUrl\":\"https://files.example/invoice.xml\",\"url\":\"https://files.example/invoice.pdf\"}}}";
+        var transport = new FakeTransport(
+            Response("text/html", []),
+            Response("application/json", Encoding.UTF8.GetBytes(detailJson)),
+            Response("application/xml", Encoding.UTF8.GetBytes("<?xml version=\"1.0\"?><invoice />")),
+            new UrlTransportResponse(HttpStatusCode.ServiceUnavailable, ReadOnlyMemory<byte>.Empty, "text/plain", null));
+
+        var result = await NewStrategy(transport).RecoverAsync(Group(), CancellationToken.None);
+
+        result.Artifacts.Should().ContainSingle().Which.Kind.Should().Be(RecoveredArtifactKind.Xml);
+        result.SelectedArtifact.Should().BeSameAs(result.Artifacts[0]);
+    }
+
     private static NuonuoScanRecoveryStrategy NewStrategy(FakeTransport transport)
     {
         var policy = new PublicUrlPolicy((_, _) => Task.FromResult<IReadOnlyList<IPAddress>>([IPAddress.Parse("203.0.114.7")]));

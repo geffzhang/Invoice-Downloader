@@ -125,19 +125,19 @@ public sealed class EfPairingStore : IPairingStore
 
         foreach (var member in members)
         {
-            var evidence = artifacts.FirstOrDefault(artifact =>
+            var evidence = artifacts.Where(artifact =>
                 artifact.Key.RunId == runId
                 && artifact.Key.DocumentId == member.DocumentId
-                && artifact.Key.ProcessingRevision == member.Revision);
-            if (evidence is null)
+                && artifact.Key.ProcessingRevision == member.Revision).ToArray();
+            if (evidence.Length == 0)
             {
                 return "PAIR_ARCHIVE_MEMBER_EVIDENCE_MISSING";
             }
-            if (evidence.State == ArchiveArtifactState.RecoveryRequired)
+            if (evidence.Any(artifact => artifact.State == ArchiveArtifactState.RecoveryRequired))
             {
                 return "PAIR_ARCHIVE_MEMBER_RECOVERY_REQUIRED";
             }
-            if (evidence.State != ArchiveArtifactState.Committed)
+            if (evidence.Any(artifact => artifact.State != ArchiveArtifactState.Committed))
             {
                 return "PAIR_ARCHIVE_MEMBER_PREPARED";
             }

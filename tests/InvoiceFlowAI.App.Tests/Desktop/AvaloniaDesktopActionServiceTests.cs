@@ -235,6 +235,8 @@ public sealed class AvaloniaDesktopActionServiceTests
         public Task InsertPreparedAsync(ArchiveArtifactSnapshot snapshot, IUnitOfWork transaction, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task MarkCommittedAsync(string artifactId, DateTimeOffset committedAtUtc, IUnitOfWork transaction, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task MarkRecoveryRequiredAsync(string artifactId, string reasonCode, IUnitOfWork transaction, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task UpdateCommittedLocationAsync(string artifactId, string relativePath, string finalPath, string fileName,
+            IUnitOfWork transaction, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListByRunAsync(string runId, CancellationToken cancellationToken)
             => Task.FromResult<IReadOnlyList<ArchiveArtifactSnapshot>>(Artifacts.Where(item => item.Key.RunId == runId).ToArray());
     }

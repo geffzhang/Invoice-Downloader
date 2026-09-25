@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using FluentAssertions;
 using InvoiceFlowAI.Application.Archive;
 using InvoiceFlowAI.Application.Pairing;
@@ -78,6 +79,76 @@ public sealed class DocumentArchivingStageIntegrationTests : IClassFixture<Sqlit
         {
             DeleteSource(invoiceSource);
             DeleteSource(companionSource);
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Cwt_match_moves_hotel_confirmation_and_updates_persisted_review_and_artifact_state()
+    {
+        await _fixture.ResetAsync();
+        const string runId = "run-real-cwt";
+        const string cancellationName = "酒店预定取消知会-张三-20260610入住-上海.pdf";
+        const string hotelName = "20260610_住宿确认单_张三酒店.pdf";
+        const string cancellationContent = "synthetic CWT cancellation";
+        const string hotelContent = "synthetic CWT hotel confirmation";
+        var cancellationSource = CreateSource(cancellationName, cancellationContent);
+        var hotelSource = CreateSource(hotelName, hotelContent);
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"invoice-flow-real-cwt-output-{Guid.NewGuid():N}");
+        try
+        {
+            await SeedRunAndDocumentsAsync(runId, "cwt-cancel", "cwt-hotel");
+            await using var context = _fixture.CreateContext();
+            var uowFactory = new EfUnitOfWorkFactory(context);
+            var fileSystem = new PhysicalArchiveFileSystem();
+            var archiveStore = new EfArchiveArtifactStore(context);
+            var pairingStore = new EfPairingStore(context);
+            var auditStore = new EfAuditStore(context);
+            var finalizer = new CwtCancellationFinalizer(
+                new ArchiveNamingPolicy(), archiveStore, fileSystem,
+                new EfManualReviewItemStore(context), uowFactory, pairingStore, auditStore);
+            var coordinator = new ArchiveCommitCoordinator(uowFactory, archiveStore, fileSystem, auditStore);
+            var stage = new DocumentArchivingStage(
+                new ArchiveNamingPolicy(), coordinator, fileSystem, pairingStore,
+                new EfManualReviewItemStore(context), uowFactory, finalizer);
+            var cancellation = NewResult("cwt-cancel", cancellationSource, InvoiceDocumentType.AccommodationConfirmation, cancellationContent)
+                with
+                {
+                    Candidate = NewResult("cwt-cancel", cancellationSource, InvoiceDocumentType.AccommodationConfirmation, cancellationContent)
+                        .Candidate with { Metadata = new Dictionary<string, string> { ["source_is_cwt"] = "true" } },
+                };
+            var hotel = NewResult("cwt-hotel", hotelSource, InvoiceDocumentType.AccommodationConfirmation, hotelContent);
+
+            var result = await stage.ExecuteAsync(
+                new ArchiveStageRequest(runId, outputRoot, new PairingBatch([], [cancellation, hotel])),
+                CancellationToken.None);
+
+            result.Results.Single(item => item.Candidate.DocumentId.Value == "cwt-hotel").Status.Should().Be(CandidateStatus.ManualReview);
+            result.Results.Single(item => item.Candidate.DocumentId.Value == "cwt-hotel").Failure!.ReasonCode.Should().Be("CWT_CANCELLATION_MATCH");
+            result.Artifacts.Single(item => item.DocumentId == "cwt-hotel").RelativePath.Should().Contain("/review/");
+            await using var queryContext = _fixture.CreateContext();
+            var hotelArtifact = await queryContext.ArchivedArtifacts.AsNoTracking().SingleAsync(row => row.DocumentId == "cwt-hotel");
+            hotelArtifact.State.Should().Be("Committed");
+            hotelArtifact.RelativePath.Should().Contain("/review/");
+            hotelArtifact.ContentHash.Should().Be(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(hotelContent))).ToLowerInvariant());
+            var reviewReasons = await queryContext.ManualReviewItems.AsNoTracking()
+                .Where(row => row.RunId == runId && row.DocumentId == "cwt-hotel")
+                .Select(row => row.ReasonCode)
+                .ToListAsync();
+            reviewReasons.Should().ContainSingle().Which.Should().Be("CWT_CANCELLATION_MATCH");
+            var cwtAudit = await queryContext.AuditEvents.AsNoTracking()
+                .Where(row => row.RunId == runId && row.ReasonCode == "CWT_CANCELLATION_MATCH")
+                .ToListAsync();
+            cwtAudit.Should().ContainSingle();
+            var movedPath = Path.Combine(outputRoot, hotelArtifact.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+            File.Exists(movedPath).Should().BeTrue();
+            var sidecar = await File.ReadAllTextAsync($"{movedPath}.json");
+            sidecar.Should().Contain("cwt-cancel").And.Contain("cwt-hotel").And.NotContain("张三");
+        }
+        finally
+        {
+            DeleteSource(cancellationSource);
+            DeleteSource(hotelSource);
             if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, recursive: true);
         }
     }

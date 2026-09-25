@@ -91,6 +91,30 @@ public sealed class EfArchiveArtifactStore : IArchiveArtifactStore
         await Task.CompletedTask;
     }
 
+    public async Task UpdateCommittedLocationAsync(
+        string artifactId,
+        string relativePath,
+        string finalPath,
+        string fileName,
+        IUnitOfWork transaction,
+        CancellationToken cancellationToken)
+    {
+        if (transaction is not EfUnitOfWork)
+        {
+            throw new InvalidOperationException("ArchiveArtifactStore writes must use EfUnitOfWork.");
+        }
+        var row = await _context.ArchivedArtifacts
+            .FirstOrDefaultAsync(artifact => artifact.ArtifactId == artifactId, cancellationToken)
+            .ConfigureAwait(false);
+        if (row is null || row.State != "Committed")
+        {
+            throw new InvalidOperationException("Only a committed archive artifact can change location.");
+        }
+        row.RelativePath = relativePath;
+        row.FinalFilePath = finalPath;
+        row.FileName = fileName;
+    }
+
     public async Task<IReadOnlyList<ArchiveArtifactSnapshot>> ListByRunAsync(string runId, CancellationToken cancellationToken)
     {
         var rows = await _context.ArchivedArtifacts

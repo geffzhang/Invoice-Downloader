@@ -105,12 +105,19 @@ public sealed class DirectArtifactProbe
         int sourceOrdinal,
         string? expectedInvoiceNumber)
     {
+        var indicatedKind = InferKind(response.ContentType, resolvedUrl);
+        if (indicatedKind == RecoveredArtifactKind.Ofd
+            && PublicUrlRecoveryClient.HasValidArtifactSignature(response.Content, Score(RecoveredArtifactKind.Ofd)))
+        {
+            return [CreateArtifact(RecoveredArtifactKind.Ofd, response.Content, response.ContentType, resolvedUrl, sourceOrdinal)];
+        }
+
         if (response.Content.Span.StartsWith("PK\u0003\u0004"u8))
         {
             return CaptureArchive(response.Content, resolvedUrl, sourceUrl, sourceOrdinal, expectedInvoiceNumber);
         }
 
-        var kind = InferKind(response.ContentType, resolvedUrl);
+        var kind = indicatedKind;
         if (kind is null || !PublicUrlRecoveryClient.HasValidArtifactSignature(response.Content, Score(kind.Value))) return [];
         return [MarkResolvedUrlMatch(
             CreateArtifact(kind.Value, response.Content, response.ContentType, resolvedUrl, sourceOrdinal),

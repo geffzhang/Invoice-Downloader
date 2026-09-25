@@ -29,6 +29,44 @@ public sealed class DirectArtifactProbeTests
         transport.Requests.Should().HaveCount(3);
     }
 
+    [Theory]
+    [InlineData("chinatax_direct_invoice", "dppt.beijing.chinatax.gov.cn")]
+    [InlineData("bwjf_signed_invoice", "fp.bwjf.cn")]
+    [InlineData("fpyun_direct_invoice", "sdapi.fpyun.com.cn")]
+    [InlineData("pdd_direct_invoice", "files.pdd-fapiao.com")]
+    [InlineData("jdcloud_direct_invoice", "eicore-invoice.jdcloud-oss.com")]
+    [InlineData("kpbyd_direct_invoice", "etd.kpbyd.com")]
+    public async Task Direct_recovery_strategy_retries_and_selects_expected_pdf_for_each_family(string family, string host)
+    {
+        const string invoiceNumber = "11111111111111111111";
+        var sourceUrl = family == "fpyun_direct_invoice"
+            ? new Uri($"https://{host}/invoice/qd/download/getInvoiceFile?fptqm=synthetic-capability&invoice={invoiceNumber}")
+            : new Uri($"https://{host}/invoice/{invoiceNumber}.pdf?token=synthetic-capability");
+        var payload = Encoding.ASCII.GetBytes("%PDF-1.7 synthetic direct invoice");
+        var transport = new FakeTransport(
+            Response(HttpStatusCode.ServiceUnavailable, [], "text/plain"),
+            Response(HttpStatusCode.OK, payload, "application/pdf"));
+        var strategy = new DirectInvoiceRecoveryStrategy(NewProbe(transport, maxAttempts: 2));
+        var candidate = new MailboxUrlCandidate(
+            "acct", "INBOX", "uidvalidity", "77", sourceUrl, family, "group",
+            new Dictionary<string, string> { ["invoice_number"] = invoiceNumber }, 0);
+        var group = new UrlCandidateGroup(
+            family,
+            [candidate],
+            new Dictionary<string, string> { ["invoice_number"] = invoiceNumber },
+            new Dictionary<string, IReadOnlyList<ExpectedFieldEvidence>>(),
+            DocumentIdentity.Create("synthetic-provider-group"));
+
+        var result = await strategy.RecoverAsync(group, CancellationToken.None);
+
+        result.SelectedArtifact.Should().NotBeNull();
+        result.SelectedArtifact!.Kind.Should().Be(RecoveredArtifactKind.Pdf);
+        result.SelectedArtifact.ExpectedMatch.Should().BeTrue();
+        result.SelectedArtifact.MatchReasonCode.Should().Be("invoice_number_from_url");
+        result.SelectedArtifact.SanitizedResolvedOrigin.Should().NotContain("synthetic-capability");
+        transport.Requests.Should().HaveCount(2);
+    }
+
     [Fact]
     public async Task Selects_pdf_when_invoice_number_exists_only_in_redirected_url_path()
     {
@@ -67,6 +105,19 @@ public sealed class DirectArtifactProbeTests
         var artifacts = await probe.ProbeAsync(new Uri("https://files.example/invoices.zip"), 0, CancellationToken.None);
 
         artifacts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Preserves_ofd_container_instead_of_expanding_its_xml_member()
+    {
+        var payload = CreateZip("OFD.xml", Encoding.UTF8.GetBytes("<?xml version=\"1.0\"?><OFD />"));
+        var transport = new FakeTransport(Response(HttpStatusCode.OK, payload, "application/ofd"));
+        var probe = NewProbe(transport, maxAttempts: 1);
+
+        var artifacts = await probe.ProbeAsync(new Uri("https://files.example/invoice.ofd"), 0, CancellationToken.None);
+
+        artifacts.Should().ContainSingle().Which.Kind.Should().Be(RecoveredArtifactKind.Ofd);
+        artifacts[0].Content.ToArray().Should().Equal(payload);
     }
 
     [Fact]

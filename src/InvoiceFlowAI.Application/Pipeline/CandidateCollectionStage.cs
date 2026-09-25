@@ -8,6 +8,7 @@ namespace InvoiceFlowAI.Application.Pipeline;
 
 public sealed class CandidateCollectionStage : ICandidateCollectionStage
 {
+    private static readonly string[] CwtSenderDomains = ["mycwt.com", "citsgbt.com", "carlsonwagonlit.com", "cits.com"];
     private readonly ICandidateIdentityFactory _identityFactory;
     private readonly ICandidateHistoryReader _historyReader;
 
@@ -224,6 +225,17 @@ public sealed class CandidateCollectionStage : ICandidateCollectionStage
     {
         if (source.Attachment is { } attachment)
         {
+            var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["mailbox"] = attachment.Mailbox,
+                ["candidate_action"] = attachment.Decision.Action,
+                ["prefilter_reason_code"] = attachment.Decision.ReasonCode,
+            };
+            if (IsCwtSource(scan, attachment.Mailbox, attachment.MessageUid))
+            {
+                metadata["source_is_cwt"] = "true";
+            }
+
             return new DocumentCandidate(
                 identity,
                 sequence,
@@ -234,12 +246,7 @@ public sealed class CandidateCollectionStage : ICandidateCollectionStage
                 attachment.Payload.Length,
                 0,
                 "mime_attachment",
-                Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["mailbox"] = attachment.Mailbox,
-                    ["candidate_action"] = attachment.Decision.Action,
-                    ["prefilter_reason_code"] = attachment.Decision.ReasonCode,
-                });
+                Metadata: metadata);
         }
 
         var url = source.UrlCandidates![0];
@@ -264,6 +271,29 @@ public sealed class CandidateCollectionStage : ICandidateCollectionStage
                 ["provider_family"] = url.ProviderFamily,
                 ["provider_group_id"] = url.ProviderGroupId,
             });
+    }
+
+    private static bool IsCwtSource(MailboxScanResult scan, string mailbox, string messageUid)
+    {
+        var message = scan.Messages.FirstOrDefault(candidate =>
+            candidate.Mailbox.Equals(mailbox, StringComparison.OrdinalIgnoreCase)
+            && candidate.Uid.Equals(messageUid, StringComparison.Ordinal));
+        if (message is null) return false;
+
+        var address = message.FromAddress.Trim();
+        var leftAngle = address.IndexOf('<');
+        var rightAngle = address.LastIndexOf('>');
+        if (leftAngle >= 0 && rightAngle > leftAngle)
+        {
+            address = address[(leftAngle + 1)..rightAngle].Trim();
+        }
+
+        var atIndex = address.LastIndexOf('@');
+        if (atIndex < 0 || atIndex == address.Length - 1) return false;
+        var domain = address[(atIndex + 1)..].Trim().TrimEnd('.');
+        return CwtSenderDomains.Any(knownDomain =>
+            domain.Equals(knownDomain, StringComparison.OrdinalIgnoreCase)
+            || domain.EndsWith($".{knownDomain}", StringComparison.OrdinalIgnoreCase));
     }
 
     private static CandidateProcessResult Terminal(
