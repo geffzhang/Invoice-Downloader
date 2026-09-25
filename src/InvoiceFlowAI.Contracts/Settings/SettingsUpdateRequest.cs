@@ -7,4 +7,6 @@ public sealed record SettingsUpdateRequest(
     MailboxFilterRules? MailboxFilters = null,
     PipelineOptionsPatch? Pipeline = null,
     string? CustomRuleSetJson = null,
-    bool? AllowVisionFallback = null);
+    bool? AllowVisionFallback = null,
+    string? CompanyName = null,
+    string? LastOutputDirectory = null);

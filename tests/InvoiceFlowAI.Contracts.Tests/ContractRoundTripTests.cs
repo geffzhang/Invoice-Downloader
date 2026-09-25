@@ -336,6 +336,59 @@ public sealed class ContractRoundTripTests
         reloaded.WebView2.PackageVersion.Should().Be(manifest.WebView2.PackageVersion);
     }
 
+    [Fact]
+    public void Release_manifest_generator_output_deserializes_as_release_contract()
+    {
+        var repoRoot = new DirectoryInfo(AppContext.BaseDirectory);
+        while (repoRoot is not null
+            && !File.Exists(Path.Combine(repoRoot.FullName, "build", "release-manifest.ps1")))
+        {
+            repoRoot = repoRoot.Parent;
+        }
+        repoRoot.Should().NotBeNull("the contract test runs from a repository checkout");
+
+        var publishRoot = Path.Combine(Path.GetTempPath(), $"invoiceflow-manifest-{Guid.NewGuid():N}");
+        var outputPath = Path.Combine(publishRoot, "manifests", "release.json");
+        Directory.CreateDirectory(publishRoot);
+        File.WriteAllText(Path.Combine(publishRoot, "asset.bin"), "release asset");
+        try
+        {
+            var startInfo = new System.Diagnostics.ProcessStartInfo("pwsh")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(Path.Combine(repoRoot!.FullName, "build", "release-manifest.ps1"));
+            startInfo.ArgumentList.Add("-PublishRoot");
+            startInfo.ArgumentList.Add(publishRoot);
+            startInfo.ArgumentList.Add("-Output");
+            startInfo.ArgumentList.Add(outputPath);
+            startInfo.ArgumentList.Add("-ProductVersion");
+            startInfo.ArgumentList.Add("9.8.7.6");
+            using var process = System.Diagnostics.Process.Start(startInfo);
+            process.Should().NotBeNull("PowerShell 7 is available on the Windows CI runner");
+            var standardOutput = process!.StandardOutput.ReadToEnd();
+            var standardError = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            process.ExitCode.Should().Be(0, $"stdout: {standardOutput}; stderr: {standardError}");
+
+            var json = File.ReadAllText(outputPath);
+            var manifest = JsonSerializer.Deserialize<ReleaseManifest>(json, Strict);
+            manifest.Should().NotBeNull();
+            manifest!.SchemaVersion.Should().Be(1);
+            manifest.ApplicationVersion.Should().Be("9.8.7.6");
+            manifest.Assets.Should().ContainSingle(asset => asset.RelativePath == "asset.bin");
+            manifest.ManifestSha256.Should().MatchRegex("^[a-f0-9]{64}$");
+        }
+        finally
+        {
+            Directory.Delete(publishRoot, recursive: true);
+        }
+    }
+
     // ---------- Secret leakage guard ----------
 
     [Theory]

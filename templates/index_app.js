@@ -325,32 +325,30 @@ function buildPersistPayload(settings, runSettings, runContext) {
 }
 
 async function loadShellState() {
-    const [settingsRes, runContextRes] = await Promise.all([
-        callApi("load_user_settings"),
+    const [loaded, runContextRes] = await Promise.all([
+        window.invoiceFlowRpcReady || SettingsRpc.load(window.RpcClient),
         callApi("get_run_context").catch(() => ({})),
     ]);
 
-    const storedPayload = Object.assign({}, DEFAULT_SETTINGS, DEFAULT_RUN_SETTINGS, (settingsRes && settingsRes.settings) || {});
+    const snapshot = loaded.settings;
+    const account = window.invoiceFlowMailboxAccount || (loaded.accounts.items || [])[0] || null;
     const sessionSettings = readSessionValue(SESSION_SETTINGS_KEY);
     const sessionRunSettings = readSessionValue(SESSION_RUN_SETTINGS_KEY);
     const runContext = runContextRes || {};
 
     const settings = {
-        email: preferNonEmpty(sessionSettings.email, storedPayload.email),
-        // Sensitive values must not be revived from WebView session state.
-        auth_code: preferNonEmpty(storedPayload.auth_code),
-        api_key: preferNonEmpty(storedPayload.api_key),
-        save_path: preferNonEmpty(sessionSettings.save_path, storedPayload.save_path),
-        company: preferNonEmpty(sessionSettings.company, storedPayload.company),
-        remember_settings: sessionSettings.remember_settings === undefined
-            ? storedPayload.remember_settings !== false
-            : sessionSettings.remember_settings !== false,
+        email: preferNonEmpty(sessionSettings.email, account && account.emailAddress),
+        auth_code: "",
+        api_key: "",
+        save_path: preferNonEmpty(sessionSettings.save_path, snapshot.lastOutputDirectory),
+        company: preferNonEmpty(sessionSettings.company, snapshot.companyName),
+        remember_settings: sessionSettings.remember_settings !== false,
     };
 
     const runSettings = {
-        date_from: preferNonEmpty(sessionRunSettings.date_from, storedPayload.date_from, DEFAULT_RUN_SETTINGS.date_from),
-        date_to: preferNonEmpty(sessionRunSettings.date_to, storedPayload.date_to, DEFAULT_RUN_SETTINGS.date_to),
-        quick_range: preferNonEmpty(sessionRunSettings.quick_range, storedPayload.quick_range, "last_30_days"),
+        date_from: preferNonEmpty(sessionRunSettings.date_from, DEFAULT_RUN_SETTINGS.date_from),
+        date_to: preferNonEmpty(sessionRunSettings.date_to, DEFAULT_RUN_SETTINGS.date_to),
+        quick_range: preferNonEmpty(sessionRunSettings.quick_range, DEFAULT_RUN_SETTINGS.quick_range),
     };
 
     if (hasExplicitQaRunContext(runContext)) {
@@ -368,27 +366,80 @@ async function loadShellState() {
         }
     }
 
+    window.invoiceFlowRememberSettings = settings.remember_settings;
     return { settings, runSettings, runContext };
 }
 
-async function persistUserSettings(settings, runSettings, runContext) {
-    const payload = buildPersistPayload(settings, runSettings, runContext);
-    writeSessionValue(SESSION_SETTINGS_KEY, {
-        email: payload.email || "",
-        save_path: payload.save_path || "",
-        company: payload.company || "",
-        remember_settings: payload.remember_settings !== false,
-    });
-    writeSessionValue(SESSION_RUN_SETTINGS_KEY, {
-        date_from: payload.date_from || "",
-        date_to: payload.date_to || "",
-        quick_range: payload.quick_range || DEFAULT_RUN_SETTINGS.quick_range,
-    });
+let settingsWriteQueue = Promise.resolve();
 
-    if (payload.remember_settings === false) {
-        return callApi("save_user_settings", { remember_settings: false });
-    }
-    return callApi("save_user_settings", payload);
+async function persistUserSettings(settings, runSettings, runContext) {
+    const persist = async () => {
+        const payload = buildPersistPayload(settings, runSettings, runContext);
+        const { auth_code: _authCode, api_key: _apiKey, ...safePayload } = payload;
+        writeSessionValue(SESSION_SETTINGS_KEY, {
+            email: safePayload.email || "",
+            save_path: safePayload.save_path || "",
+            company: safePayload.company || "",
+            remember_settings: safePayload.remember_settings !== false,
+        });
+        writeSessionValue(SESSION_RUN_SETTINGS_KEY, {
+            date_from: safePayload.date_from || "",
+            date_to: safePayload.date_to || "",
+            quick_range: safePayload.quick_range || DEFAULT_RUN_SETTINGS.quick_range,
+        });
+
+        const remember = safePayload.remember_settings !== false;
+        if (window.invoiceFlowRememberSettings !== remember) {
+            const inMemorySecrets = window.invoiceFlowRunSecrets || {};
+            const retentionUpdates = [
+                ["mail.imap.auth-code", inMemorySecrets.auth_code],
+                ["deepseek.api-key", inMemorySecrets.api_key],
+            ].map(([name, value]) => value
+                ? SettingsRpc.setSecret(window.RpcClient, name, value, remember ? "persistent" : "session")
+                : (remember ? Promise.resolve() : SettingsRpc.deleteSecret(window.RpcClient, name)));
+            await Promise.all(retentionUpdates);
+        }
+        window.invoiceFlowRememberSettings = remember;
+
+        const email = String(safePayload.email || "").trim();
+        let account = window.invoiceFlowMailboxAccount || null;
+        if (email) {
+            const is163 = email.toLowerCase().endsWith("@163.com");
+            const draft = {
+                accountId: account ? account.accountId : "default-mailbox",
+                emailAddress: email,
+                imapHost: is163 ? "imap.163.com" : "imap.qq.com",
+                imapPort: 993,
+                useTls: true,
+                credentialName: "mail.imap.auth-code",
+                displayName: email,
+                defaultMailbox: "INBOX",
+            };
+            const unchanged = account && Object.keys(draft).every((key) => account[key] === draft[key]);
+            if (!unchanged) {
+                account = await SettingsRpc.saveAccount(window.RpcClient, account, draft);
+                window.invoiceFlowMailboxAccount = account;
+            }
+        }
+
+        const snapshot = window.invoiceFlowSettingsSnapshot;
+        const companyName = remember ? String(safePayload.company || "") : "";
+        const lastOutputDirectory = remember ? (safePayload.save_path || null) : null;
+        const accountId = account ? account.accountId : snapshot.currentAccountId;
+        if (snapshot.companyName !== companyName
+            || snapshot.lastOutputDirectory !== lastOutputDirectory
+            || snapshot.currentAccountId !== accountId) {
+            window.invoiceFlowSettingsSnapshot = await SettingsRpc.saveSettings(window.RpcClient, snapshot, {
+                accountId,
+                companyName,
+                lastOutputDirectory,
+            });
+        }
+    };
+
+    const pending = settingsWriteQueue.then(persist);
+    settingsWriteQueue = pending.catch(() => {});
+    return pending;
 }
 
 function toneFromAsyncStatus(status) {
@@ -833,6 +884,7 @@ function SettingsPage({ onOpenDisclaimer }) {
     const saveTimerRef = useRef(null);
     const autostartTimerRef = useRef(null);
     const autostartTriggeredRef = useRef(false);
+    const runSecretDraftRef = useRef({ ...(window.invoiceFlowRunSecrets || {}) });
 
     useEffect(() => {
         let active = true;
@@ -876,8 +928,8 @@ function SettingsPage({ onOpenDisclaimer }) {
     const emailParts = splitEmailAddress(settings.email);
     const dateError = validateDateRange(runSettings.date_from, runSettings.date_to);
     const canStart = !validateEmail(settings.email)
-        && !!settings.auth_code
-        && !!settings.api_key
+        && !!(settings.auth_code || runSecretDraftRef.current.auth_code)
+        && !!(settings.api_key || runSecretDraftRef.current.api_key)
         && !!String(settings.company || "").trim()
         && !!String(settings.save_path || "").trim()
         && !dateError;
@@ -900,6 +952,10 @@ function SettingsPage({ onOpenDisclaimer }) {
     }, [bootstrapState, runContext, starting, settings, runSettings]);
 
     function updateSetting(key, value) {
+        if (key === "auth_code" || key === "api_key") {
+            runSecretDraftRef.current[key] = value;
+            window.invoiceFlowRunSecrets = { ...runSecretDraftRef.current };
+        }
         setSettings((current) => ({ ...current, [key]: value }));
         setPageError("");
         if (key === "email" || key === "auth_code") setEmailStatus({ status: "idle", message: "" });
@@ -914,11 +970,22 @@ function SettingsPage({ onOpenDisclaimer }) {
     async function handleChooseDirectory() {
         if (controlledRun) return;
         try {
-            const result = await callApi("choose_directory");
-            if (result && result.success && result.path) updateSetting("save_path", result.path);
+            const result = await SettingsRpc.chooseDirectory(window.RpcClient);
+            if (result && !result.cancelled && result.path) updateSetting("save_path", result.path);
         } catch (error) {
             setPageError(error.message || "选择目录失败。");
         }
+    }
+
+    async function saveSecretInput(name, settingKey) {
+        const value = String(settings[settingKey] || "");
+        if (!value) return;
+        await SettingsRpc.setSecret(
+            window.RpcClient,
+            name,
+            value,
+            settings.remember_settings === false ? "session" : "persistent");
+        setSettings((current) => ({ ...current, [settingKey]: "" }));
     }
 
     async function handleTestEmailAuth() {
@@ -927,13 +994,15 @@ function SettingsPage({ onOpenDisclaimer }) {
             setEmailStatus({ status: "error", message: emailError });
             return;
         }
-        if (!settings.auth_code) {
-            setEmailStatus({ status: "error", message: "请输入邮箱授权码。" });
-            return;
-        }
         setEmailStatus({ status: "testing", message: "正在测试邮箱授权码..." });
         try {
-            const result = await callApi("test_email_auth", String(settings.email).trim(), settings.auth_code);
+            await persistUserSettings(settings, runSettings, runContext);
+            if (settings.auth_code) {
+                await saveSecretInput("mail.imap.auth-code", "auth_code");
+            }
+            const account = window.invoiceFlowMailboxAccount;
+            if (!account) throw new Error("请先填写有效邮箱地址。");
+            const result = await SettingsRpc.testAccount(window.RpcClient, account.accountId);
             setEmailStatus({ status: result && result.success ? "success" : "error", message: result && result.message ? result.message : "邮箱授权验证失败。" });
         } catch (error) {
             setEmailStatus({ status: "error", message: error.message || "邮箱授权验证失败。" });
@@ -941,18 +1010,10 @@ function SettingsPage({ onOpenDisclaimer }) {
     }
 
     async function handleTestConnection() {
-        if (!settings.api_key) {
-            setApiStatus({ status: "error", message: "请输入 GLM API Key。" });
-            return;
-        }
         setApiStatus({ status: "testing", message: "正在测试 API Key..." });
         try {
-            const result = await callApi(
-                "test_connection",
-                String(settings.email || "").trim(),
-                String(settings.auth_code || "").trim(),
-                settings.api_key
-            );
+            if (settings.api_key) await saveSecretInput("deepseek.api-key", "api_key");
+            const result = await SettingsRpc.testProvider(window.RpcClient, "deepseek", "deepseek.api-key");
             setApiStatus({ status: result && result.success ? "success" : "error", message: result && result.message ? result.message : "API Key 测试失败。" });
         } catch (error) {
             setApiStatus({ status: "error", message: error.message || "API Key 测试失败。" });
@@ -962,15 +1023,19 @@ function SettingsPage({ onOpenDisclaimer }) {
     async function handleStart() {
         const emailError = validateEmail(settings.email);
         if (emailError) return setPageError(emailError);
-        if (!settings.auth_code) return setPageError("请输入邮箱授权码。");
-        if (!settings.api_key) return setPageError("请输入 GLM API Key。");
+        const authCode = settings.auth_code || runSecretDraftRef.current.auth_code;
+        const apiKey = settings.api_key || runSecretDraftRef.current.api_key;
+        if (!authCode) return setPageError("请输入邮箱授权码。");
+        if (!apiKey) return setPageError("请输入 GLM API Key。");
         if (!settings.company || !settings.company.trim()) return setPageError("请填写公司名称。");
         if (!settings.save_path) return setPageError("请选择输出目录。");
         if (dateError) return setPageError(dateError);
         setStarting(true);
         try {
+            if (settings.auth_code) await saveSecretInput("mail.imap.auth-code", "auth_code");
+            if (settings.api_key) await saveSecretInput("deepseek.api-key", "api_key");
             await persistUserSettings(settings, runSettings, runContext);
-            const result = await callApi("start_processing", "", settings.save_path, runSettings.date_from, runSettings.date_to, String(settings.email).trim(), settings.auth_code, settings.api_key);
+            const result = await callApi("start_processing", "", settings.save_path, runSettings.date_from, runSettings.date_to, String(settings.email).trim(), authCode, apiKey);
             if (!result || !result.success) {
                 setPageError(result && result.message ? result.message : "任务启动失败。");
                 return;

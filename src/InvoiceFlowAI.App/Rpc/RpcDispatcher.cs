@@ -33,6 +33,7 @@ public sealed class RpcDispatcher : IRpcDispatcher
     public const string UnknownMethodCode = "RPC_METHOD_UNKNOWN";
     public const string ProtocolMismatchCode = "RPC_PROTOCOL_MISMATCH";
     public const string BadRequestCode = "RPC_BAD_REQUEST";
+    public const string InvalidParamsCode = "RPC_INVALID_PARAMS";
     public const string InternalErrorCode = "RPC_INTERNAL_ERROR";
     public const string TimeoutCode = "RPC_TIMEOUT";
     public const string CancelledCode = "RPC_CANCELLED";

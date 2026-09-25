@@ -10,6 +10,8 @@ public sealed class UserSettingsRow
     public int Revision { get; set; }
     public string? CurrentAccountId { get; set; }
     public string DefaultMailbox { get; set; } = "INBOX";
+    public string CompanyName { get; set; } = string.Empty;
+    public string? LastOutputDirectory { get; set; }
     public string? MailboxFiltersJson { get; set; }
     public string? PipelineOptionsJson { get; set; }
     public bool AllowVisionFallback { get; set; }

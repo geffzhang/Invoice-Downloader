@@ -5,6 +5,7 @@
 // up a real WebView2 instance.
 
 using System.Text.Json;
+using System.Diagnostics;
 using InvoiceFlowAI.Contracts.Rpc;
 
 namespace InvoiceFlowAI.App.Rpc;
@@ -93,7 +94,8 @@ public sealed class WebViewRpcBridge : IWebViewRpcBridge
         // Task.Delay so that a timeout produces TimeoutException, which
         // the dispatcher maps to RPC_TIMEOUT (vs RPC_CANCELLED for
         // user-driven cancellation).
-        using var cts = new CancellationTokenSource(_options.RequestTimeout);
+        using var cts = new CancellationTokenSource();
+        var phase = "dispatch";
         try
         {
             var dispatchTask = _dispatcher.DispatchAsync(request, cts.Token);
@@ -105,7 +107,9 @@ public sealed class WebViewRpcBridge : IWebViewRpcBridge
                 throw new TimeoutException($"RPC {request.Method} exceeded {_options.RequestTimeout}");
             }
             var response = await dispatchTask.ConfigureAwait(false);
+            phase = "serialize response";
             var json = JsonSerializer.Serialize(response, JsonOptions.Default);
+            phase = "post response";
             _channel.PostMessage(json);
         }
         catch (TimeoutException)
@@ -113,6 +117,14 @@ public sealed class WebViewRpcBridge : IWebViewRpcBridge
             var response = new RpcResponse<JsonElement?>(
                 "invoiceflow.rpc.v1", request.Id, false, null,
                 new RpcError("RPC_TIMEOUT", "rpc", true, "request timed out", false));
+            _channel.PostMessage(JsonSerializer.Serialize(response, JsonOptions.Default));
+        }
+        catch (Exception exception)
+        {
+            Trace.TraceError("RPC {0} bridge failed during {1} with {2}.", request.Method, phase, exception.GetType().Name);
+            var response = new RpcResponse<JsonElement?>(
+                "invoiceflow.rpc.v1", request.Id, false, null,
+                new RpcError(RpcDispatcher.InternalErrorCode, "rpc", false, "internal error", false));
             _channel.PostMessage(JsonSerializer.Serialize(response, JsonOptions.Default));
         }
     }

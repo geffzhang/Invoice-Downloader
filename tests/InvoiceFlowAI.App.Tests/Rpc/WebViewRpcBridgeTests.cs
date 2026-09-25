@@ -97,6 +97,23 @@ public sealed class WebViewRpcBridgeTests
         response.GetProperty("error").GetProperty("code").GetString().Should().Be("RPC_TIMEOUT");
     }
 
+    [Fact]
+    public async Task Unexpected_dispatch_failure_maps_to_RPC_INTERNAL_ERROR()
+    {
+        var channel = new RecordingChannel();
+        var bridge = new WebViewRpcBridge(
+            new ThrowingDispatcher(), channel, new WebViewRpcBridgeOptions());
+        bridge.Start();
+
+        bridge.OnMessage(NewRequestJson("explode"));
+
+        await WaitFor(() => channel.Sent.Count > 0, TimeSpan.FromSeconds(2));
+        var response = JsonDocument.Parse(channel.Sent[0]).RootElement;
+        response.GetProperty("ok").GetBoolean().Should().BeFalse();
+        response.GetProperty("error").GetProperty("code").GetString().Should().Be("RPC_INTERNAL_ERROR");
+        response.GetRawText().Should().NotContain("private dispatcher detail");
+    }
+
     private static string NewHelloRequestJson() => JsonSerializer.Serialize(
         new { protocol = "invoiceflow.rpc.v1", id = "req-1", method = "bridge.hello", @params = (object?)null },
         JsonOptions.Default);
@@ -145,5 +162,15 @@ public sealed class WebViewRpcBridgeTests
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
             return new RpcHandlerResult(JsonDocument.Parse("{}").RootElement, null);
         }
+    }
+
+    private sealed class ThrowingDispatcher : IRpcDispatcher
+    {
+        public IReadOnlyCollection<string> RegisteredMethods => Array.Empty<string>();
+        public void RegisterHandler(string method, IRpcHandler handler) => throw new NotSupportedException();
+        public Task<RpcResponse<JsonElement?>> DispatchAsync(
+            RpcRequest<JsonElement?> request,
+            CancellationToken cancellationToken)
+            => Task.FromException<RpcResponse<JsonElement?>>(new InvalidOperationException("private dispatcher detail"));
     }
 }

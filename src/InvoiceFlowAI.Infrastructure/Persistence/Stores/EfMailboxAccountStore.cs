@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace InvoiceFlowAI.Infrastructure.Persistence.Stores;
 
-public sealed class EfMailboxAccountStore : IMailboxAccountReader
+public sealed class EfMailboxAccountStore : IMailboxAccountStore
 {
     private readonly InvoiceFlowDbContext _context;
 
@@ -66,7 +66,7 @@ public sealed class EfMailboxAccountStore : IMailboxAccountReader
                 draft.CredentialName,
                 draft.DisplayName,
                 1,
-                draft.CredentialName is not null,
+                false,
                 MaskEmail(draft.EmailAddress),
                 now,
                 draft.DefaultMailbox);
@@ -96,7 +96,7 @@ public sealed class EfMailboxAccountStore : IMailboxAccountReader
             existing.CredentialName,
             existing.DisplayName,
             existing.Revision,
-            existing.CredentialName is not null,
+            false,
             MaskEmail(existing.EmailAddress),
             existing.UpdatedAtUtc,
             existing.DefaultMailbox);
@@ -116,6 +116,29 @@ public sealed class EfMailboxAccountStore : IMailboxAccountReader
                 x.CredentialName,
                 x.DefaultMailbox))
             .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<MailboxAccountSnapshot>> ListAsync(CancellationToken cancellationToken)
+    {
+        var rows = await _context.MailboxAccounts
+            .AsNoTracking()
+            .OrderBy(x => x.AccountId)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return rows.Select(x => new MailboxAccountSnapshot(
+            x.AccountId,
+            x.EmailAddress,
+            x.ImapHost,
+            x.ImapPort,
+            x.UseTls,
+            x.CredentialName,
+            x.DisplayName ?? string.Empty,
+            x.Revision,
+            CredentialConfigured: false,
+            MaskEmail(x.EmailAddress),
+            x.UpdatedAtUtc,
+            x.DefaultMailbox)).ToList();
     }
 
     private static string MaskEmail(string email)

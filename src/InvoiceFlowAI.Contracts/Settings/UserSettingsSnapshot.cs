@@ -14,4 +14,6 @@ public sealed record UserSettingsSnapshot(
     string RuleSetId,
     int RuleSetVersion,
     string ConfigurationFingerprint,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc,
+    string CompanyName = "",
+    string? LastOutputDirectory = null);

@@ -22,7 +22,7 @@ using InvoiceFlowAI.Application.Persistence;
 
 namespace InvoiceFlowAI.Infrastructure.Security;
 
-public sealed class DpapiSecretStore : ISecretStore
+public sealed class DpapiSecretStore : IPersistentSecretStore
 {
     private readonly string _filePath;
     private readonly byte[] _entropy;

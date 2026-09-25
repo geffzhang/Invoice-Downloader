@@ -4,9 +4,11 @@ using InvoiceFlowAI.Application.Candidates;
 using InvoiceFlowAI.Application.Extraction;
 using InvoiceFlowAI.Application.Persistence;
 using InvoiceFlowAI.Application.Pipeline;
+using InvoiceFlowAI.Application.Security;
 using InvoiceFlowAI.Application.Url;
 using InvoiceFlowAI.Infrastructure;
 using InvoiceFlowAI.Infrastructure.Ai;
+using InvoiceFlowAI.Infrastructure.Security;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -14,6 +16,20 @@ namespace InvoiceFlowAI.Infrastructure.Tests.Pipeline;
 
 public sealed class ExtractionServiceRegistrationTests
 {
+    [Fact]
+    public void Infrastructure_registers_one_composite_secret_store_and_retention_service()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IPersistentSecretStore>(new FakePersistentSecretStore());
+        services.AddInvoiceFlowInfrastructure();
+
+        services.Count(x => x.ServiceType == typeof(ISecretStore)).Should().Be(1);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<ISecretStore>().Should().BeOfType<CompositeSecretStore>();
+        provider.GetRequiredService<ISecretRetentionStore>().Should().BeOfType<SecretApplicationService>();
+    }
+
     [Fact]
     public async Task Infrastructure_registers_scoped_extraction_services()
     {
@@ -37,6 +53,13 @@ public sealed class ExtractionServiceRegistrationTests
     {
         public Task SaveAsync(string name, string secret, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<string?> GetAsync(string name, CancellationToken cancellationToken) => Task.FromResult<string?>("test-key");
+        public Task DeleteAsync(string name, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class FakePersistentSecretStore : IPersistentSecretStore
+    {
+        public Task SaveAsync(string name, string secret, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<string?> GetAsync(string name, CancellationToken cancellationToken) => Task.FromResult<string?>(null);
         public Task DeleteAsync(string name, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
