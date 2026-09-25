@@ -1,3 +1,4 @@
+using System.Net;
 using InvoiceFlowAI.Application.Candidates;
 using InvoiceFlowAI.Application.Ai;
 using InvoiceFlowAI.Application.Accounts;
@@ -110,7 +111,7 @@ public static class InvoiceFlowAIInfrastructureServiceCollectionExtensions
     public static IServiceCollection AddUrlRecoveryStrategies(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        services.AddScoped<PublicUrlPolicy>();
+        services.AddScoped(serviceProvider => new PublicUrlPolicy(proxy: HttpClient.DefaultProxy));
         services.AddScoped<IUrlRecoveryTransport, PinnedHttpUrlRecoveryTransport>();
         services.AddScoped<PublicUrlRecoveryClient>();
         services.AddScoped<IUrlRecoveryStrategy, GenericUrlRecoveryStrategy>();
