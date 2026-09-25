@@ -952,6 +952,7 @@ def test_malformed_uid_search_reaches_one_sanitized_failed_terminal(
     ("failure", "expected_state", "expected_reason"),
     [
         ("socket_abort", "completed", "CANCELLED"),
+        ("tls_eof", "completed", "CANCELLED"),
         ("malformed_search", "failed", "MAILBOX_SCAN_FAILED"),
         ("unrelated_os_error", "failed", "PROCESSING_FAILED"),
     ],
@@ -960,6 +961,7 @@ def test_stop_only_converts_this_runs_imap_abort_to_cancelled(
     tmp_path, monkeypatch, failure, expected_state, expected_reason
 ):
     from mailbox_scanner import MailboxScanError
+    import ssl
 
     monkeypatch.chdir(tmp_path)
     api = InvoiceAppAPI()
@@ -980,6 +982,10 @@ def test_stop_only_converts_this_runs_imap_abort_to_cancelled(
             api._request_safe_stop()
             if failure == "socket_abort":
                 raise MailboxScanError("IMAP SELECT failed") from ConnectionAbortedError("socket closed")
+            if failure == "tls_eof":
+                raise MailboxScanError("IMAP SELECT failed") from ssl.SSLEOFError(
+                    ssl.SSL_ERROR_EOF, "TLS socket closed"
+                )
             if failure == "malformed_search":
                 raise MailboxScanError("malformed UID SEARCH ALL response")
             raise OSError("unrelated local failure")

@@ -5,6 +5,7 @@ import importlib
 import json
 import os
 import re
+import ssl
 import sys
 import threading
 import time
@@ -2541,7 +2542,10 @@ class InvoiceAppAPI:
                 return False
             if isinstance(exc, MailboxScanError):
                 exc = exc.__cause__
-            return isinstance(exc, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, imaplib.IMAP4.abort)) or (
+            return isinstance(exc, (
+                ConnectionAbortedError, ConnectionResetError, BrokenPipeError,
+                imaplib.IMAP4.abort, ssl.SSLEOFError, ssl.SSLZeroReturnError,
+            )) or (
                 isinstance(exc, OSError)
                 and not isinstance(exc, TimeoutError)
                 and exc.errno in {errno.EBADF, errno.ENOTCONN, errno.ECONNRESET, errno.EPIPE}
