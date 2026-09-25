@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json;
 using System.Text;
 using System.Security.Cryptography;
@@ -228,7 +229,7 @@ public sealed class DesktopParityFixtureTests
     }
 
     [Fact]
-    public void Provider_recovery_golden_fixtures_select_the_matching_safe_artifact()
+    public async Task Provider_recovery_golden_fixtures_exercise_provider_strategies_and_select_safe_artifacts()
     {
         var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "provider-recovery.json");
         var fixtures = JsonSerializer.Deserialize<ProviderRecoveryFixtureSet>(File.ReadAllText(fixturePath), JsonOptions)
@@ -236,19 +237,70 @@ public sealed class DesktopParityFixtureTests
 
         foreach (var fixture in fixtures.Cases)
         {
-            var artifacts = fixture.Captures.Select(capture => CreateArtifact(capture)).ToArray();
-            var result = BaiwangArtifactSelector.Select(fixture.ExpectedFields, artifacts);
+            if (fixture.Selector.Equals("baiwang", StringComparison.OrdinalIgnoreCase))
+            {
+                var artifacts = fixture.Captures!.Select(CreateArtifact).ToArray();
+                var baiwangResult = BaiwangArtifactSelector.Select(fixture.ExpectedFields, artifacts);
 
+                baiwangResult.SelectedArtifactIndex.Should().Be(fixture.ExpectedSelectedIndex, fixture.CaseId);
+                baiwangResult.SelectedArtifact.Should().NotBeNull(fixture.CaseId);
+                baiwangResult.SelectedArtifact!.Kind.ToString().Should().Be(fixture.ExpectedSelectedKind, fixture.CaseId);
+                baiwangResult.SelectedArtifact.SourceUrlOrdinal.Should().Be(fixture.ExpectedSourceUrlOrdinal, fixture.CaseId);
+                baiwangResult.SelectedArtifact.MatchReasonCode.Should().Be(fixture.ExpectedMatchReason, fixture.CaseId);
+                baiwangResult.Artifacts.Should().Contain(artifact =>
+                    artifact.MatchReasonCode == "wrapper_detected" && artifact.ExpectedMatch == fixture.ExpectedWrapperMatch,
+                    fixture.CaseId);
+                continue;
+            }
+
+            var responses = fixture.Responses?.Select(CreateResponse).ToArray()
+                ?? throw new InvalidDataException($"Fixture '{fixture.CaseId}' has no recovery responses.");
+            var transport = new FixtureRecoveryTransport(responses);
+            var policy = new PublicUrlPolicy((_, _) => Task.FromResult<IReadOnlyList<IPAddress>>([IPAddress.Parse("93.184.216.34")]));
+            var client = new PublicUrlRecoveryClient(policy, transport, 1024 * 1024, TimeSpan.FromSeconds(2));
+            var candidate = new MailboxUrlCandidate(
+                "fixture-account", "INBOX", "fixture-validity", fixture.CaseId,
+                new Uri(fixture.SourceUrl), fixture.ProviderFamily, "fixture-provider-group",
+                fixture.ExpectedFields, 0);
+            var group = new UrlCandidateGroup(
+                fixture.ProviderFamily,
+                [candidate],
+                fixture.ExpectedFields,
+                new Dictionary<string, IReadOnlyList<ExpectedFieldEvidence>>(),
+                DocumentIdentity.Create("provider-recovery-fixture"));
+
+            UrlRecoveryResult result;
+            if (fixture.Selector.Equals("nuonuo", StringComparison.OrdinalIgnoreCase))
+            {
+                var strategy = new NuonuoScanRecoveryStrategy(
+                    client,
+                    maxAttempts: 3,
+                    delayAsync: static (_, _) => Task.CompletedTask);
+                result = await strategy.RecoverAsync(group, CancellationToken.None);
+            }
+            else if (fixture.Selector.Equals("direct", StringComparison.OrdinalIgnoreCase))
+            {
+                var probe = new DirectArtifactProbe(client, maxAttempts: 3,
+                    delayAsync: static (_, _) => Task.CompletedTask);
+                result = await new DirectInvoiceRecoveryStrategy(probe).RecoverAsync(group, CancellationToken.None);
+            }
+            else
+            {
+                throw new InvalidDataException($"Unsupported provider recovery selector '{fixture.Selector}'.");
+            }
+
+            result.Artifacts.Select(artifact => artifact.Kind.ToString())
+                .Should().Equal(fixture.ExpectedArtifactKinds!, fixture.CaseId);
             result.SelectedArtifactIndex.Should().Be(fixture.ExpectedSelectedIndex, fixture.CaseId);
-            result.SelectedArtifact.Should().NotBeNull(fixture.CaseId);
             result.SelectedArtifact!.Kind.ToString().Should().Be(fixture.ExpectedSelectedKind, fixture.CaseId);
-            result.SelectedArtifact.SourceUrlOrdinal.Should().Be(fixture.ExpectedSourceUrlOrdinal, fixture.CaseId);
             result.SelectedArtifact.MatchReasonCode.Should().Be(fixture.ExpectedMatchReason, fixture.CaseId);
-            result.Artifacts.Should().Contain(artifact =>
-                artifact.MatchReasonCode == "wrapper_detected" && artifact.ExpectedMatch == fixture.ExpectedWrapperMatch,
-                fixture.CaseId);
+            transport.Requests.Should().HaveCount(responses.Length, fixture.CaseId);
         }
     }
+
+    private static UrlTransportResponse CreateResponse(ProviderRecoveryResponse response)
+        => new((HttpStatusCode)response.StatusCode, Encoding.UTF8.GetBytes(response.Body), response.ContentType,
+            response.RedirectLocation);
 
     private static CapturedUrlArtifact CreateArtifact(ProviderRecoveryCapture capture)
     {
@@ -363,18 +415,38 @@ public sealed class DesktopParityFixtureTests
     private sealed record ProviderRecoveryCase(
         string CaseId,
         IReadOnlyDictionary<string, string> ExpectedFields,
-        IReadOnlyList<ProviderRecoveryCapture> Captures,
+        IReadOnlyList<ProviderRecoveryCapture>? Captures,
         int ExpectedSelectedIndex,
         string ExpectedSelectedKind,
-        int ExpectedSourceUrlOrdinal,
-        string ExpectedMatchReason,
-        bool ExpectedWrapperMatch);
+        int? ExpectedSourceUrlOrdinal = null,
+        string? ExpectedMatchReason = null,
+        bool ExpectedWrapperMatch = false,
+        string Selector = "baiwang",
+        string ProviderFamily = "",
+        string SourceUrl = "",
+        IReadOnlyList<string>? ExpectedArtifactKinds = null,
+        IReadOnlyList<ProviderRecoveryResponse>? Responses = null);
 
     private sealed record ProviderRecoveryCapture(
         string Kind,
         int SourceUrlOrdinal,
         IReadOnlyDictionary<string, string> Fields,
         string CaptureReason);
+
+    private sealed record ProviderRecoveryResponse(int StatusCode, string ContentType, string Body, string? RedirectLocation);
+
+    private sealed class FixtureRecoveryTransport(params UrlTransportResponse[] responses) : IUrlRecoveryTransport
+    {
+        private readonly Queue<UrlTransportResponse> _responses = new(responses);
+        public List<UrlTransportRequest> Requests { get; } = [];
+
+        public Task<UrlTransportResponse> SendAsync(UrlTransportRequest request, int maxResponseBytes, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(_responses.Dequeue());
+        }
+    }
 
     private sealed record CandidateOrderFixtureSet(IReadOnlyList<CandidateOrderCase> Cases);
 

@@ -61,7 +61,8 @@ public sealed class UrlRecoveryWorkerClient : IUrlRecoveryClient
     {
         ArgumentNullException.ThrowIfNull(group);
         cancellationToken.ThrowIfCancellationRequested();
-        var jobDirectory = Path.Combine(_jobRoot, Guid.NewGuid().ToString("N"));
+        var opaqueJobId = Guid.NewGuid().ToString("N");
+        var jobDirectory = Path.Combine(_jobRoot, opaqueJobId);
         Directory.CreateDirectory(jobDirectory);
         try
         {
@@ -172,7 +173,11 @@ public sealed class UrlRecoveryWorkerClient : IUrlRecoveryClient
         {
             if (!_cleanupJobDirectory(jobDirectory))
             {
-                throw new UrlRecoveryException("URL_RECOVERY_WORKER_CLEANUP_FAILED", "Invoice recovery temporary data could not be removed.", false, false);
+                throw new UrlRecoveryException(
+                    "URL_RECOVERY_WORKER_CLEANUP_FAILED",
+                    $"Invoice recovery temporary data cleanup is incomplete (job {opaqueJobId}).",
+                    false,
+                    false);
             }
         }
     }

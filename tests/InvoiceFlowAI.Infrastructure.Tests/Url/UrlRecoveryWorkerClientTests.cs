@@ -48,6 +48,11 @@ public sealed class UrlRecoveryWorkerClientTests : IDisposable
         exception.Which.ToString().Should().NotContain("source-secret");
         exception.Which.ToString().Should().NotContain("cookie-secret");
         exception.Which.ToString().Should().NotContain("header-secret");
+        var opaqueJobId = Path.GetFileName(runner.JobDirectory);
+        opaqueJobId.Should().MatchRegex("^[a-f0-9]{32}$");
+        exception.Which.Message.Should().Contain(opaqueJobId).And.Contain("cleanup is incomplete");
+        exception.Which.Message.Should().NotContain(_root);
+        exception.Which.Message.Should().NotContain(runner.JobDirectory);
         Directory.Exists(runner.JobDirectory).Should().BeTrue();
     }
 

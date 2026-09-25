@@ -75,6 +75,51 @@ public sealed class PublicUrlRecoveryClientTests
     }
 
     [Fact]
+    public async Task Proxy_redirect_revalidates_public_target_attestation_before_following()
+    {
+        var publicAttestationCalls = new List<string>();
+        var policy = new PublicUrlPolicy(
+            resolver: (_, _) => Task.FromResult<IReadOnlyList<IPAddress>>([IPAddress.Parse("198.18.0.42")]),
+            proxy: new WebProxy("http://127.0.0.1:7897"),
+            publicResolver: (host, _) =>
+            {
+                publicAttestationCalls.Add(host);
+                return Task.FromResult<IReadOnlyList<IPAddress>>(
+                    host == "second.example"
+                        ? [IPAddress.Parse("10.0.0.8")]
+                        : [IPAddress.Parse("93.184.216.34")]);
+            });
+        var transport = new FakeUrlRecoveryTransport(
+            new UrlTransportResponse(HttpStatusCode.Redirect, ReadOnlyMemory<byte>.Empty, "", "https://second.example/invoice"));
+        var client = new PublicUrlRecoveryClient(policy, transport, 1024, TimeSpan.FromSeconds(2));
+
+        var act = () => client.RecoverAsync(new Uri("https://first.example/start"), CancellationToken.None);
+
+        var error = await act.Should().ThrowAsync<UrlRecoveryException>();
+        error.Which.ReasonCode.Should().Be("URL_POLICY_REJECTED");
+        publicAttestationCalls.Should().Equal("first.example", "second.example");
+        transport.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Proxy_response_remains_subject_to_configured_size_limit()
+    {
+        var policy = new PublicUrlPolicy(
+            resolver: (_, _) => Task.FromResult<IReadOnlyList<IPAddress>>([IPAddress.Parse("198.18.0.42")]),
+            proxy: new WebProxy("http://127.0.0.1:7897"),
+            publicResolver: (_, _) => Task.FromResult<IReadOnlyList<IPAddress>>([IPAddress.Parse("93.184.216.34")]));
+        var transport = new FakeUrlRecoveryTransport(
+            new UrlTransportResponse(HttpStatusCode.OK, new byte[] { 1, 2, 3, 4 }, "application/pdf", null));
+        var client = new PublicUrlRecoveryClient(policy, transport, maxResponseBytes: 3, timeout: TimeSpan.FromSeconds(2));
+
+        var act = () => client.RecoverAsync(new Uri("https://first.example/invoice"), CancellationToken.None);
+
+        var error = await act.Should().ThrowAsync<UrlRecoveryException>();
+        error.Which.ReasonCode.Should().Be("URL_RECOVERY_RESPONSE_TOO_LARGE");
+        transport.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task Nuonuo_shortlink_posts_detail_parameters_then_downloads_returned_artifact()
     {
         const string detailJson = "{\"status\":\"0000\",\"data\":{\"invoiceSimpleVo\":{\"xmlUrl\":\"https://files.example/invoice.xml\",\"url\":\"https://files.example/invoice.pdf\"}}}";

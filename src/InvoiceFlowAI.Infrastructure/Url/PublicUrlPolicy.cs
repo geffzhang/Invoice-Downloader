@@ -21,6 +21,13 @@ public sealed record ValidatedPublicUrl(
     Uri Url,
     string Host,
     int Port,
+    IReadOnlyList<IPAddress> ResolvedAddresses,
+    ValidatedProxyEndpoint? ProxyEndpoint = null);
+
+public sealed record ValidatedProxyEndpoint(
+    Uri Uri,
+    string Host,
+    int Port,
     IReadOnlyList<IPAddress> ResolvedAddresses);
 
 public sealed class PublicUrlPolicy
@@ -32,13 +39,22 @@ public sealed class PublicUrlPolicy
     };
 
     private readonly Func<string, CancellationToken, Task<IReadOnlyList<IPAddress>>> _resolver;
+    private readonly Func<string, CancellationToken, Task<IReadOnlyList<IPAddress>>> _publicResolver;
+    private readonly Func<string, CancellationToken, Task<IReadOnlyList<IPAddress>>> _proxyResolver;
     private readonly HashSet<(string Host, int Port)> _allowedHttpsPorts;
+    private readonly IWebProxy? _proxy;
 
     public PublicUrlPolicy(
         Func<string, CancellationToken, Task<IReadOnlyList<IPAddress>>>? resolver = null,
-        IEnumerable<(string Host, int Port)>? allowedHttpsPorts = null)
+        IEnumerable<(string Host, int Port)>? allowedHttpsPorts = null,
+        IWebProxy? proxy = null,
+        Func<string, CancellationToken, Task<IReadOnlyList<IPAddress>>>? publicResolver = null,
+        Func<string, CancellationToken, Task<IReadOnlyList<IPAddress>>>? proxyResolver = null)
     {
         _resolver = resolver ?? ResolveHostAsync;
+        _publicResolver = publicResolver ?? PublicDnsOverHttpsResolver.ResolveAsync;
+        _proxyResolver = proxyResolver ?? _resolver;
+        _proxy = proxy;
         _allowedHttpsPorts = (allowedHttpsPorts ?? Array.Empty<(string Host, int Port)>())
             .Select(entry => (CanonicalizeHost(entry.Host), entry.Port))
             .ToHashSet();
@@ -82,6 +98,7 @@ public sealed class PublicUrlPolicy
             throw Reject(safeUrl, "port is not allowed");
         }
 
+        var proxyEndpoint = await ResolveProxyEndpointAsync(uri, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<IPAddress> resolved;
         if (IPAddress.TryParse(host, out var literal))
         {
@@ -97,6 +114,10 @@ public sealed class PublicUrlPolicy
             {
                 throw;
             }
+            catch when (proxyEndpoint is not null)
+            {
+                resolved = Array.Empty<IPAddress>();
+            }
             catch
             {
                 throw Reject(safeUrl, "hostname resolution failed");
@@ -105,13 +126,42 @@ public sealed class PublicUrlPolicy
 
         if (resolved.Count == 0)
         {
-            throw Reject(safeUrl, "hostname did not resolve");
+            if (proxyEndpoint is null)
+            {
+                throw Reject(safeUrl, "hostname did not resolve");
+            }
         }
 
         var normalizedAddresses = resolved.Select(NormalizeAddress).Distinct().ToArray();
+        if (proxyEndpoint is not null && !IPAddress.TryParse(host, out _))
+        {
+            try
+            {
+                normalizedAddresses = (await _publicResolver(host, cancellationToken).ConfigureAwait(false))
+                    .Select(NormalizeAddress)
+                    .Distinct()
+                    .ToArray();
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                throw Reject(safeUrl, "public DNS attestation unavailable");
+            }
+
+            if (normalizedAddresses.Length == 0)
+            {
+                throw Reject(safeUrl, "public DNS attestation returned no addresses");
+            }
+        }
+
         if (normalizedAddresses.Any(address => !IsPublicUnicast(address)))
         {
-            throw Reject(safeUrl, "destination is not globally routable");
+            throw Reject(safeUrl, proxyEndpoint is null
+                ? "destination is not globally routable"
+                : "public DNS attestation returned a non-public address");
         }
 
         var normalizedUrl = new UriBuilder(uri)
@@ -121,7 +171,7 @@ public sealed class PublicUrlPolicy
             Fragment = string.Empty,
         }.Uri;
 
-        return new ValidatedPublicUrl(normalizedUrl, host, port, normalizedAddresses);
+        return new ValidatedPublicUrl(normalizedUrl, host, port, normalizedAddresses, proxyEndpoint);
     }
 
     public Task<ValidatedPublicUrl> ResolveRedirectAsync(
@@ -188,6 +238,78 @@ public sealed class PublicUrlPolicy
         }
 
         return normalizedPeer;
+    }
+
+    public IPAddress VerifyProxyPeer(IPEndPoint peer, ValidatedPublicUrl validated)
+    {
+        ArgumentNullException.ThrowIfNull(peer);
+        ArgumentNullException.ThrowIfNull(validated);
+        var proxy = validated.ProxyEndpoint;
+        var normalizedPeer = NormalizeAddress(peer.Address);
+        if (proxy is null
+            || peer.Port != proxy.Port
+            || !proxy.ResolvedAddresses.Contains(normalizedPeer))
+        {
+            throw Reject(Sanitize(validated.Url), "connected peer is not the configured proxy endpoint");
+        }
+
+        return normalizedPeer;
+    }
+
+    private async Task<ValidatedProxyEndpoint?> ResolveProxyEndpointAsync(Uri target, CancellationToken cancellationToken)
+    {
+        if (_proxy is null) return null;
+
+        Uri? endpoint;
+        try
+        {
+            if (_proxy.IsBypassed(target)) return null;
+            endpoint = _proxy.GetProxy(target);
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (endpoint is null) return null;
+        if (endpoint == target) return null;
+        if ((!endpoint.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+                && !endpoint.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            || !string.IsNullOrEmpty(endpoint.UserInfo)
+            || string.IsNullOrWhiteSpace(endpoint.Host))
+        {
+            throw Reject(Sanitize(target), "configured proxy endpoint is invalid");
+        }
+
+        var proxyHost = CanonicalizeHost(endpoint.IdnHost);
+        IReadOnlyList<IPAddress> addresses;
+        if (IPAddress.TryParse(proxyHost, out var literal))
+        {
+            addresses = [NormalizeAddress(literal)];
+        }
+        else
+        {
+            try
+            {
+                addresses = await _proxyResolver(proxyHost, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                throw Reject(Sanitize(target), "configured proxy endpoint did not resolve");
+            }
+        }
+
+        var normalizedAddresses = addresses.Select(NormalizeAddress).Distinct().ToArray();
+        if (normalizedAddresses.Length == 0)
+        {
+            throw Reject(Sanitize(target), "configured proxy endpoint did not resolve");
+        }
+
+        return new ValidatedProxyEndpoint(endpoint, proxyHost, endpoint.Port, normalizedAddresses);
     }
 
     public static string Sanitize(Uri? uri)
