@@ -85,10 +85,13 @@ public sealed record LegacyArchiveRecoveryDecision(
 
 public sealed record ArchiveStartupRecoveryResult(
     IReadOnlyList<ArchiveRecoveryDecision> Artifacts,
-    IReadOnlyList<LegacyArchiveRecoveryDecision> LegacyItems);
+    IReadOnlyList<LegacyArchiveRecoveryDecision> LegacyItems,
+    int SkippedRootCount = 0);
 
 public interface IArchiveRecoveryService
 {
+    Task<ArchiveStartupRecoveryResult> ReconcileAllKnownRootsAsync(CancellationToken cancellationToken);
+
     Task<IReadOnlyList<ArchiveRecoveryEntry>> ScanAsync(string runId, CancellationToken cancellationToken);
 
     Task<ArchiveRecoveryDecision> ResolveAsync(ArchiveRecoveryEntry entry, CancellationToken cancellationToken);

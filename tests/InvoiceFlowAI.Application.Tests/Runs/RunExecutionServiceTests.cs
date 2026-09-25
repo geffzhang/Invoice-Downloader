@@ -380,6 +380,9 @@ public sealed class RunExecutionServiceTests
     {
         public List<string> OutputRoots { get; } = [];
 
+        public Task<ArchiveStartupRecoveryResult> ReconcileAllKnownRootsAsync(CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
         public Task<IReadOnlyList<ArchiveRecoveryEntry>> ScanAsync(string runId, CancellationToken cancellationToken)
             => throw new NotSupportedException();
 

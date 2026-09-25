@@ -291,6 +291,9 @@ public sealed class RunCoordinatorTests
 
         public void SetState(string runId, RunStateSnapshot snapshot) => _states[runId] = snapshot;
 
+        public Task<IReadOnlyList<string>> ListOutputRootsAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>([]);
+
         public Task<RunStateSnapshot?> FindAsync(string runId, CancellationToken cancellationToken)
         {
             _states.TryGetValue(runId, out var s);

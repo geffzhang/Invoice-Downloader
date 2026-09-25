@@ -5,6 +5,7 @@ using InvoiceFlowAI.Application.Archive;
 using InvoiceFlowAI.Application.Persistence;
 using InvoiceFlowAI.Infrastructure.Archive;
 using InvoiceFlowAI.Infrastructure.Persistence;
+using InvoiceFlowAI.Infrastructure.Persistence.Entities;
 using InvoiceFlowAI.Infrastructure.Persistence.Stores;
 using InvoiceFlowAI.Infrastructure.Tests.Persistence;
 using Xunit;
@@ -16,6 +17,66 @@ public sealed class LegacyArchiveRecoveryIntegrationTests : IClassFixture<Sqlite
     private readonly SqliteTestFixture _fixture;
 
     public LegacyArchiveRecoveryIntegrationTests(SqliteTestFixture fixture) => _fixture = fixture;
+
+    [Fact]
+    public async Task Startup_reconciliation_scans_each_registered_output_root_once()
+    {
+        await _fixture.ResetAsync();
+        var firstRoot = CreateRoot();
+        var secondRoot = CreateRoot();
+        const string firstReviewRelative = "archive/prior-run/review/hotel-a.pdf";
+        const string secondOriginalRelative = "住宿发票/hotel-b.pdf";
+        const string firstContent = "first root review bytes";
+        const string secondContent = "second root original bytes";
+        var firstReviewPath = Path.Combine(firstRoot, firstReviewRelative.Replace('/', Path.DirectorySeparatorChar));
+        var secondOriginalPath = Path.Combine(secondRoot, secondOriginalRelative.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(firstReviewPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(secondOriginalPath)!);
+        await File.WriteAllTextAsync(firstReviewPath, firstContent);
+        await File.WriteAllTextAsync(secondOriginalPath, secondContent);
+        try
+        {
+            await using var context = _fixture.CreateContext();
+            context.Runs.AddRange(
+                NewRun("root-a-run-1", firstRoot),
+                NewRun("root-a-run-2", firstRoot + Path.DirectorySeparatorChar),
+                NewRun("root-b-run", secondRoot),
+                NewRun("root-no-output", null),
+                NewRun("root-invalid", "bad\0root"));
+            await context.SaveChangesAsync(CancellationToken.None);
+            var legacyStore = new EfLegacyArchiveInventoryStore(context);
+            var firstInventoryId = await SeedRecoveryRowAsync(
+                legacyStore, context, firstRoot, "住宿发票/hotel-a.pdf", firstReviewRelative, firstContent);
+            var secondInventoryId = await SeedRecoveryRowAsync(
+                legacyStore, context, secondRoot, secondOriginalRelative, "archive/prior-run/review/hotel-b.pdf", secondContent);
+            var fileSystem = new PhysicalArchiveFileSystem();
+            var recovery = new ArchiveRecoveryService(
+                new EfUnitOfWorkFactory(context),
+                new EfArchiveArtifactStore(context),
+                fileSystem,
+                new EfAuditStore(context),
+                new EfPairingStore(context),
+                legacyStore,
+                new EfRunLifecycleStore(context));
+
+            var result = await recovery.ReconcileAllKnownRootsAsync(CancellationToken.None);
+
+            result.SkippedRootCount.Should().Be(1);
+            result.LegacyItems.Should().HaveCount(2);
+            result.LegacyItems.Should().ContainSingle(item => item.InventoryId == firstInventoryId
+                && item.ResolvedState == LegacyArchiveInventoryState.Review);
+            result.LegacyItems.Should().ContainSingle(item => item.InventoryId == secondInventoryId
+                && item.ResolvedState == LegacyArchiveInventoryState.Discovered);
+            result.Artifacts.Should().BeEmpty();
+            File.Exists(firstReviewPath).Should().BeTrue();
+            File.Exists(secondOriginalPath).Should().BeTrue();
+        }
+        finally
+        {
+            if (Directory.Exists(firstRoot)) Directory.Delete(firstRoot, recursive: true);
+            if (Directory.Exists(secondRoot)) Directory.Delete(secondRoot, recursive: true);
+        }
+    }
 
     [Fact]
     public async Task Pre_run_reconciliation_resolves_legacy_review_target_without_moving_or_deleting()
@@ -170,4 +231,16 @@ public sealed class LegacyArchiveRecoveryIntegrationTests : IClassFixture<Sqlite
 
     private static string Hash(string value)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    private static RunRow NewRun(string runId, string? outputRoot) => new()
+    {
+        RunId = runId,
+        State = "Completed",
+        Stage = "complete",
+        DateFrom = new DateOnly(2026, 9, 1),
+        DateToExclusive = new DateOnly(2026, 10, 1),
+        OutputRoot = outputRoot,
+        StartedAtUtc = DateTimeOffset.UtcNow,
+        CreatedAtUtc = DateTimeOffset.UtcNow,
+    };
 }

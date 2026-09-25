@@ -126,5 +126,8 @@ public static class AppServiceProviderFactory
             scope.ServiceProvider.GetRequiredService<IUserSettingsSnapshotStore>(),
             scope.ServiceProvider.GetRequiredService<IUserSettingsStore>());
         await importer.ImportIfPresentAsync(CancellationToken.None).ConfigureAwait(false);
+
+        await scope.ServiceProvider.GetRequiredService<InvoiceFlowAI.Application.Archive.IArchiveRecoveryService>()
+            .ReconcileAllKnownRootsAsync(CancellationToken.None).ConfigureAwait(false);
     }
 }

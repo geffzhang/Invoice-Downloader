@@ -17,6 +17,7 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
     private readonly IAuditEventStore _auditStore;
     private readonly IPairingStore? _pairingStore;
     private readonly ILegacyArchiveInventoryStore? _legacyInventoryStore;
+    private readonly IRunLifecycleStore? _runLifecycleStore;
 
     public ArchiveRecoveryService(
         IUnitOfWorkFactory uowFactory,
@@ -24,7 +25,8 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
         IArchiveFileSystem fileSystem,
         IAuditEventStore auditStore,
         IPairingStore? pairingStore = null,
-        ILegacyArchiveInventoryStore? legacyInventoryStore = null)
+        ILegacyArchiveInventoryStore? legacyInventoryStore = null,
+        IRunLifecycleStore? runLifecycleStore = null)
     {
         _uowFactory = uowFactory ?? throw new ArgumentNullException(nameof(uowFactory));
         _store = store ?? throw new ArgumentNullException(nameof(store));
@@ -32,6 +34,7 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
         _auditStore = auditStore ?? throw new ArgumentNullException(nameof(auditStore));
         _pairingStore = pairingStore;
         _legacyInventoryStore = legacyInventoryStore;
+        _runLifecycleStore = runLifecycleStore;
     }
 
     public async Task<IReadOnlyList<ArchiveRecoveryEntry>> ScanAsync(string runId, CancellationToken cancellationToken)
@@ -50,6 +53,48 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
                 r.State,
                 r.FinalFilePath))
             .ToList();
+    }
+
+    public async Task<ArchiveStartupRecoveryResult> ReconcileAllKnownRootsAsync(CancellationToken cancellationToken)
+    {
+        var runStore = _runLifecycleStore
+            ?? throw new InvalidOperationException("Archive startup recovery requires the run lifecycle store.");
+        var registeredRoots = await runStore.ListOutputRootsAsync(cancellationToken).ConfigureAwait(false);
+        var roots = new SortedSet<string>(PathComparer);
+        var skippedRootCount = 0;
+        foreach (var registeredRoot in registeredRoots)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                if (string.IsNullOrWhiteSpace(registeredRoot)) continue;
+                roots.Add(Path.TrimEndingDirectorySeparator(Path.GetFullPath(registeredRoot)));
+            }
+            catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+            {
+                skippedRootCount++;
+            }
+        }
+
+        var artifacts = new List<ArchiveRecoveryDecision>();
+        var legacyItems = new List<LegacyArchiveRecoveryDecision>();
+        foreach (var root in roots)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var result = await ReconcileBeforeRunAsync(root, cancellationToken).ConfigureAwait(false);
+                artifacts.AddRange(result.Artifacts);
+                legacyItems.AddRange(result.LegacyItems);
+                skippedRootCount += result.SkippedRootCount;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                skippedRootCount++;
+            }
+        }
+
+        return new ArchiveStartupRecoveryResult(artifacts, legacyItems, skippedRootCount);
     }
 
     public async Task<ArchiveRecoveryDecision> ResolveAsync(ArchiveRecoveryEntry entry, CancellationToken cancellationToken)
@@ -259,4 +304,7 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
         var hash = System.Security.Cryptography.SHA256.HashData(bytes);
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
+
+    private static StringComparer PathComparer
+        => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 }
