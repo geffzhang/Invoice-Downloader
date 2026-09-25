@@ -301,8 +301,8 @@ internal sealed class EmptyMailboxSessionFactory : IMailboxSessionFactory
         public Task IdentifyAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<MailboxSessionInfo> OpenReadOnlyAsync(string mailboxName, CancellationToken cancellationToken)
             => Task.FromResult(new MailboxSessionInfo(1));
-        public Task<IReadOnlyList<MailboxFetchedMessage>> SearchAsync(MailboxSearchCriteria criteria, CancellationToken cancellationToken)
-            => Task.FromResult<IReadOnlyList<MailboxFetchedMessage>>(Array.Empty<MailboxFetchedMessage>());
+        public Task<MailboxSearchResult> SearchAsync(MailboxSearchCriteria criteria, CancellationToken cancellationToken)
+            => Task.FromResult(new MailboxSearchResult([], []));
         public Task DisconnectAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

@@ -40,7 +40,10 @@ public sealed record MailboxScanResult(
 {
     public string AccountId { get; init; } = string.Empty;
     public IReadOnlyList<MailboxUrlCandidate> UrlCandidates { get; init; } = Array.Empty<MailboxUrlCandidate>();
+    public IReadOnlyList<MailboxFetchFailure> FetchFailures { get; init; } = Array.Empty<MailboxFetchFailure>();
 }
+
+public sealed record MailboxFetchFailure(long Uid, string ReasonCode);
 
 public interface IAttachmentLimiter
 {

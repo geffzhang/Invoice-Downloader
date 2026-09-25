@@ -167,6 +167,25 @@ public sealed class MailKitMailboxScannerTests
     }
 
     [Fact]
+    public async Task Scan_preserves_fetch_failures_and_advances_highest_uid()
+    {
+        var session = new FakeMailboxSession
+        {
+            SearchResults = [NewMessage(uid: 105)],
+            FetchFailures = [new MailboxFetchFailure(106, "IMAP_MESSAGE_FETCH_FAILED")],
+        };
+        var scanner = CreateScanner(session: session);
+
+        var result = await scanner.ScanAsync(
+            new MailboxScanRequest("acct-1", null, null, null),
+            CancellationToken.None);
+
+        result.Messages.Select(message => message.Uid).Should().Equal("105");
+        result.FetchFailures.Should().ContainSingle().Which.Uid.Should().Be(106);
+        result.HighestUid.Should().Be(106);
+    }
+
+    [Fact]
     public async Task Changed_uid_validity_ignores_since_uid_retains_since_date_and_sets_change_flag()
     {
         var session = new FakeMailboxSession
@@ -653,6 +672,7 @@ public sealed class MailKitMailboxScannerTests
     {
         public MailboxSessionInfo SessionInfo { get; set; } = new(77);
         public IReadOnlyList<MailboxFetchedMessage> SearchResults { get; set; } = [];
+        public IReadOnlyList<MailboxFetchFailure> FetchFailures { get; set; } = [];
         public Exception? AuthenticateException { get; set; }
         public Exception? SearchException { get; set; }
         public Exception? DisconnectException { get; set; }
@@ -688,17 +708,17 @@ public sealed class MailKitMailboxScannerTests
             return Task.FromResult(SessionInfo);
         }
 
-        public Task<IReadOnlyList<MailboxFetchedMessage>> SearchAsync(MailboxSearchCriteria criteria, CancellationToken cancellationToken)
+        public Task<MailboxSearchResult> SearchAsync(MailboxSearchCriteria criteria, CancellationToken cancellationToken)
         {
             LastSearchCriteria = criteria;
             if (SearchException is not null)
             {
-                throw SearchException;
+                return Task.FromException<MailboxSearchResult>(SearchException);
             }
 
             CancelTokenAfterSearch?.Cancel();
 
-            return Task.FromResult(SearchResults);
+            return Task.FromResult(new MailboxSearchResult(SearchResults, FetchFailures));
         }
 
         public Task DisconnectAsync(CancellationToken cancellationToken)
@@ -742,6 +762,35 @@ public sealed class MailKitMailboxScannerTests
 public sealed class MailKitMailboxSessionPureTests
 {
     [Fact]
+    public async Task Session_preserves_successful_uids_and_reports_one_bounded_fetch_failure()
+    {
+        var uids = new[] { new UniqueId(1), new UniqueId(2), new UniqueId(3) };
+        var fetchAttempts = new List<uint>();
+
+        var result = await MailKitMailboxSession.SearchAndFetchAsync(
+            new MailboxSearchCriteria(null, null),
+            (_, _) => Task.FromResult<IReadOnlyList<UniqueId>>(uids),
+            (_, _) => Task.FromResult<IReadOnlyList<MailboxMessageDateSummary>>([]),
+            (uid, _) =>
+            {
+                fetchAttempts.Add(uid.Id);
+                if (uid.Id == 2)
+                {
+                    return Task.FromException<MimeMessage>(
+                        new InvalidOperationException("fetch failed for private@example.com token=secret"));
+                }
+
+                return Task.FromResult(new MimeMessage { Subject = $"message-{uid.Id}" });
+            },
+            CancellationToken.None);
+
+        result.Messages.Select(message => message.Uid).Should().Equal(1L, 3L);
+        result.FetchFailures.Should().ContainSingle().Which.Uid.Should().Be(2);
+        result.FetchFailures[0].ReasonCode.Should().Be("IMAP_MESSAGE_FETCH_FAILED");
+        fetchAttempts.Should().Equal(1u, 2u, 3u);
+    }
+
+    [Fact]
     public async Task Session_summary_uid_selection_matches_full_message_fetch_set()
     {
         var uids = Enumerable.Range(1, 5).Select(value => new UniqueId((uint)value)).ToArray();
@@ -757,7 +806,7 @@ public sealed class MailKitMailboxSessionPureTests
         };
         var criteria = new MailboxSearchCriteria(null, new DateOnly(2026, 6, 10), new DateOnly(2026, 6, 11));
 
-        var messages = await MailKitMailboxSession.SearchAndFetchAsync(
+        var result = await MailKitMailboxSession.SearchAndFetchAsync(
             criteria,
             (_, _) => Task.FromResult<IReadOnlyList<UniqueId>>(uids),
             (requested, _) =>
@@ -775,7 +824,7 @@ public sealed class MailKitMailboxSessionPureTests
 
         summaryRequests.Should().Equal(1u, 2u, 3u, 4u, 5u);
         fullMessageRequests.Should().Equal(1u, 4u, 5u);
-        messages.Select(message => message.Uid).Should().Equal(1L, 4L, 5L);
+        result.Messages.Select(message => message.Uid).Should().Equal(1L, 4L, 5L);
     }
 
     [Theory]

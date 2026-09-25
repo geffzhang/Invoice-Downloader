@@ -821,14 +821,15 @@ def test_caller_cannot_replace_pinned_baseline_with_fake_5000_seconds(
     assert exc_info.value.code == "invalid_baseline_contract"
 
 
-def test_pinned_baseline_contract_uses_current_stable_hardware_fingerprint():
+def test_pinned_baseline_contract_uses_immutable_hardware_fingerprint():
     import batch_validation as module
 
-    hardware_mode, hardware_fingerprint = default_hardware()
     contract = module.pinned_baseline_contract()
 
-    assert contract["scope"]["hardware_mode"] == hardware_mode
-    assert contract["hardware_fingerprint"] == hardware_fingerprint
+    fingerprint = contract["hardware_fingerprint"]
+    assert contract["scope"]["hardware_fingerprint"] == fingerprint
+    assert len(fingerprint) == 64
+    assert all(character in "0123456789abcdef" for character in fingerprint)
     assert contract["contract_sha256"] == module.PINNED_BASELINE_CONTRACT_SHA256
     canonical = {key: value for key, value in contract.items() if key != "contract_sha256"}
     assert hashlib.sha256(

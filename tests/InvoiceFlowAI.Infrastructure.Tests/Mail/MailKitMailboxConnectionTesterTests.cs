@@ -79,8 +79,8 @@ public sealed class MailKitMailboxConnectionTesterTests
             return Task.FromResult(new MailboxSessionInfo(1));
         }
 
-        public Task<IReadOnlyList<MailboxFetchedMessage>> SearchAsync(MailboxSearchCriteria criteria, CancellationToken cancellationToken)
-            => Task.FromResult<IReadOnlyList<MailboxFetchedMessage>>([]);
+        public Task<MailboxSearchResult> SearchAsync(MailboxSearchCriteria criteria, CancellationToken cancellationToken)
+            => Task.FromResult(new MailboxSearchResult([], []));
 
         public Task DisconnectAsync(CancellationToken cancellationToken)
         {

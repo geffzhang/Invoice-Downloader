@@ -17,7 +17,7 @@ public interface IMailboxSession
 
     Task<MailboxSessionInfo> OpenReadOnlyAsync(string mailboxName, CancellationToken cancellationToken);
 
-    Task<IReadOnlyList<MailboxFetchedMessage>> SearchAsync(MailboxSearchCriteria criteria, CancellationToken cancellationToken);
+    Task<MailboxSearchResult> SearchAsync(MailboxSearchCriteria criteria, CancellationToken cancellationToken);
 
     Task DisconnectAsync(CancellationToken cancellationToken);
 }
@@ -50,3 +50,7 @@ public sealed record MailboxFetchedMessage(
 {
     public string HtmlBody { get; init; } = string.Empty;
 }
+
+public sealed record MailboxSearchResult(
+    IReadOnlyList<MailboxFetchedMessage> Messages,
+    IReadOnlyList<MailboxFetchFailure> FetchFailures);
