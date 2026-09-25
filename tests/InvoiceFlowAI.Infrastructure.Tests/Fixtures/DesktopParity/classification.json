@@ -1,0 +1,108 @@
+{
+  "purchaserCases": [
+    {
+      "caseId": "unknown-title-chinese",
+      "purchaser": "未知抬头",
+      "companyName": "Example Company",
+      "expectedDisposition": "ManualReview",
+      "expectedReasonCode": "PURCHASER_UNKNOWN"
+    },
+    {
+      "caseId": "no-title-chinese",
+      "purchaser": "暂无抬头",
+      "companyName": "Example Company",
+      "expectedDisposition": "ManualReview",
+      "expectedReasonCode": "PURCHASER_UNKNOWN"
+    },
+    {
+      "caseId": "no-buyer-chinese",
+      "purchaser": "暂无购买方",
+      "companyName": "Example Company",
+      "expectedDisposition": "ManualReview",
+      "expectedReasonCode": "PURCHASER_UNKNOWN"
+    },
+    {
+      "caseId": "unknown-english",
+      "purchaser": "unknown",
+      "companyName": "Example Company",
+      "expectedDisposition": "ManualReview",
+      "expectedReasonCode": "PURCHASER_UNKNOWN"
+    },
+    {
+      "caseId": "unknown-buyer-english",
+      "purchaser": "unknownbuyer",
+      "companyName": "Example Company",
+      "expectedDisposition": "ManualReview",
+      "expectedReasonCode": "PURCHASER_UNKNOWN"
+    },
+    {
+      "caseId": "unknown-purchaser-english",
+      "purchaser": "unknownpurchaser",
+      "companyName": "Example Company",
+      "expectedDisposition": "ManualReview",
+      "expectedReasonCode": "PURCHASER_UNKNOWN"
+    }
+  ],
+  "trainClassificationCases": [
+    {
+      "caseId": "railway-seller",
+      "seller": "中国铁路",
+      "departureCity": "北京",
+      "destinationCity": "上海",
+      "fileName": "ticket.pdf",
+      "subject": "电子客票",
+      "attachmentName": "ticket.pdf",
+      "originalFileName": "ticket.pdf",
+      "previewText": "",
+      "expectedDocumentType": "TrainTicket"
+    },
+    {
+      "caseId": "railway-subject-with-route",
+      "seller": "Synthetic Airline",
+      "departureCity": "北京",
+      "destinationCity": "上海",
+      "fileName": "ticket.pdf",
+      "subject": "铁路电子客票行程信息",
+      "attachmentName": "ticket.pdf",
+      "originalFileName": "ticket.pdf",
+      "previewText": "Synthetic invoice preview",
+      "expectedDocumentType": "TrainTicket"
+    },
+    {
+      "caseId": "railway-attachment-name-with-route",
+      "seller": "Synthetic Airline",
+      "departureCity": "北京",
+      "destinationCity": "上海",
+      "fileName": "铁路电子客票.pdf",
+      "subject": "电子客票",
+      "attachmentName": "铁路电子客票.pdf",
+      "originalFileName": "铁路电子客票.pdf",
+      "previewText": "Synthetic invoice preview",
+      "expectedDocumentType": "TrainTicket"
+    },
+    {
+      "caseId": "railway-preview-with-route",
+      "seller": "Synthetic Airline",
+      "departureCity": "北京",
+      "destinationCity": "上海",
+      "fileName": "ticket.pdf",
+      "subject": "电子客票",
+      "attachmentName": "ticket.pdf",
+      "originalFileName": "ticket.pdf",
+      "previewText": "铁路电子客票 12306",
+      "expectedDocumentType": "TrainTicket"
+    },
+    {
+      "caseId": "airline-stays-airline",
+      "seller": "中国东方航空股份有限公司",
+      "departureCity": "北京",
+      "destinationCity": "上海",
+      "fileName": "flight-ticket.pdf",
+      "subject": "航空电子客票",
+      "attachmentName": "flight-ticket.pdf",
+      "originalFileName": "flight-ticket.pdf",
+      "previewText": "Online Dom Air Flight No MU 5126",
+      "expectedDocumentType": "AirTicket"
+    }
+  ]
+}

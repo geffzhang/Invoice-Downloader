@@ -1,4 +1,5 @@
 using FluentAssertions;
+using System.Text.Json;
 using InvoiceFlowAI.Application.Extraction;
 using InvoiceFlowAI.Domain.Candidates;
 using InvoiceFlowAI.Domain.Invoices;
@@ -45,6 +46,31 @@ public sealed class InvoiceAcceptanceServiceTests
 
         result.Disposition.Should().Be(AcceptanceDisposition.ManualReview);
         result.ReasonCode.Should().Be("PURCHASER_UNKNOWN");
+    }
+
+    [Fact]
+    public void Shared_purchaser_parity_fixtures_require_manual_review_for_unknown_placeholders()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "classification.json");
+        using var json = JsonDocument.Parse(File.ReadAllText(fixturePath));
+        var cases = json.RootElement.GetProperty("purchaserCases").EnumerateArray();
+
+        foreach (var item in cases)
+        {
+            var caseId = item.GetProperty("caseId").GetString()!;
+            var candidate = NewCandidate(caseId);
+            var invoice = NewInvoice(caseId) with { Purchaser = item.GetProperty("purchaser").GetString()! };
+            var result = new InvoiceAcceptanceService().Evaluate(new InvoiceAcceptanceRequest(
+                candidate,
+                invoice,
+                new InvoiceAcceptancePolicy(),
+                item.GetProperty("companyName").GetString()!,
+                IsVisionFallback: false,
+                SourceParser: "parity-fixture"));
+
+            result.Disposition.ToString().Should().Be(item.GetProperty("expectedDisposition").GetString(), caseId);
+            result.ReasonCode.Should().Be(item.GetProperty("expectedReasonCode").GetString(), caseId);
+        }
     }
 
     [Fact]

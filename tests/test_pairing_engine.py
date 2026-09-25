@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 import random
 
 from pairing_engine import PairingDocument, pair_documents
@@ -31,6 +33,45 @@ def doc(
 
 def pair_ids(result):
     return tuple((invoice.id, companion.id) for invoice, companion in result.pairs)
+
+
+def test_shared_desktop_pairing_golden_fixtures_match_python_decisions():
+    fixture_path = (
+        Path(__file__).parent
+        / "InvoiceFlowAI.Infrastructure.Tests"
+        / "Fixtures"
+        / "DesktopParity"
+        / "pairing.json"
+    )
+    fixtures = json.loads(fixture_path.read_text(encoding="utf-8"))["cases"]
+    cases = {fixture["caseId"]: fixture for fixture in fixtures}
+    assert "hotel-merchant-token-tie-break" in cases
+
+    for fixture in fixtures:
+        family = fixture["family"]
+        invoice_role, companion_role = {
+            "ride": ("ride_invoice", "ride_itinerary"),
+            "hotel": ("hotel_invoice", "hotel_folio"),
+        }[family]
+
+        def to_document(item, role):
+            return PairingDocument(
+                id=item["id"],
+                role=role,
+                amount=Decimal(str(item["amount"])) if item["amount"] is not None else None,
+                business_date=date.fromisoformat(item["businessDate"]) if item["businessDate"] else None,
+                provider=item["provider"],
+                merchant_tokens=frozenset(item["merchantTokens"]),
+                source_message_uid=item["sourceMessageUid"],
+                path=f"C:/archive/{item['id']}.pdf",
+            )
+
+        invoices = [to_document(item, invoice_role) for item in fixture["invoices"]]
+        companions = [to_document(item, companion_role) for item in fixture["companions"]]
+        result = pair_documents(family, invoices, companions)
+
+        assert pair_ids(result) == tuple(tuple(pair) for pair in fixture["expectedPairs"]), fixture["caseId"]
+        assert len(result.ambiguities) == fixture["expectedAmbiguityCount"], fixture["caseId"]
 
 
 def test_ride_pairing_never_crosses_known_providers():

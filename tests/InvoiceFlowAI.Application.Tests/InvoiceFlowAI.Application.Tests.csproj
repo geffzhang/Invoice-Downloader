@@ -22,6 +22,9 @@
 
   <ItemGroup>
     <None Update="Fixtures\CandidateUrlPairing\python-golden.v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\InvoiceFlowAI.Infrastructure.Tests\Fixtures\DesktopParity\classification.json"
+             Link="Fixtures\DesktopParity\classification.json"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

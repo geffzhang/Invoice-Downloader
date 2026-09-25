@@ -1,4 +1,5 @@
 using FluentAssertions;
+using System.Text.Json;
 using InvoiceFlowAI.Application.Ai;
 using InvoiceFlowAI.Application.Extraction;
 using InvoiceFlowAI.Domain.Candidates;
@@ -157,6 +158,67 @@ public sealed class InvoiceFieldExtractorTests
         result.Disposition.Should().Be(AcceptanceDisposition.Accepted);
         result.Document!.Seller.Should().Be("Deterministic Seller");
         result.Document.InvoiceNumber.Should().Be("INV-CORRECTED");
+    }
+
+    [Fact]
+    public async Task Shared_train_classification_fixtures_match_python_evidence_decisions()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "classification.json");
+        using var json = JsonDocument.Parse(File.ReadAllText(fixturePath));
+
+        foreach (var item in json.RootElement.GetProperty("trainClassificationCases").EnumerateArray())
+        {
+            var caseId = item.GetProperty("caseId").GetString()!;
+            var seller = item.GetProperty("seller").GetString()!;
+            var expectedType = item.GetProperty("expectedDocumentType").GetString()!;
+            var candidate = NewCandidate(caseId) with
+            {
+                OriginalFileName = item.GetProperty("fileName").GetString()!,
+                Metadata = new Dictionary<string, string>
+                {
+                    ["attachment_name"] = item.GetProperty("attachmentName").GetString()!,
+                    ["original_filename"] = item.GetProperty("originalFileName").GetString()!,
+                },
+            };
+            var source = new DocumentSource(
+                candidate.DocumentId,
+                MimeType: "application/pdf",
+                Subject: item.GetProperty("subject").GetString()!);
+            var response = JsonSerializer.Serialize(new
+            {
+                isInvoice = true,
+                invoiceDate = "2026-09-24",
+                purchaser = "Example Company",
+                seller,
+                amount = 100m,
+                taxAmount = 0m,
+                totalAmount = 100m,
+                invoiceCode = (string?)null,
+                invoiceNumber = "INV-1",
+                documentType = "AirTicket",
+                category = "Flight",
+                confidence = 0.95m,
+                flags = Array.Empty<string>(),
+                route = new
+                {
+                    direction = "Unknown",
+                    departureDate = "2026-09-24",
+                    departureCity = item.GetProperty("departureCity").GetString(),
+                    destinationCity = item.GetProperty("destinationCity").GetString(),
+                },
+                items = Array.Empty<object>(),
+            }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            var request = new FieldExtractionRequest(
+                candidate,
+                source,
+                $"{LongOcrText}\n{item.GetProperty("previewText").GetString()}",
+                new InvoiceExtractionRules("Example Company", MinimumOcrTextCharacters: 20),
+                AllowVisionFallback: false);
+            var result = await NewExtractor(new FakeChatClient(response)).ExtractAsync(request, CancellationToken.None);
+
+            result.Disposition.Should().Be(AcceptanceDisposition.Accepted, caseId);
+            result.Document!.DocumentType.ToString().Should().Be(expectedType, caseId);
+        }
     }
 
     [Fact]

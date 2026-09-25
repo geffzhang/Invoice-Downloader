@@ -62,6 +62,34 @@
       ],
       "expectedPairs": [],
       "expectedAmbiguityCount": 1
+    },
+    {
+      "caseId": "hotel-merchant-token-tie-break",
+      "family": "hotel",
+      "invoices": [
+        { "id": "hotel-invoice-sheraton", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": ["sheraton"], "sourceMessageUid": "shared-uid" },
+        { "id": "hotel-invoice-marriott", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": ["marriott"], "sourceMessageUid": "shared-uid" }
+      ],
+      "companions": [
+        { "id": "hotel-folio-marriott", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": ["marriott"], "sourceMessageUid": "shared-uid" },
+        { "id": "hotel-folio-sheraton", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": ["sheraton"], "sourceMessageUid": "shared-uid" }
+      ],
+      "expectedPairs": [["hotel-invoice-marriott", "hotel-folio-marriott"], ["hotel-invoice-sheraton", "hotel-folio-sheraton"]],
+      "expectedAmbiguityCount": 0
+    },
+    {
+      "caseId": "hotel-source-uid-tie-break",
+      "family": "hotel",
+      "invoices": [
+        { "id": "hotel-invoice-uid-a", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": [], "sourceMessageUid": "uid-a" },
+        { "id": "hotel-invoice-uid-b", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": [], "sourceMessageUid": "uid-b" }
+      ],
+      "companions": [
+        { "id": "hotel-folio-uid-b", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": [], "sourceMessageUid": "uid-b" },
+        { "id": "hotel-folio-uid-a", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": [], "sourceMessageUid": "uid-a" }
+      ],
+      "expectedPairs": [["hotel-invoice-uid-a", "hotel-folio-uid-a"], ["hotel-invoice-uid-b", "hotel-folio-uid-b"]],
+      "expectedAmbiguityCount": 0
     }
   ]
 }
