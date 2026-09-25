@@ -93,12 +93,18 @@ public sealed class MailKitMailboxScanner : IMailboxScanner
                 request.SinceDate,
                 request.BeforeDateExclusive);
 
-            var fetchedMessages = await session.SearchAsync(criteria, cancellationToken).ConfigureAwait(false);
+            var searchResult = await session.SearchAsync(criteria, cancellationToken).ConfigureAwait(false);
+            var fetchedMessages = searchResult.Messages;
             var messages = new List<MailboxMessage>(fetchedMessages.Count);
             var attachments = new List<MailboxAttachmentCandidate>();
             var urlCandidates = new List<MailboxUrlCandidate>();
             long highestUid = canReuseUidCursor ? normalizedSinceUid!.Value : 0;
             long urlSequence = 0;
+
+            foreach (var fetchFailure in searchResult.FetchFailures)
+            {
+                highestUid = Math.Max(highestUid, fetchFailure.Uid);
+            }
 
             foreach (var fetchedMessage in fetchedMessages)
             {
@@ -194,6 +200,7 @@ public sealed class MailKitMailboxScanner : IMailboxScanner
             {
                 AccountId = request.AccountId,
                 UrlCandidates = urlCandidates,
+                FetchFailures = searchResult.FetchFailures,
             };
         }
         catch (OperationCanceledException ex)

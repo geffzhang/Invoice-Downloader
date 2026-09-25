@@ -76,9 +76,8 @@ class WindowControlContractTests(unittest.TestCase):
 
     def test_frontend_renders_three_window_controls(self):
         source = (ROOT / "templates" / "index_app.js").read_text(encoding="utf-8")
-        self.assertIn('callApi("minimize_window")', source)
-        self.assertIn('callApi("maximize_window")', source)
-        self.assertIn('callApi("close_window")', source)
+        for command in ("minimize", "maximize", "close"):
+            self.assertIn(f'RunPageRpc.windowCommand(window.RpcClient, "{command}")', source)
         self.assertIn("window-traffic-button--maximize", source)
 
     def test_frontend_uses_current_repository_link_without_stale_version_copy(self):

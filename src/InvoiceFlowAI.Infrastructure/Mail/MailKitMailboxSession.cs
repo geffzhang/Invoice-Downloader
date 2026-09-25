@@ -47,7 +47,7 @@ public sealed class MailKitMailboxSession : IMailboxSession
         return new MailboxSessionInfo(folder.UidValidity);
     }
 
-    public async Task<IReadOnlyList<MailboxFetchedMessage>> SearchAsync(MailboxSearchCriteria criteria, CancellationToken cancellationToken)
+    public async Task<MailboxSearchResult> SearchAsync(MailboxSearchCriteria criteria, CancellationToken cancellationToken)
     {
         var folder = _folder ?? throw new InvalidOperationException("Mailbox folder has not been opened.");
         return await SearchAndFetchAsync(
@@ -68,7 +68,7 @@ public sealed class MailKitMailboxSession : IMailboxSession
             cancellationToken).ConfigureAwait(false);
     }
 
-    internal static async Task<IReadOnlyList<MailboxFetchedMessage>> SearchAndFetchAsync(
+    internal static async Task<MailboxSearchResult> SearchAndFetchAsync(
         MailboxSearchCriteria criteria,
         Func<SearchQuery, CancellationToken, Task<IReadOnlyList<UniqueId>>> searchAsync,
         Func<IReadOnlyList<UniqueId>, CancellationToken, Task<IReadOnlyList<MailboxMessageDateSummary>>> fetchSummariesAsync,
@@ -88,15 +88,27 @@ public sealed class MailKitMailboxSession : IMailboxSession
         var summaryByUid = dateSummaries.ToDictionary(summary => summary.Uid);
         var selectedUids = FilterUidsByDateWindow(uids, dateSummaries, criteria);
         var messages = new List<MailboxFetchedMessage>(selectedUids.Count);
+        var fetchFailures = new List<MailboxFetchFailure>();
 
         foreach (var uid in selectedUids)
         {
             summaryByUid.TryGetValue(uid, out var summary);
-            var message = await getMessageAsync(uid, cancellationToken).ConfigureAwait(false);
-            messages.Add(ProjectMessage(uid.Id, message, summary?.InternalDateUtc));
+            try
+            {
+                var message = await getMessageAsync(uid, cancellationToken).ConfigureAwait(false);
+                messages.Add(ProjectMessage(uid.Id, message, summary?.InternalDateUtc));
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                fetchFailures.Add(new MailboxFetchFailure(uid.Id, "IMAP_MESSAGE_FETCH_FAILED"));
+            }
         }
 
-        return messages;
+        return new MailboxSearchResult(messages, fetchFailures);
     }
 
     internal static IReadOnlyList<UniqueId> FilterUidsAfterCursor(IEnumerable<UniqueId> uids, long? sinceUid)
