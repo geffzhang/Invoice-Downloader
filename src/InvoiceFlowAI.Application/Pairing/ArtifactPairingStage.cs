@@ -30,7 +30,7 @@ public sealed class ArtifactPairingStage : IArtifactPairingStage
             .Select(static projection => projection!)
             .ToArray();
         var pairingResults = new List<PairingResult>();
-        var reviewReasons = new Dictionary<string, string>(StringComparer.Ordinal);
+        var reviewReasons = new Dictionary<string, PairingDocumentReviewReason>(StringComparer.Ordinal);
 
         foreach (var group in eligible
             .GroupBy(static projection => (projection.Mailbox, projection.Family))
@@ -45,23 +45,15 @@ public sealed class ArtifactPairingStage : IArtifactPairingStage
                 documents.Where(static item => !IsInvoiceRole(item.Document.Role)).Select(static item => item.Document).ToArray());
             pairingResults.Add(result);
 
-            foreach (var ambiguity in result.Ambiguities)
+            foreach (var reason in result.ReviewReasons)
             {
-                foreach (var documentId in ambiguity.DocumentIds)
-                {
-                    reviewReasons[documentId] = "PAIRING_AMBIGUOUS";
-                }
-            }
-
-            foreach (var unmatched in result.UnmatchedInvoices.Concat(result.UnmatchedCompanions))
-            {
-                reviewReasons.TryAdd(unmatched.Id, "PAIRING_UNMATCHED");
+                reviewReasons[reason.DocumentId] = reason;
             }
         }
 
         foreach (var projection in eligible)
         {
-            if (!reviewReasons.TryGetValue(projection.Document.Id, out var reasonCode))
+            if (!reviewReasons.TryGetValue(projection.Document.Id, out var reason))
             {
                 continue;
             }
@@ -69,7 +61,7 @@ public sealed class ArtifactPairingStage : IArtifactPairingStage
             candidateResults[projection.ResultIndex] = candidateResults[projection.ResultIndex] with
             {
                 Status = CandidateStatus.ManualReview,
-                Failure = BuildReviewFailure(reasonCode),
+                Failure = BuildReviewFailure(reason),
             };
         }
 
@@ -144,15 +136,20 @@ public sealed class ArtifactPairingStage : IArtifactPairingStage
     private static bool IsInvoiceRole(PairingRole role)
         => role is PairingRole.RideInvoice or PairingRole.HotelInvoice;
 
-    private static CandidateFailure BuildReviewFailure(string reasonCode)
+    private static CandidateFailure BuildReviewFailure(PairingDocumentReviewReason reason)
         => new(
-            reasonCode,
+            reason.ReasonCode,
             FailureScope.Candidate,
             FailureCategory.Validation,
             Retryable: false,
-            reasonCode == "PAIRING_AMBIGUOUS"
-                ? "The matching documents are ambiguous and require review."
-                : "No matching companion document was found.");
+            reason.Code switch
+            {
+                PairingReviewReasonCode.CounterpartMissing => "A companion document is missing and requires review.",
+                PairingReviewReasonCode.NoCompatibleEdge => "No compatible companion document was found.",
+                PairingReviewReasonCode.AmbiguousOptimum => "The matching documents are ambiguous and require review.",
+                PairingReviewReasonCode.UnmatchedByGlobalAssignment => "A compatible document was assigned to a stronger match and requires review.",
+                _ => "The document requires manual review.",
+            });
 
     private sealed record PairingProjection(
         int ResultIndex,

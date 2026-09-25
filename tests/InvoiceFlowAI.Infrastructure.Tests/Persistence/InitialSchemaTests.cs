@@ -50,6 +50,28 @@ public sealed class InitialSchemaTests : IClassFixture<SqliteTestFixture>
     }
 
     [Fact]
+    public async Task Migration_persists_archive_temp_and_absolute_final_paths()
+    {
+        await using var context = _fixture.CreateContext();
+        var columns = new List<string>();
+        await context.Database.OpenConnectionAsync();
+        try
+        {
+            await using var command = context.Database.GetDbConnection().CreateCommand();
+            command.CommandText = "PRAGMA table_info('ArchivedArtifacts');";
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync()) columns.Add(reader.GetString(1));
+        }
+        finally
+        {
+            await context.Database.CloseConnectionAsync();
+        }
+
+        columns.Should().Contain("TempFilePath");
+        columns.Should().Contain("FinalFilePath");
+    }
+
+    [Fact]
     public async Task Migration_enables_foreign_keys_pragma()
     {
         await using var context = _fixture.CreateContext();
@@ -104,7 +126,8 @@ public sealed class InitialSchemaTests : IClassFixture<SqliteTestFixture>
 
         migrationIds.Should().Equal(
             "20260923_InitialSchema",
-            "20260924_AddMailboxDefaultMailbox");
+            "20260924_AddMailboxDefaultMailbox",
+            "20260925003448_PersistArchivePaths");
     }
 
     [Fact]

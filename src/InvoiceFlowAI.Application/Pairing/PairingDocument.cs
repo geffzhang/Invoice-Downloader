@@ -34,6 +34,14 @@ public enum PairingFamily
     Hotel,
 }
 
+public enum PairingReviewReasonCode
+{
+    CounterpartMissing,
+    NoCompatibleEdge,
+    AmbiguousOptimum,
+    UnmatchedByGlobalAssignment,
+}
+
 public sealed record PairingDocument(
     string Id,
     PairingRole Role,
@@ -50,13 +58,32 @@ public sealed record PairingAmbiguity(
 
 public sealed record PairingAssignment(
     PairingDocument Invoice,
-    PairingDocument Companion);
+    PairingDocument Companion,
+    int Score = 0);
+
+public sealed record PairingDocumentReviewReason(
+    string DocumentId,
+    PairingReviewReasonCode Code,
+    IReadOnlyList<string> EvidenceCodes)
+{
+    public string ReasonCode => Code switch
+    {
+        PairingReviewReasonCode.CounterpartMissing => "PAIRING_COUNTERPART_MISSING",
+        PairingReviewReasonCode.NoCompatibleEdge => "PAIRING_NO_COMPATIBLE_EDGE",
+        PairingReviewReasonCode.AmbiguousOptimum => "PAIRING_AMBIGUOUS_OPTIMUM",
+        PairingReviewReasonCode.UnmatchedByGlobalAssignment => "PAIRING_UNMATCHED_BY_GLOBAL_ASSIGNMENT",
+        _ => throw new ArgumentOutOfRangeException(nameof(Code), Code, null),
+    };
+}
 
 public sealed record PairingResult(
     IReadOnlyList<PairingAssignment> Pairs,
     IReadOnlyList<PairingDocument> UnmatchedInvoices,
     IReadOnlyList<PairingDocument> UnmatchedCompanions,
-    IReadOnlyList<PairingAmbiguity> Ambiguities);
+    IReadOnlyList<PairingAmbiguity> Ambiguities)
+{
+    public IReadOnlyList<PairingDocumentReviewReason> ReviewReasons { get; init; } = Array.Empty<PairingDocumentReviewReason>();
+}
 
 public interface IPairingEngine
 {
@@ -91,6 +118,7 @@ public sealed class PairingEngine : IPairingEngine
 
         var acceptedEdges = new HashSet<Edge>();
         var ambiguities = new List<PairingAmbiguity>();
+        var ambiguousDocumentIds = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var component in ConnectedComponents(sortedInvoices.Count, sortedCompanions.Count, edges))
         {
@@ -102,19 +130,26 @@ public sealed class PairingEngine : IPairingEngine
                 foreach (var j in component.Companions) documentIds.Add(sortedCompanions[j].Id);
                 documentIds.Sort(StringComparer.Ordinal);
                 ambiguities.Add(new PairingAmbiguity(documentIds, "multiple_optimal_pair_memberships"));
+                ambiguousDocumentIds.UnionWith(documentIds);
                 continue;
             }
             foreach (var pair in assignments[0]) acceptedEdges.Add(pair);
         }
 
         var pairs = acceptedEdges
-            .Select(p => new PairingAssignment(sortedInvoices[p.Invoice], sortedCompanions[p.Companion]))
+            .Select(p => new PairingAssignment(
+                sortedInvoices[p.Invoice],
+                sortedCompanions[p.Companion],
+                edges[p]))
             .OrderBy(a => a.Invoice.Id, StringComparer.Ordinal)
             .ThenBy(a => a.Companion.Id, StringComparer.Ordinal)
             .ToList();
 
         var matchedInvoiceIds = pairs.Select(p => p.Invoice.Id).ToHashSet(StringComparer.Ordinal);
         var matchedCompanionIds = pairs.Select(p => p.Companion.Id).ToHashSet(StringComparer.Ordinal);
+        var reviewReasons = new List<PairingDocumentReviewReason>();
+        AddReviewReasons(sortedInvoices, sortedCompanions, matchedInvoiceIds, ambiguousDocumentIds, family, reviewReasons);
+        AddReviewReasons(sortedCompanions, sortedInvoices, matchedCompanionIds, ambiguousDocumentIds, family, reviewReasons);
 
         return new PairingResult(
             Pairs: pairs,
@@ -122,7 +157,110 @@ public sealed class PairingEngine : IPairingEngine
             UnmatchedCompanions: sortedCompanions.Where(d => !matchedCompanionIds.Contains(d.Id)).ToList(),
             Ambiguities: ambiguities
                 .OrderBy(a => string.Join(",", a.DocumentIds), StringComparer.Ordinal)
-                .ToList());
+                .ToList())
+        {
+            ReviewReasons = reviewReasons
+                .OrderBy(reason => reason.DocumentId, StringComparer.Ordinal)
+                .ToList(),
+        };
+    }
+
+    private static void AddReviewReasons(
+        IReadOnlyList<PairingDocument> documents,
+        IReadOnlyList<PairingDocument> counterparts,
+        HashSet<string> matchedIds,
+        HashSet<string> ambiguousIds,
+        PairingFamily family,
+        ICollection<PairingDocumentReviewReason> reasons)
+    {
+        var invoiceRole = family == PairingFamily.Ride ? PairingRole.RideInvoice : PairingRole.HotelInvoice;
+        foreach (var document in documents)
+        {
+            if (matchedIds.Contains(document.Id)) continue;
+
+            if (ambiguousIds.Contains(document.Id))
+            {
+                reasons.Add(new PairingDocumentReviewReason(
+                    document.Id,
+                    PairingReviewReasonCode.AmbiguousOptimum,
+                    Array.Empty<string>()));
+                continue;
+            }
+
+            if (counterparts.Count == 0)
+            {
+                reasons.Add(new PairingDocumentReviewReason(
+                    document.Id,
+                    PairingReviewReasonCode.CounterpartMissing,
+                    Array.Empty<string>()));
+                continue;
+            }
+
+            PairingDocument InvoiceFor(PairingDocument counterpart)
+                => document.Role == invoiceRole ? document : counterpart;
+            PairingDocument CompanionFor(PairingDocument counterpart)
+                => document.Role == invoiceRole ? counterpart : document;
+
+            var evidenceCodes = counterparts
+                .SelectMany(counterpart => GetIncompatibilityEvidence(
+                    family,
+                    InvoiceFor(counterpart),
+                    CompanionFor(counterpart)))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(code => code, StringComparer.Ordinal)
+                .ToArray();
+            var hasCompatibleCounterpart = counterparts.Any(counterpart =>
+                Compatible(family, InvoiceFor(counterpart), CompanionFor(counterpart)));
+
+            reasons.Add(new PairingDocumentReviewReason(
+                document.Id,
+                hasCompatibleCounterpart
+                    ? PairingReviewReasonCode.UnmatchedByGlobalAssignment
+                    : PairingReviewReasonCode.NoCompatibleEdge,
+                evidenceCodes));
+        }
+    }
+
+    private static IEnumerable<string> GetIncompatibilityEvidence(
+        PairingFamily family,
+        PairingDocument invoice,
+        PairingDocument companion)
+    {
+        if (invoice.Amount is null || companion.Amount is null)
+        {
+            yield return "REQUIRED_AMOUNT_MISSING";
+        }
+
+        var invoiceProvider = (invoice.Provider ?? "").Trim().ToLowerInvariant();
+        var companionProvider = (companion.Provider ?? "").Trim().ToLowerInvariant();
+        if (!string.IsNullOrEmpty(invoiceProvider)
+            && !string.IsNullOrEmpty(companionProvider)
+            && invoiceProvider != companionProvider)
+        {
+            yield return "PROVIDER_MISMATCH";
+        }
+
+        if (invoice.Amount is { } invoiceAmount && companion.Amount is { } companionAmount)
+        {
+            var delta = Math.Abs(invoiceAmount - companionAmount);
+            var amountCompatible = family == PairingFamily.Ride
+                ? delta < Cent
+                    || Math.Abs(invoiceAmount * RideTaxFactor - companionAmount) < RideTaxSlack
+                    || Math.Abs(companionAmount * RideTaxFactor - invoiceAmount) < RideTaxSlack
+                : delta <= Cent;
+            if (!amountCompatible)
+            {
+                yield return "AMOUNT_OUT_OF_TOLERANCE";
+            }
+        }
+
+        if (family == PairingFamily.Hotel
+            && invoice.BusinessDate is { } invoiceDate
+            && companion.BusinessDate is { } companionDate
+            && Math.Abs(invoiceDate.DayNumber - companionDate.DayNumber) > 3)
+        {
+            yield return "DATE_OUT_OF_TOLERANCE";
+        }
     }
 
     private static bool Compatible(PairingFamily family, PairingDocument invoice, PairingDocument companion)

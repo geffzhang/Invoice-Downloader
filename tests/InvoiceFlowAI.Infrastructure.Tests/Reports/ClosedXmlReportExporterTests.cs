@@ -197,6 +197,7 @@ public sealed class ClosedXmlReportExporterTests
     {
         public Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<bool> FileExistsAsync(string path, CancellationToken cancellationToken) => Task.FromResult(File.Exists(path));
+        public Task<string> CopyToSiblingTempAsync(string sourcePath, string finalFilePath, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task AtomicMoveAsync(string sourcePath, string targetPath, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task FlushToDiskAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task DeleteAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;

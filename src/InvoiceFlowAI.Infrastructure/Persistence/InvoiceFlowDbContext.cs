@@ -151,6 +151,8 @@ public sealed class InvoiceFlowDbContext : DbContext
             b.Property(x => x.DocumentId).HasMaxLength(64).IsRequired();
             b.Property(x => x.Role).HasMaxLength(32).IsRequired();
             b.Property(x => x.RelativePath).HasMaxLength(512).IsRequired();
+            b.Property(x => x.TempFilePath).HasMaxLength(1024);
+            b.Property(x => x.FinalFilePath).HasMaxLength(1024);
             b.Property(x => x.FileName).HasMaxLength(256).IsRequired();
             b.Property(x => x.ContentHash).HasMaxLength(64).IsRequired();
             b.Property(x => x.State).HasMaxLength(16).IsRequired();

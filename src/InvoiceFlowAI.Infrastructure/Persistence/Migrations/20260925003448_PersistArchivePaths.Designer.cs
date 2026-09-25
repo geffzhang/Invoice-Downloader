@@ -3,6 +3,7 @@ using System;
 using InvoiceFlowAI.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace InvoiceFlowAI.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(InvoiceFlowDbContext))]
-    partial class InvoiceFlowDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260925003448_PersistArchivePaths")]
+    partial class PersistArchivePaths
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

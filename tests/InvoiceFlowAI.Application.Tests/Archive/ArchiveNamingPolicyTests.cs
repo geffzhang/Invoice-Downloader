@@ -86,18 +86,95 @@ public sealed class ArchiveNamingPolicyTests
         path.Should().StartWith("archive/run-42/");
     }
 
-    private static InvoiceDocument NewInvoice(string? contentHash = null, string? number = "INV-1", DateOnly? date = null) =>
+    [Fact]
+    public void Ride_pair_names_match_python_shape_and_preserve_each_source_extension()
+    {
+        var invoice = NewInvoice(type: InvoiceDocumentType.RideInvoice, amount: 100m, date: new DateOnly(2026, 9, 24));
+        var itinerary = NewInvoice(type: InvoiceDocumentType.RideItinerary, amount: 103m, date: new DateOnly(2026, 9, 24));
+
+        var paths = InvokeNaming(
+            "BuildPairRelativePaths",
+            invoice,
+            "ride-高德发票.pdf",
+            itinerary,
+            "ride-行程单.ofd",
+            "run-1",
+            1,
+            "ride");
+
+        ReadPath(paths, "InvoiceRelativePath").Should().Be("archive/run-1/0924-高德-01-发票_103.00元.pdf");
+        ReadPath(paths, "CompanionRelativePath").Should().Be("archive/run-1/0924-高德-01-行程单_103.00元.ofd");
+    }
+
+    [Fact]
+    public void Hotel_pair_names_match_python_shape_and_use_invoice_amount_and_date()
+    {
+        var invoice = NewInvoice(type: InvoiceDocumentType.HotelInvoice, amount: 500m, date: new DateOnly(2026, 9, 24));
+        var folio = NewInvoice(type: InvoiceDocumentType.HotelFolio, amount: 500m, date: new DateOnly(2026, 9, 25));
+
+        var paths = InvokeNaming(
+            "BuildPairRelativePaths",
+            invoice,
+            "hotel-invoice.pdf",
+            folio,
+            "hotel-folio.xlsx",
+            "run-2",
+            3,
+            "hotel");
+
+        ReadPath(paths, "InvoiceRelativePath").Should().Be("archive/run-2/20260924-住宿-03-发票_500.00元.pdf");
+        ReadPath(paths, "CompanionRelativePath").Should().Be("archive/run-2/20260924-住宿-03-水单_500.00元.xlsx");
+    }
+
+    [Fact]
+    public void Review_and_retained_names_sanitize_untrusted_components()
+    {
+        var review = InvokeNaming("BuildReviewRelativePath", "run-3", "../doc/1", "unsafe name.pdf", "PAIRING/ERROR");
+        var retained = InvokeNaming("BuildRetainedRelativePath", "run-3", "../doc/1", "unsafe name.pdf");
+
+        var reviewPath = (string)review;
+        var retainedPath = (string)retained;
+        reviewPath.Should().StartWith("archive/run-3/review/");
+        retainedPath.Should().StartWith("archive/run-3/retained/");
+        reviewPath.Should().NotContain("..").And.NotContain("PAIRING/ERROR");
+        retainedPath.Should().NotContain("..");
+        Path.GetExtension(reviewPath).Should().Be(".pdf");
+        Path.GetExtension(retainedPath).Should().Be(".pdf");
+    }
+
+    private static object InvokeNaming(string methodName, params object?[] arguments)
+    {
+        var method = typeof(IArchiveNamingPolicy).GetMethod(methodName);
+        method.Should().NotBeNull($"the naming contract includes {methodName}");
+        return method!.Invoke(_policyStatic, arguments)!;
+    }
+
+    private static string ReadPath(object paths, string propertyName)
+    {
+        var property = paths.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"pair paths include {propertyName}");
+        return (string)property!.GetValue(paths)!;
+    }
+
+    private static readonly IArchiveNamingPolicy _policyStatic = new ArchiveNamingPolicy();
+
+    private static InvoiceDocument NewInvoice(
+        string? contentHash = null,
+        string? number = "INV-1",
+        DateOnly? date = null,
+        InvoiceDocumentType type = InvoiceDocumentType.AirTicket,
+        decimal amount = 100m) =>
         new(
             DocumentId: "doc-1",
             InvoiceDate: date,
             Purchaser: "Acme",
             Seller: "Air Berlin",
-            Amount: 100m,
+            Amount: amount,
             TaxAmount: 13m,
-            TotalAmount: 113m,
+            TotalAmount: amount,
             InvoiceCode: "CODE-1",
             InvoiceNumber: number,
-            DocumentType: InvoiceDocumentType.AirTicket,
+            DocumentType: type,
             Category: null,
             Route: InvoiceRoute.Inbound,
             Items: Array.Empty<InvoiceItem>(),

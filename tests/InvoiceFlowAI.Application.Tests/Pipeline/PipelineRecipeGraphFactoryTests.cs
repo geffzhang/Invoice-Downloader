@@ -213,10 +213,10 @@ public sealed class PipelineRecipeGraphFactoryTests
 
     private sealed class FakeArchiveStage(List<string>? calls = null) : IDocumentArchivingStage
     {
-        public Task<ArchiveBatch> ExecuteAsync(PairingBatch input, CancellationToken cancellationToken)
+        public Task<ArchiveBatch> ExecuteAsync(ArchiveStageRequest request, CancellationToken cancellationToken)
         {
             calls?.Add("archive");
-            return Task.FromResult(new ArchiveBatch(input.CandidateResults, Array.Empty<RunFailure>()));
+            return Task.FromResult(new ArchiveBatch(request.Batch.CandidateResults, Array.Empty<RunFailure>()));
         }
     }
 

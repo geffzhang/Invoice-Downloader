@@ -19,7 +19,8 @@ public sealed record ArchiveArtifactKey(
 
 public sealed record ArchiveCommitRequest(
     ArchiveArtifactKey Key,
-    string TempFilePath,
+    string SourceFilePath,
+    string FinalFilePath,
     string FinalRelativePath,
     string FileName);
 
@@ -28,7 +29,18 @@ public sealed record ArchiveCommitResult(
     ArchiveArtifactState State,
     string FinalRelativePath,
     string ContentHash,
-    bool AlreadyExisted);
+    bool AlreadyExisted,
+    string? ReasonCode = null);
+
+public sealed class ArchivePathCollisionException : IOException
+{
+    public const string StableReasonCode = "ARCHIVE_PATH_COLLISION";
+
+    public ArchivePathCollisionException(string path)
+        : base($"Archive destination already exists: {path}")
+    {
+    }
+}
 
 public enum ArchiveArtifactState
 {
@@ -56,7 +68,8 @@ public sealed record ArchiveRecoveryEntry(
     string FinalRelativePath,
     string FileName,
     string ExpectedContentHash,
-    ArchiveArtifactState CurrentState);
+    ArchiveArtifactState CurrentState,
+    string? FinalFilePath = null);
 
 public sealed record ArchiveRecoveryDecision(
     string ArtifactId,

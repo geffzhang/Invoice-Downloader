@@ -15,17 +15,20 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
     private readonly IArchiveArtifactStore _store;
     private readonly IArchiveFileSystem _fileSystem;
     private readonly IAuditEventStore _auditStore;
+    private readonly IPairingStore? _pairingStore;
 
     public ArchiveRecoveryService(
         IUnitOfWorkFactory uowFactory,
         IArchiveArtifactStore store,
         IArchiveFileSystem fileSystem,
-        IAuditEventStore auditStore)
+        IAuditEventStore auditStore,
+        IPairingStore? pairingStore = null)
     {
         _uowFactory = uowFactory ?? throw new ArgumentNullException(nameof(uowFactory));
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
         _auditStore = auditStore ?? throw new ArgumentNullException(nameof(auditStore));
+        _pairingStore = pairingStore;
     }
 
     public async Task<IReadOnlyList<ArchiveRecoveryEntry>> ScanAsync(string runId, CancellationToken cancellationToken)
@@ -41,7 +44,8 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
                 r.FinalRelativePath,
                 r.FileName,
                 r.ExpectedContentHash,
-                r.State))
+                r.State,
+                r.FinalFilePath))
             .ToList();
     }
 
@@ -49,8 +53,9 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
     {
         ArgumentNullException.ThrowIfNull(entry);
 
+        var finalFilePath = entry.FinalFilePath ?? entry.FinalRelativePath;
         var tempExists = await _fileSystem.FileExistsAsync(entry.TempFilePath, cancellationToken).ConfigureAwait(false);
-        var finalExists = await _fileSystem.FileExistsAsync(entry.FinalRelativePath, cancellationToken).ConfigureAwait(false);
+        var finalExists = await _fileSystem.FileExistsAsync(finalFilePath, cancellationToken).ConfigureAwait(false);
 
         // Case: both gone. Evidence missing — surface RecoveryRequired.
         if (!tempExists && !finalExists)
@@ -62,7 +67,7 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
         // Case: final present. Verify hash.
         if (finalExists)
         {
-            var finalHash = await _fileSystem.ComputeSha256Async(entry.FinalRelativePath, cancellationToken).ConfigureAwait(false);
+            var finalHash = await _fileSystem.ComputeSha256Async(finalFilePath, cancellationToken).ConfigureAwait(false);
             if (!string.Equals(finalHash, entry.ExpectedContentHash, StringComparison.OrdinalIgnoreCase))
             {
                 return await MarkRecoveryAsync(entry, "ARCHIVE_HASH_MISMATCH",
@@ -86,6 +91,7 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
                 PayloadHash: Sha256Hex($"{{\"artifactId\":\"{entry.ArtifactId}\"}}"),
                 OccurredAtUtc: DateTimeOffset.UtcNow), tx, cancellationToken).ConfigureAwait(false);
             await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+            await ReconcilePairingsAsync(entry.Key.RunId, cancellationToken).ConfigureAwait(false);
             return new ArchiveRecoveryDecision(entry.ArtifactId, ArchiveArtifactState.Committed, null, null);
         }
 
@@ -99,9 +105,9 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
                     "Temp file present but its content hash does not match the DB-asserted hash.", cancellationToken).ConfigureAwait(false);
             }
 
-            await _fileSystem.AtomicMoveAsync(entry.TempFilePath, entry.FinalRelativePath, cancellationToken).ConfigureAwait(false);
-            await _fileSystem.FlushToDiskAsync(entry.FinalRelativePath, cancellationToken).ConfigureAwait(false);
-            var finalHash = await _fileSystem.ComputeSha256Async(entry.FinalRelativePath, cancellationToken).ConfigureAwait(false);
+            await _fileSystem.AtomicMoveAsync(entry.TempFilePath, finalFilePath, cancellationToken).ConfigureAwait(false);
+            await _fileSystem.FlushToDiskAsync(finalFilePath, cancellationToken).ConfigureAwait(false);
+            var finalHash = await _fileSystem.ComputeSha256Async(finalFilePath, cancellationToken).ConfigureAwait(false);
             if (!string.Equals(finalHash, entry.ExpectedContentHash, StringComparison.OrdinalIgnoreCase))
             {
                 return await MarkRecoveryAsync(entry, "ARCHIVE_HASH_MISMATCH",
@@ -111,6 +117,7 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
             await using var tx = await _uowFactory.BeginAsync(TransactionPurpose.ArchiveCommit, cancellationToken).ConfigureAwait(false);
             await _store.MarkCommittedAsync(entry.ArtifactId, DateTimeOffset.UtcNow, tx, cancellationToken).ConfigureAwait(false);
             await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+            await ReconcilePairingsAsync(entry.Key.RunId, cancellationToken).ConfigureAwait(false);
             return new ArchiveRecoveryDecision(entry.ArtifactId, ArchiveArtifactState.Committed, null, null);
         }
 
@@ -127,7 +134,18 @@ public sealed class ArchiveRecoveryService : IArchiveRecoveryService
         await using var tx = await _uowFactory.BeginAsync(TransactionPurpose.ArchiveCommit, cancellationToken).ConfigureAwait(false);
         await _store.MarkRecoveryRequiredAsync(entry.ArtifactId, reasonCode, tx, cancellationToken).ConfigureAwait(false);
         await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+        await ReconcilePairingsAsync(entry.Key.RunId, cancellationToken).ConfigureAwait(false);
         return new ArchiveRecoveryDecision(entry.ArtifactId, ArchiveArtifactState.RecoveryRequired, reasonCode, safeMessage);
+    }
+
+    private async Task ReconcilePairingsAsync(string runId, CancellationToken cancellationToken)
+    {
+        if (_pairingStore is null) return;
+
+        var artifacts = await _store.ListByRunAsync(runId, cancellationToken).ConfigureAwait(false);
+        await using var transaction = await _uowFactory.BeginAsync(TransactionPurpose.ArchiveCommit, cancellationToken).ConfigureAwait(false);
+        await _pairingStore.ReconcileArchiveStateAsync(runId, artifacts, transaction, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static string Sha256Hex(string value)

@@ -27,6 +27,7 @@ public enum TransactionPurpose
     PacketCommit,
     CheckpointWrite,
     TerminalCommit,
+    PairingCommit,
 }
 
 /// <summary>
