@@ -1,0 +1,17 @@
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-account-test-1",
+  "ok": false,
+  "error": {
+    "code": "MAILBOX_TLS_FAILED",
+    "scope": "account",
+    "retryable": false,
+    "userMessage": "邮箱安全连接失败，请检查邮箱配置。",
+    "detailsAvailable": true,
+    "details": {
+      "accountId": "mail-account-1",
+      "mailbox": "INBOX",
+      "host": "imap.example.com"
+    }
+  }
+}

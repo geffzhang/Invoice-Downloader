@@ -1,0 +1,147 @@
+# Windows x64 .NET 10 build and release pipeline.
+#
+# - Self-hosted or windows-latest runner with .NET SDK 10.0.100 + WiX 5.0.2.
+# - Runs the toolchain check, locked-mode restore, full test suite,
+# then publish + manifest emission + WiX packaging. Tagged releases contain
+# only the Windows .NET installer, portable publish tree, and checksums.
+
+name: Windows x64 .NET 10
+
+on:
+  push:
+    branches: [dotnet, main]
+    tags: ['v*']
+  pull_request:
+    branches: [dotnet, main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Toolchain + tests + publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install .NET SDK 10.0.100
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.100'
+
+      - name: Install WiX Toolset 5.0.2
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
+
+      - name: Verify pinned toolchain
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
+          pwsh -File build/verify-toolchain.ps1
+
+      - name: Restore with locked-mode
+        shell: pwsh
+        run: dotnet restore --locked-mode
+
+      - name: Build (zero warnings, warnings-as-errors)
+        shell: pwsh
+        run: dotnet build -c Release --no-restore
+
+      - name: Run full test suite
+        shell: pwsh
+        run: dotnet test -c Release --no-build --nologo
+
+      - name: Publish self-contained win-x64 app, worker, model, and manifests
+        shell: pwsh
+        run: pwsh -File build/windows/publish_dotnet_app.ps1 -Configuration Release -PublishRoot publish/win-x64
+
+      - name: Upload publish + manifests artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-publish
+          if-no-files-found: error
+          path: publish/win-x64/
+          retention-days: 7
+
+  package:
+    name: WiX x64 MSI
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-publish
+          path: publish/win-x64
+
+      - name: Install .NET SDK 10.0.100
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.100'
+
+      - name: Install WiX Toolset 5.0.2
+        shell: pwsh
+        run: dotnet tool install --global wix --version 5.0.2
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          $env:WIX_PATH = "$env:USERPROFILE\.dotnet\tools"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          wix build src/InvoiceFlowAI.Installer/Product.wxs -arch x64 -out dist/InvoiceFlowAI-setup.msi
+
+      - name: Prepare Windows release assets
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME -replace '/', '-'
+          $assetRoot = Join-Path $PWD "dist/release-assets"
+          New-Item -ItemType Directory -Force -Path $assetRoot | Out-Null
+          Copy-Item dist/InvoiceFlowAI-setup.msi (Join-Path $assetRoot "InvoiceFlowAI-$tag-windows-x64-setup.msi")
+          Compress-Archive -Path "publish/win-x64/*" -DestinationPath (Join-Path $assetRoot "InvoiceFlowAI-$tag-windows-x64-portable.zip") -CompressionLevel Optimal
+          Copy-Item publish/win-x64/manifests/release.json (Join-Path $assetRoot "InvoiceFlowAI-$tag-release-manifest.json")
+          $checksumLines = Get-ChildItem -LiteralPath $assetRoot -File | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          }
+          [System.IO.File]::WriteAllLines(
+            (Join-Path $assetRoot "InvoiceFlowAI-$tag-SHA256SUMS.txt"),
+            $checksumLines,
+            [System.Text.UTF8Encoding]::new($false))
+
+      - name: Upload Windows release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-release-assets
+          if-no-files-found: error
+          path: dist/release-assets/
+          retention-days: 7
+
+  publish_release:
+    name: Publish Windows x64 .NET release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-release-assets
+          path: release-assets
+
+      - name: Verify checksums and publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cd release-assets
+          safe_tag="${RELEASE_TAG//\//-}"
+          sha256sum --check "InvoiceFlowAI-${safe_tag}-SHA256SUMS.txt"
+          gh release create "$RELEASE_TAG" InvoiceFlowAI-"$safe_tag"-* \
+            --verify-tag --title "InvoiceFlowAI $RELEASE_TAG" \
+            --notes "Windows x64 desktop release built from the C#/.NET runtime. macOS desktop and DSH plugin releases have been retired."

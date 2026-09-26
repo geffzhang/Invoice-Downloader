@@ -1,0 +1,37 @@
+{
+  "cases": [
+    {
+      "caseId": "ofd-only-is-not-selectable",
+      "expectedFields": {},
+      "artifacts": [{ "kind": "Ofd", "fields": {} }],
+      "expectedSelectedIndex": null,
+      "expectedSelectedKind": "",
+      "expectedMatchReason": "",
+      "expectedFailure": "DIRECT_INVOICE_NO_VALID_ARTIFACT"
+    },
+    {
+      "caseId": "single-xml-selected-with-ofd-capture",
+      "expectedFields": {},
+      "artifacts": [
+        { "kind": "Xml", "fields": {} },
+        { "kind": "Ofd", "fields": {} }
+      ],
+      "expectedSelectedIndex": 0,
+      "expectedSelectedKind": "Xml",
+      "expectedMatchReason": "single_xml_without_conflict",
+      "expectedFailure": ""
+    },
+    {
+      "caseId": "matching-pdf-selected-with-ofd-capture",
+      "expectedFields": { "invoice_number": "SYNTHETIC-INVOICE-001" },
+      "artifacts": [
+        { "kind": "Ofd", "fields": {} },
+        { "kind": "Pdf", "fields": { "invoice_number": "SYNTHETIC-INVOICE-001" } }
+      ],
+      "expectedSelectedIndex": 1,
+      "expectedSelectedKind": "Pdf",
+      "expectedMatchReason": "invoice_number",
+      "expectedFailure": ""
+    }
+  ]
+}

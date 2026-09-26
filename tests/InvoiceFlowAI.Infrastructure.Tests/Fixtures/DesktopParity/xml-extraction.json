@@ -1,0 +1,34 @@
+{
+  "cases": [
+    {
+      "caseId": "namespaced-alias-layout",
+      "xml": "<Invoice xmlns=\"urn:invoice-fixture\"><InvoiceInfo><InvoiceNo>XML-SYNTHETIC-001</InvoiceNo><IssueDate>2026-09-24</IssueDate><Amount>100.00</Amount><BuyerInfo><BuyerName>Example Buyer</BuyerName></BuyerInfo><SellerInfo><SellerName>Example Seller</SellerName></SellerInfo></InvoiceInfo></Invoice>",
+      "expected": {
+        "invoiceNumber": "XML-SYNTHETIC-001",
+        "invoiceDate": "2026-09-24",
+        "purchaser": "Example Buyer",
+        "seller": "Example Seller",
+        "amount": "100.00",
+        "taxAmount": "",
+        "totalAmount": ""
+      },
+      "expectedCSharpDisposition": "Resolved",
+      "expectedCSharpMissingFields": []
+    },
+    {
+      "caseId": "missing-invoice-number-fallback",
+      "xml": "<Invoice><InvoiceInfo><IssueDate>2026-09-24</IssueDate><Amount>100.00</Amount><SellerName>Example Seller</SellerName><BuyerName>Example Buyer</BuyerName></InvoiceInfo></Invoice>",
+      "expected": {
+        "invoiceNumber": "",
+        "invoiceDate": "2026-09-24",
+        "purchaser": "Example Buyer",
+        "seller": "Example Seller",
+        "amount": "100.00",
+        "taxAmount": "",
+        "totalAmount": ""
+      },
+      "expectedCSharpDisposition": "NeedsFallback",
+      "expectedCSharpMissingFields": ["InvoiceNumber"]
+    }
+  ]
+}

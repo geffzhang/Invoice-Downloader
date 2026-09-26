@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "parserId": "railway-ticket",
+  "version": "1.0",
+  "fixtureId": "railway-ticket-basic",
+  "sourceKind": "pdf",
+  "documentId": "document-railway-1",
+  "fields": {
+    "invoiceDate": "2026-09-15",
+    "purchaser": "ACME Holdings",
+    "seller": "中国铁路",
+    "amount": "58.50",
+    "taxAmount": "0.00",
+    "totalAmount": "58.50",
+    "invoiceNumber": "E12345678",
+    "documentType": "RailwayTicket"
+  }
+}

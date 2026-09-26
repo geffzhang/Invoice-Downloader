@@ -1,0 +1,22 @@
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-parse-conflict-1",
+  "ok": false,
+  "error": {
+    "code": "SPECIAL_PARSER_CONFLICT",
+    "scope": "candidate",
+    "retryable": false,
+    "userMessage": "检测到多个特殊票据解析器冲突，需要人工复核。",
+    "detailsAvailable": true,
+    "details": {
+      "field": "parserId",
+      "documentId": "document-1",
+      "candidates": [
+        { "parserId": "railway-ticket", "version": "1.0", "priority": 400, "fixtureId": "railway-ticket-basic" },
+        { "parserId": "accommodation-folio", "version": "1.0", "priority": 390, "fixtureId": "accommodation-folio-basic" }
+      ],
+      "resolution": "manual_review",
+      "requiresManualReview": true
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-account-test-1",
+  "ok": false,
+  "error": {
+    "code": "MAILBOX_SELECT_FAILED",
+    "scope": "account",
+    "retryable": false,
+    "userMessage": "目标 mailbox 不存在或无法打开。",
+    "detailsAvailable": true,
+    "details": { "accountId": "mail-account-1", "mailbox": "Archive/2026" }
+  }
+}

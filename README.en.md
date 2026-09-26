@@ -11,17 +11,17 @@
 
 <div align="center">
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)
+![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue)
 ![AI](https://img.shields.io/badge/AI-GLM--4.5V%20%7C%20GLM--OCR-purple)
-![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20macOS-lightblue)
+![Platform](https://img.shields.io/badge/Platform-Windows%20x64-lightblue)
 ![Status](https://img.shields.io/badge/Status-Stable-brightgreen)
 
 **Turn PDF, OFD, and XML e-invoices from your mailbox, plus supported invoice download links, into organized files and an Excel reimbursement summary.**
 
 Designed for individuals, freelancers, and small teams that manually collect multiple e-invoices each month. Connect your own QQ Mail or 163 Mail account to collect invoices in batches, run OCR, archive them by category, and create a summary while retaining low-confidence results for human review.
 
-Download: [latest Windows installer / portable package and macOS (Apple Silicon) installer](https://github.com/EthanYoQ/Invoice-Downloader/releases/latest)
+Download: [latest Windows x64 installer and portable package](https://github.com/EthanYoQ/Invoice-Downloader/releases/latest)
 
 *Email and invoice files are processed locally. If you enable GLM OCR / vision recognition, invoice images are sent to your configured model provider for extraction.*
 
@@ -30,17 +30,6 @@ Download: [latest Windows installer / portable package and macOS (Apple Silicon)
 <p align="center">
   <img src="./docs/images/invoiceflowai-hero-en.png" alt="InvoiceFlowAI desktop invoice assistant with setup, processing, analysis, and safety screens" />
 </p>
-
-## DeepSeek Harness Plugin
-
-`@ethanyoq/dsh-invoice-downloader` brings local IMAP invoice download, OCR, archiving, and Excel summaries to a right-side DeepSeek Harness panel. It is intended for reimbursement workflows that automate repetitive organizing while keeping a human review step.
-
-```sh
-dsh plugin --profile web add @ethanyoq/dsh-invoice-downloader
-dsh web --profile web
-```
-
-Open **Invoice Downloader** from the right-side entry, choose an output directory, install the local engine once, and enter a QQ Mail or 163 Mail IMAP authorization code. First-time setup needs network access to download Python dependencies and Chromium; the `rapidocr-onnxruntime` pip wheel includes the default PP-OCRv3 models, so no separate manual model download is required. Invoice files are OCRed locally; OCR text is sent to the currently selected DeepSeek model for field extraction. The plugin supports Windows x64 and macOS Apple Silicon. The DSH credential service stores authorization codes, never plugin settings or scan logs.
 
 ---
 
@@ -191,28 +180,20 @@ flowchart TD
 
 ---
 
-### Step 3 · Obtain Zhipu GLM API Key
+### Step 3 · Get a DeepSeek API Key
 
 <details>
-<summary>📖 Click to expand GLM API configuration steps</summary>
+<summary>📖 Click to expand DeepSeek API configuration steps</summary>
 
-The system uses **GLM-4.5V** (multimodal vision) and **GLM-OCR** to recognize invoice content.
+The desktop settings interface requires a **DeepSeek API Key**. Check the DeepSeek platform for current API usage and pricing.
 
 **Steps**
 
-1. Visit [open.bigmodel.cn](https://open.bigmodel.cn/) and register an account
-2. Go to Console → **API Keys** → **Create API Key**
-3. Copy and save the Key (format: `xxxxxxxx.xxxxxxxxxxxxxxxx`)
+1. Visit the [DeepSeek platform](https://platform.deepseek.com/) and create an account
+2. Open the **API Keys** page and create an API Key
+3. Copy and store the key securely, then enter it in the first-launch settings interface
 
-**Cost Reference**
-
-| Scenario | Description |
-|----------|-------------|
-| 🎁 New User Bonus | 5 million GLM-4 tokens gifted (valid for 30 days) |
-| 💰 Recommended Top-up | **Under 5 yuan**, pay-as-you-go |
-| 📊 Usage Estimate | Each invoice consumes approximately 1,000–3,000 tokens; for 200 invoices/month, 5 yuan lasts about 12 months |
-
-📚 [Zhipu AI Open Platform](https://open.bigmodel.cn/)
+📚 [DeepSeek API Keys](https://platform.deepseek.com/api_keys)
 
 </details>
 
@@ -220,17 +201,11 @@ The system uses **GLM-4.5V** (multimodal vision) and **GLM-OCR** to recognize in
 
 ## 🚀 Quick Start
 
-### Windows (installer / portable)
+### Windows x64 (installer / portable)
 
-1. Installer: run `InvoiceFlowAI-*-windows-x64-setup.exe`. Portable: extract `InvoiceFlowAI-*-windows-x64-portable.zip` to a regular folder (avoid cloud-sync directories) and keep `_internal` beside `InvoiceFlowAI.exe`.
+1. Installer: run `InvoiceFlowAI-*-windows-x64-setup.msi`. Portable: extract `InvoiceFlowAI-*-windows-x64-portable.zip` to a regular folder (avoid cloud-sync directories) and preserve the archive's directory structure.
 2. Double-click `InvoiceFlowAI.exe`; the settings interface appears on first launch.
-3. Enter your email address and authorization code (QQ or 163) and GLM API Key, then click "Start Scanning". Invoices are archived to the "Invoice Organizer" folder on your desktop.
-
-### macOS (Apple Silicon)
-
-1. Open `InvoiceFlowAI-*-macos-arm64.dmg` and drag `InvoiceFlowAI` to Applications.
-2. The settings interface appears on first launch. This build is unsigned and not notarized; if macOS blocks it, confirm opening it in **System Settings → Privacy & Security**.
-3. Enter your email address and authorization code (QQ or 163) and GLM API Key, then click "Start Scanning".
+3. Enter your email address and authorization code (QQ or 163) and DeepSeek API Key, then click "Start Scanning". Invoices are archived to the "Invoice Organizer" folder on your desktop.
 
 ---
 
@@ -284,9 +259,9 @@ Invoice Organizer/
 </details>
 
 <details>
-<summary>Q: GLM API reports insufficient balance?</summary>
+<summary>Q: DeepSeek API reports insufficient quota?</summary>
 
-Log in to [open.bigmodel.cn](https://open.bigmodel.cn/) → Billing Center → Top Up. Recommended top-up of **5 yuan**, pay-as-you-go.
+Log in to the [DeepSeek platform](https://platform.deepseek.com/) to review API usage, account balance, and available services.
 
 </details>
 
@@ -302,7 +277,7 @@ This is normal. When AI recognition confidence is insufficient, the system autom
 ## 🛡️ Privacy & Security
 
 - All emails and invoice files are processed **locally** and are never uploaded to any server
-- Mailbox credentials are encrypted with **DPAPI** on Windows and stored in **Keychain** on macOS
+- Mailbox credentials are encrypted with **DPAPI** on Windows
 - The GLM API only receives **invoice images** (Base64) for text recognition and does not send the original email content
 
 ---
@@ -317,7 +292,7 @@ By using this software, you acknowledge and accept the following terms.
 
 **Accuracy & Compliance** · The author does not warrant the accuracy, completeness, legality, tax compliance, financial compliance, or accounting compliance of any invoice data or generated results. Users must independently verify all invoices, reimbursements, tax filings, accounting records, and compliance outcomes before relying on them.
 
-**Data** · When calling the GLM API, invoice images are sent to Zhipu AI servers for recognition, subject to the [Zhipu AI Privacy Policy](https://www.zhipuai.cn/zh/privacy). Original email content is never sent.
+**Data** · When the DeepSeek API is used to extract invoice information, invoice text and extraction prompts are sent to DeepSeek. When visual fallback is enabled, the relevant invoice page images are also sent. The original email content is not sent. See the [DeepSeek Privacy Policy](https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html).
 
 **Liability** · The author is not liable for any losses, omissions, errors, failed reimbursements, tax risks, compliance issues, or data loss arising from use of this software.
 
@@ -325,7 +300,7 @@ By using this software, you acknowledge and accept the following terms.
 
 | Service | Purpose | Provider |
 |---------|---------|----------|
-| Zhipu GLM API | Invoice OCR and visual recognition | Beijing Zhipu Huazhang Technology Co., Ltd. |
+| DeepSeek API | Invoice OCR and visual recognition | DeepSeek |
 | QQ Mailbox IMAP | Email reading | Tencent Technology (Shenzhen) Co., Ltd. |
 | 163 Mailbox IMAP | Email reading | NetEase (Hangzhou) Network Co., Ltd. |
 
@@ -339,8 +314,6 @@ Licensed under the [Apache License 2.0](LICENSE). Commercial use, modification, 
 
 <div align="center">
 
-Made with ❤️ by **EthanYoQ / Yong Qi**
-
-[Report Issues](https://github.com/EthanYoQ/Invoice-Downloader/issues) · [Zhipu AI Open Platform](https://open.bigmodel.cn/) · [163 Mailbox Help](https://help.mail.163.com/) · [QQ Mailbox Help](https://service.mail.qq.com/detail/0/339)
+[Report Issues](https://github.com/EthanYoQ/Invoice-Downloader/issues) · [DeepSeek Open Platform](https://platform.deepseek.com/) · [163 Mailbox Help](https://help.mail.163.com/) · [QQ Mailbox Help](https://service.mail.qq.com/detail/0/339)
 
 </div>

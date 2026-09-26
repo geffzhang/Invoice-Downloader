@@ -1,0 +1,183 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+const require = createRequire(import.meta.url);
+const settingsRpc = require("../../../templates/settings_rpc.js");
+
+function createRpcClient() {
+    const calls = [];
+    return {
+        calls,
+        async call(method, params) {
+            calls.push({ method, params });
+            if (method === "settings.get") return { revision: 4, companyName: "Buyer" };
+            if (method === "account.list") return { items: [] };
+            if (method === "settings.update") return { revision: 5, ...params };
+            if (method === "account.save") return { ...params.account, revision: 1 };
+            if (method === "secret.set") return { name: params.name, configured: true, persistent: params.retention === "persistent" };
+            if (method === "secret.delete") return { name: params.name, configured: false, persistent: false };
+            if (method === "directory.choose") return { cancelled: false, path: "C:/Invoices" };
+            return { success: true, message: "Connected" };
+        },
+    };
+}
+
+test("loads settings and mailbox accounts through typed RPC", async () => {
+    const rpc = createRpcClient();
+    const loaded = await settingsRpc.load(rpc);
+
+    assert.equal(loaded.settings.revision, 4);
+    assert.deepEqual(loaded.accounts.items, []);
+    assert.deepEqual(rpc.calls.map(({ method }) => method), ["settings.get", "account.list"]);
+});
+
+test("opens initial setup only while required persisted settings are incomplete", () => {
+    const configured = {
+        settings: { companyName: "Buyer", lastOutputDirectory: "C:/Invoices" },
+        accounts: { items: [{ emailAddress: "buyer@qq.com" }] },
+    };
+
+    assert.equal(settingsRpc.needsInitialSetup({ settings: {}, accounts: { items: [] } }), true);
+    assert.equal(settingsRpc.needsInitialSetup({ ...configured, settings: { companyName: "Buyer" } }), true);
+    assert.equal(settingsRpc.needsInitialSetup({ ...configured, accounts: { items: [] } }), true);
+    assert.equal(settingsRpc.needsInitialSetup(configured), false);
+});
+
+test("settings page presents initial setup after loading persisted settings", () => {
+    const fs = require("node:fs");
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../templates");
+    const source = fs.readFileSync(path.join(root, "index_app.js"), "utf8");
+    const stylesheet = fs.readFileSync(path.join(root, "index.html"), "utf8");
+
+    assert.match(source, /needsInitialSetup:\s*SettingsRpc\.needsInitialSetup\(loaded\)/);
+    assert.match(source, /setInitialSetup\(state\.needsInitialSetup\s*&&\s*!hasExplicitQaRunContext\(state\.runContext\)\)/);
+    assert.match(source, /initialSetup=\{initialSetup\}/);
+    assert.match(stylesheet, /\.app-shell--initial-setup \.app-main\s*\{/);
+});
+
+test("native WebView loads current precompiled page without file-based JSX fetching", () => {
+    const fs = require("node:fs");
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../templates");
+    const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+    const compiler = path.join(root, "..", "build", "compile-webview-page.mjs");
+    const { spawnSync } = require("node:child_process");
+    const result = spawnSync(process.execPath, [compiler, "--check"], { encoding: "utf8" });
+
+    assert.match(html, /<script src="\.\/index_app\.compiled\.js"><\/script>/);
+    assert.doesNotMatch(html, /type="text\/babel"/);
+    assert.equal(result.status, 0, result.stderr);
+});
+
+test("saves revisioned non-secret settings and mailbox account", async () => {
+    const rpc = createRpcClient();
+    await settingsRpc.saveAccount(rpc, null, {
+        accountId: "default-mailbox",
+        emailAddress: "buyer@qq.com",
+        imapHost: "imap.qq.com",
+        imapPort: 993,
+        useTls: true,
+        credentialName: "mail.imap.auth-code",
+        displayName: "buyer@qq.com",
+    });
+    await settingsRpc.saveSettings(rpc, { revision: 4 }, {
+        accountId: "default-mailbox",
+        companyName: "Buyer",
+        lastOutputDirectory: "C:/Invoices",
+    });
+
+    assert.deepEqual(rpc.calls[0], {
+        method: "account.save",
+        params: {
+            account: {
+                accountId: "default-mailbox",
+                emailAddress: "buyer@qq.com",
+                imapHost: "imap.qq.com",
+                imapPort: 993,
+                useTls: true,
+                credentialName: "mail.imap.auth-code",
+                displayName: "buyer@qq.com",
+            },
+            expectedRevision: 0,
+        },
+    });
+    assert.equal(rpc.calls[1].params.expectedRevision, 4);
+    assert.equal(rpc.calls[1].params.companyName, "Buyer");
+    assert.equal("authCode" in rpc.calls[1].params, false);
+    assert.equal("apiKey" in rpc.calls[1].params, false);
+});
+
+test("routes secret writes, tests and directory selection without returning secret values", async () => {
+    const rpc = createRpcClient();
+    const secret = await settingsRpc.setSecret(rpc, "deepseek.api-key", "do-not-return", "session");
+    await settingsRpc.testAccount(rpc, "default-mailbox");
+    await settingsRpc.testProvider(rpc, "deepseek", "deepseek.api-key");
+    const directory = await settingsRpc.chooseDirectory(rpc);
+
+    assert.equal(secret.configured, true);
+    assert.equal(JSON.stringify(secret).includes("do-not-return"), false);
+    assert.equal(rpc.calls[0].method, "secret.set");
+    assert.deepEqual(rpc.calls[1], { method: "account.test", params: { accountId: "default-mailbox" } });
+    assert.deepEqual(rpc.calls[2], { method: "provider.test", params: { providerId: "deepseek", credentialName: "deepseek.api-key" } });
+    assert.equal(directory.path, "C:/Invoices");
+    assert.equal(rpc.calls[3].method, "directory.choose");
+});
+
+test("settings UI uses RPC for settings operations and never stores secrets in Web Storage", () => {
+    const fs = require("node:fs");
+    const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../templates/index_app.js");
+    const source = fs.readFileSync(sourcePath, "utf8");
+    const adapterPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../templates/settings_rpc.js");
+    const adapter = fs.readFileSync(adapterPath, "utf8");
+    const bootstrapPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../templates/bridge-bootstrap.js");
+    const bootstrap = fs.readFileSync(bootstrapPath, "utf8");
+    const persist = source.slice(source.indexOf("async function persistUserSettings"), source.indexOf("function toneFromAsyncStatus"));
+    const settingsPage = source.slice(source.indexOf("function SettingsPage"), source.indexOf("function ProcessingPage"));
+
+    for (const method of ["settings.get", "settings.update", "account.list", "account.save", "account.test", "provider.test", "secret.set", "secret.delete", "directory.choose"]) {
+        assert.ok(adapter.includes(`\"${method}\"`), `missing RPC method ${method}`);
+    }
+        assert.match(source, /SettingsRpc\.load\(window\.RpcClient\)/);
+        assert.ok(settingsPage.includes("SettingsRpc.chooseDirectory"));
+        assert.ok(settingsPage.includes("SettingsRpc.testAccount"));
+        assert.ok(settingsPage.includes("SettingsRpc.testProvider"));
+        assert.ok(settingsPage.includes("SettingsRpc.setSecret"));
+        assert.match(settingsPage, /DeepSeek API Key/);
+        assert.match(source, /https:\/\/platform\.deepseek\.com\/api_keys/);
+        assert.match(settingsPage, />DeepSeek<\/StatusPill>/);
+        assert.doesNotMatch(settingsPage, /GLM API Key|ZHIPU_PLATFORM_URL|>GLM<\/StatusPill>/);
+    assert.match(bootstrap, /RpcClient\.handshake\(\)[\s\S]*SettingsRpc\.load\(RpcClient\)/);
+    assert.equal(bootstrap.includes("settings.snapshot.get"), false);
+    for (const legacyMethod of ["load_user_settings", "save_user_settings", "test_email_auth", "test_connection", "choose_directory"]) {
+        assert.equal(settingsPage.includes(legacyMethod), false, `legacy settings method remains on settings page: ${legacyMethod}`);
+    }
+    assert.ok(/auth_code:\s*""/.test(source));
+    assert.ok(/api_key:\s*""/.test(source));
+    assert.ok(/setSettings\(\(current\) => \(\{ \.\.\.current, \[settingKey\]: "" \}\)\)/.test(settingsPage));
+        assert.ok(settingsPage.includes('"persistent"'));
+        assert.ok(settingsPage.includes('"session"'));
+        assert.ok(settingsPage.includes("RunPageRpc.startRun"));
+        assert.ok(source.includes("RunPageRpc.watchProgress"));
+        assert.ok(source.includes("RunPageRpc.getResults"));
+    assert.equal(/writeSessionValue\(SESSION_SETTINGS_KEY,\s*\{[^}]*auth_code/.test(persist), false);
+    assert.equal(/writeSessionValue\(SESSION_SETTINGS_KEY,\s*\{[^}]*api_key/.test(persist), false);
+});
+
+test("desktop run, result, file, folder, and window actions use typed RPC", () => {
+    const fs = require("node:fs");
+    const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../templates/index_app.js");
+    const source = fs.readFileSync(sourcePath, "utf8");
+    const legacyMethods = [
+        "get_run_context", "start_processing", "get_progress", "stop_processing", "get_results",
+        "load_user_settings", "open_folder", "open_manual_check_folder", "view_invoice", "export_run_summary",
+        "minimize_window", "maximize_window", "close_window",
+    ];
+
+    for (const method of legacyMethods) {
+        assert.equal(source.includes(`callApi("${method}"`), false, `legacy desktop method remains: ${method}`);
+    }
+    assert.equal(source.includes("callApi("), false);
+    assert.equal(source.includes("window.pywebview"), false);
+});

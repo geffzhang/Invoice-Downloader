@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0",
+  "ruleSetId": "default",
+  "rules": [
+    {
+      "ruleId": "archive-flight",
+      "priority": 100,
+      "enabled": true,
+      "when": {
+        "documentType": "FlightInvoice",
+        "sellerContains": "air"
+      },
+      "then": {
+        "archiveFolder": "transport/flight",
+        "category": "transport",
+        "requireManualReview": false,
+        "allowCrossMessagePairing": true
+      }
+    }
+  ]
+}

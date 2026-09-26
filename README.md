@@ -11,17 +11,17 @@
 
 <div align="center">
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)
+![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue)
 ![AI](https://img.shields.io/badge/AI-GLM--4.5V%20%7C%20GLM--OCR-purple)
-![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20macOS-lightblue)
+![Platform](https://img.shields.io/badge/Platform-Windows%20x64-lightblue)
 ![Status](https://img.shields.io/badge/Status-Stable-brightgreen)
 
 **把邮箱中的 PDF、OFD、XML 电子发票和部分发票下载链接，整理成分类文件与 Excel 报销汇总。**
 
 面向每月需要手工收集多张电子发票的个人、自由职业者和小团队。连接自己的 QQ 或 163 邮箱后，可批量收集发票、OCR 识别、分类归档并生成汇总；低置信度结果保留给用户人工检查。
 
-下载：[最新 Windows（安装版 / 免安装版）与 macOS（Apple Silicon）安装包](https://github.com/EthanYoQ/Invoice-Downloader/releases/latest)
+下载：[最新 Windows x64 安装版与免安装版](https://github.com/EthanYoQ/Invoice-Downloader/releases/latest)
 
 *邮件和发票文件在本地处理。启用 GLM OCR / 视觉识别时，发票图片会发送到你配置的模型服务商用于提取。*
 
@@ -30,17 +30,6 @@
 <p align="center">
   <img src="./docs/images/invoiceflowai-hero-zh.png" alt="InvoiceFlowAI 发票助手的启动配置、处理中心、结果分析与安全提示界面" />
 </p>
-
-## DeepSeek Harness 插件
-
-`@ethanyoq/dsh-invoice-downloader` 将本地 IMAP 发票下载、OCR、归档和 Excel 汇总带到 DeepSeek Harness 的右侧边栏。适用于希望把重复整理工作交给本地自动化、同时保留人工复核的报销场景。
-
-```powershell
-dsh plugin --profile web add @ethanyoq/dsh-invoice-downloader
-dsh web --profile web
-```
-
-打开右侧的“发票下载”入口，选择保存位置，安装一次本地引擎后填写 QQ 或 163 邮箱的 IMAP 授权码。首次安装需要联网下载 Python 依赖和 Chromium；`rapidocr-onnxruntime` 的 pip wheel 自带默认 PP-OCRv3 模型，无需额外手动下载模型。发票文件在本地 OCR；OCR 文本发送给当前选择的 DeepSeek 模型提取字段。插件支持 Windows x64 和 macOS Apple Silicon，授权码由 DSH 凭据服务保存，不写入插件设置或扫描日志。
 
 ---
 
@@ -191,28 +180,20 @@ flowchart TD
 
 ---
 
-### 第三步 · 获取智谱 GLM API Key
+### 第三步 · 获取 DeepSeek API Key
 
 <details>
-<summary>📖 点击展开 GLM API 配置步骤</summary>
+<summary>📖 点击展开 DeepSeek API 配置步骤</summary>
 
-系统使用 **GLM-4.5V**（多模态视觉）和 **GLM-OCR** 识别发票内容。
+桌面版设置界面需要填写 **DeepSeek API Key**。API 用量和费用以 DeepSeek 平台显示为准。
 
 **步骤**
 
-1. 访问 [open.bigmodel.cn](https://open.bigmodel.cn/)，注册账号
-2. 进入控制台 → **API Keys** → **创建 API Key**
-3. 复制并保存 Key（格式：`xxxxxxxx.xxxxxxxxxxxxxxxx`）
+1. 访问 [DeepSeek 开放平台](https://platform.deepseek.com/)，注册并登录
+2. 打开 **API Keys** 页面，创建 API Key
+3. 复制并妥善保存 Key，在首次启动的设置界面中填写
 
-**费用参考**
-
-| 情况 | 说明 |
-|------|------|
-| 🎁 新用户福利 | 赠送 500 万 GLM-4 tokens（30 天有效） |
-| 💰 推荐充值 | **5 元以内**，按量计费 |
-| 📊 使用估算 | 每张发票约消耗 1,000–3,000 tokens；每月 200 张，5 元可用约 12 个月 |
-
-📚 [智谱 AI 开放平台](https://open.bigmodel.cn/)
+📚 [DeepSeek API Keys](https://platform.deepseek.com/api_keys)
 
 </details>
 
@@ -222,15 +203,9 @@ flowchart TD
 
 ### Windows（安装版 / 免安装版）
 
-1. 安装版：运行 `InvoiceFlowAI-*-windows-x64-setup.exe`；免安装版：解压 `InvoiceFlowAI-*-windows-x64-portable.zip` 到普通文件夹（避免云盘同步目录），并保持 `_internal` 文件夹与 `InvoiceFlowAI.exe` 同级。
+1. 安装版：运行 `InvoiceFlowAI-*-windows-x64-setup.msi`；免安装版：解压 `InvoiceFlowAI-*-windows-x64-portable.zip` 到普通文件夹（避免云盘同步目录），保留压缩包中的目录结构。
 2. 双击 `InvoiceFlowAI.exe`；首次启动会自动弹出设置界面。
-3. 填入邮箱地址与授权码（QQ 或 163）、GLM API Key，保存后点击「开始扫描」。发票会自动归档到桌面「发票整理」文件夹。
-
-### macOS（Apple Silicon）
-
-1. 打开 `InvoiceFlowAI-*-macos-arm64.dmg`，将 `InvoiceFlowAI` 拖入“应用程序”文件夹。
-2. 首次启动会自动弹出设置界面。此版本未签名、未公证；若 macOS 阻止打开，请在“系统设置 → 隐私与安全性”中确认仍要打开。
-3. 填入邮箱地址与授权码（QQ 或 163）、GLM API Key，保存后点击「开始扫描」。
+3. 填入邮箱地址与授权码（QQ 或 163）、DeepSeek API Key，保存后点击「开始扫描」。发票会自动归档到桌面「发票整理」文件夹。
 
 ---
 
@@ -284,9 +259,9 @@ flowchart TD
 </details>
 
 <details>
-<summary>Q：GLM API 报错余额不足？</summary>
+<summary>Q：DeepSeek API 报错额度不足？</summary>
 
-登录 [open.bigmodel.cn](https://open.bigmodel.cn/) → 费用中心 → 充值。推荐充值 **5 元**，按量计费。
+登录 [DeepSeek 开放平台](https://platform.deepseek.com/) 查看 API 用量、账户余额和可用服务。
 
 </details>
 
@@ -302,7 +277,7 @@ flowchart TD
 ## 🛡️ 隐私与安全
 
 - 所有邮件、发票文件均在**本地处理**，不上传任何服务器
-- 邮箱凭据在 Windows 通过 **DPAPI** 加密存储，在 macOS 通过 **Keychain** 存储
+- 邮箱凭据在 Windows 通过 **DPAPI** 加密存储
 - GLM API 仅接收**发票图片**（Base64）用于文字识别，不发送邮件原文内容
 
 ---
@@ -317,7 +292,7 @@ flowchart TD
 
 **准确性与合规性** · 作者不保证发票数据或生成结果的准确性、完整性、合法性、税务合规性、财务合规性或会计合规性。用户必须自行核验所有发票、报销、税务、会计和合规结果后再使用。
 
-**数据** · 调用 GLM API 时，发票图片会发送至智谱 AI 服务器进行识别，受 [智谱 AI 隐私政策](https://www.zhipuai.cn/zh/privacy) 约束；邮件原文不会发送。
+**数据** · 调用 DeepSeek API 进行发票信息提取时，发票文本和识别提示词会发送至 DeepSeek；启用视觉回退时，相关发票页面图像也会发送。邮件原文不会发送。详情请参阅 [DeepSeek 隐私政策](https://cdn.deepseek.com/policies/zh-CN/deepseek-privacy-policy.html)。
 
 **责任限制** · 作者不对使用本软件造成的损失、遗漏、错误、报销失败、税务风险、合规问题或数据丢失承担责任。
 
@@ -325,7 +300,7 @@ flowchart TD
 
 | 服务 | 用途 | 服务方 |
 |------|------|--------|
-| 智谱 GLM API | 发票 OCR 与视觉识别 | 北京智谱华章科技有限公司 |
+| DeepSeek API | 发票 OCR 与视觉识别 | DeepSeek |
 | QQ 邮箱 IMAP | 邮件读取 | 腾讯科技（深圳）有限公司 |
 | 163 邮箱 IMAP | 邮件读取 | 网易（杭州）网络有限公司 |
 
@@ -339,8 +314,6 @@ flowchart TD
 
 <div align="center">
 
-Made with ❤️ by **EthanYoQ / Yong Qi**
-
-[报告问题](https://github.com/EthanYoQ/Invoice-Downloader/issues) · [智谱AI开放平台](https://open.bigmodel.cn/) · [163邮箱帮助](https://help.mail.163.com/) · [QQ邮箱帮助](https://service.mail.qq.com/detail/0/339)
+[报告问题](https://github.com/EthanYoQ/Invoice-Downloader/issues) · [DeepSeek 开放平台](https://platform.deepseek.com/) · [163邮箱帮助](https://help.mail.163.com/) · [QQ邮箱帮助](https://service.mail.qq.com/detail/0/339)
 
 </div>
