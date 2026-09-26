@@ -30,9 +30,17 @@ jobs:
         with:
           dotnet-version: '10.0.100'
 
+      - name: Install WiX Toolset 5.0.2
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
+
       - name: Verify pinned toolchain
         shell: pwsh
-        run: pwsh -File build/verify-toolchain.ps1
+        run: |
+          $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
+          pwsh -File build/verify-toolchain.ps1
 
       - name: Restore with locked-mode
         shell: pwsh
