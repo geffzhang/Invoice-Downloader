@@ -18,14 +18,14 @@ namespace InvoiceFlowAI.Infrastructure.Tests.Parsers;
 
 public sealed class ParserPipelineTests
 {
-    private const string FixtureRoot = "../../../../../docs/superpowers/fixtures/parsers";
+    private static readonly string FixtureRoot = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Parsers");
 
     [Fact]
     public async Task Railway_ticket_parser_parses_pdf_via_basic_fixture()
     {
         var registry = new ParserRegistry(new IParser[]
         {
-            NewParser("railway-ticket", $"{FixtureRoot}/railway-ticket-basic.json", priority: 400, sourceKinds: new[] { "pdf" }),
+            NewParser("railway-ticket", Fixture("railway-ticket-basic.json"), priority: 400, sourceKinds: new[] { "pdf" }),
         });
         var pipeline = new ParserPipeline(registry);
         var workItem = NewPdfWorkItem(documentId: "document-railway-1");
@@ -49,7 +49,7 @@ public sealed class ParserPipelineTests
         // then run the accommodation parser in isolation.
         var registry = new ParserRegistry(new IParser[]
         {
-            NewParser("accommodation-folio", $"{FixtureRoot}/accommodation-folio-basic.json", priority: 390, sourceKinds: new[] { "pdf" }),
+            NewParser("accommodation-folio", Fixture("accommodation-folio-basic.json"), priority: 390, sourceKinds: new[] { "pdf" }),
         });
         var isolated = new ParserPipeline(registry);
 
@@ -66,7 +66,7 @@ public sealed class ParserPipelineTests
     {
         var registry = new ParserRegistry(new IParser[]
         {
-            NewParser("foreign-invoice", $"{FixtureRoot}/foreign-invoice-basic.json", priority: 380, sourceKinds: new[] { "image" }),
+            NewParser("foreign-invoice", Fixture("foreign-invoice-basic.json"), priority: 380, sourceKinds: new[] { "image" }),
         });
         var pipeline = new ParserPipeline(registry);
 
@@ -83,7 +83,7 @@ public sealed class ParserPipelineTests
     {
         var registry = new ParserRegistry(new IParser[]
         {
-            NewParser("provider-special-layout", $"{FixtureRoot}/provider-special-layout-basic.json", priority: 300, sourceKinds: new[] { "ofd" }),
+            NewParser("provider-special-layout", Fixture("provider-special-layout-basic.json"), priority: 300, sourceKinds: new[] { "ofd" }),
         });
         var pipeline = new ParserPipeline(registry);
 
@@ -99,7 +99,7 @@ public sealed class ParserPipelineTests
     {
         var registry = new ParserRegistry(new IParser[]
         {
-            NewParser("railway-ticket", $"{FixtureRoot}/missing-fields.json", priority: 400, sourceKinds: new[] { "pdf" }),
+            NewParser("railway-ticket", Fixture("missing-fields.json"), priority: 400, sourceKinds: new[] { "pdf" }),
         });
         var pipeline = new ParserPipeline(registry);
 
@@ -155,16 +155,24 @@ public sealed class ParserPipelineTests
     {
         var registry = new ParserRegistry(new IParser[]
         {
-            NewParser("railway-ticket", $"{FixtureRoot}/railway-ticket-basic.json", priority: 400, sourceKinds: new[] { "pdf" }),
-            NewParser("accommodation-folio", $"{FixtureRoot}/accommodation-folio-basic.json", priority: 390, sourceKinds: new[] { "pdf" }),
-            NewParser("foreign-invoice", $"{FixtureRoot}/foreign-invoice-basic.json", priority: 380, sourceKinds: new[] { "pdf", "image" }),
-            NewParser("provider-special-layout", $"{FixtureRoot}/provider-special-layout-basic.json", priority: 300, sourceKinds: new[] { "pdf", "ofd", "xml", "url" }),
+            NewParser("railway-ticket", Fixture("railway-ticket-basic.json"), priority: 400, sourceKinds: new[] { "pdf" }),
+            NewParser("accommodation-folio", Fixture("accommodation-folio-basic.json"), priority: 390, sourceKinds: new[] { "pdf" }),
+            NewParser("foreign-invoice", Fixture("foreign-invoice-basic.json"), priority: 380, sourceKinds: new[] { "pdf", "image" }),
+            NewParser("provider-special-layout", Fixture("provider-special-layout-basic.json"), priority: 300, sourceKinds: new[] { "pdf", "ofd", "xml", "url" }),
         });
         return new ParserPipeline(registry);
     }
 
     private static IParser NewParser(string parserId, string fixturePath, int priority, IReadOnlyList<string> sourceKinds) =>
         new FixtureBackedParser(parserId, "1.0", priority, sourceKinds, "PARSER_FAILED", fixturePath);
+
+    private static string Fixture(string fileName)
+    {
+        var path = Path.Combine(FixtureRoot, fileName);
+        return File.Exists(path)
+            ? path
+            : throw new FileNotFoundException($"Required parser test fixture was not copied to the test output: {path}", path);
+    }
 
     private static ParserWorkItem NewPdfWorkItem(string documentId) =>
         NewWorkItem("pdf", documentId);

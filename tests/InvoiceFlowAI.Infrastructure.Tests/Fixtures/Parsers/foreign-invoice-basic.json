@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "parserId": "foreign-invoice",
+  "version": "1.0",
+  "fixtureId": "foreign-invoice-basic",
+  "sourceKind": "pdf",
+  "documentId": "document-foreign-1",
+  "fields": {
+    "invoiceDate": "2026-09-10",
+    "purchaser": "ACME Holdings",
+    "seller": "Lufthansa",
+    "amount": "100.00",
+    "taxAmount": "13.00",
+    "totalAmount": "113.00",
+    "invoiceNumber": "INV-DE-12345",
+    "documentType": "FlightInvoice"
+  }
+}
