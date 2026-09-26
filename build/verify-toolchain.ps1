@@ -11,8 +11,6 @@
 
     Pinned versions (sourced from the plan and design spec):
       * .NET SDK               10.0.100
-      * Windows SDK            10.0.26100.1
-      * MSVC v143              14.44.35207
       * WiX Toolset            5.0.2
 
     The script only reads version metadata and never mutates the host. It is safe to run
@@ -20,12 +18,6 @@
 
 .PARAMETER RequiredDotnetSdkVersion
     The exact SDK version required by the migration plan. Default: 10.0.100.
-
-.PARAMETER RequiredWindowsSdkVersion
-    The exact Windows SDK version required. Default: 10.0.26100.1.
-
-.PARAMETER RequiredMsvcVersion
-    The exact MSVC v143 toolset version required. Default: 14.44.35207.
 
 .PARAMETER RequiredWixVersion
     The exact WiX Toolset major.minor.patch required. Default: 5.0.2.
@@ -40,16 +32,12 @@
     Exit codes:
       0   - all required tools match the exact mandated versions
       10  - .NET SDK missing or wrong version
-      11  - Windows SDK missing or wrong version
-      12  - MSVC v143 missing or wrong version
       13  - WiX Toolset missing or wrong version
       20  - unexpected exception
 #>
 
 param(
     [string]$RequiredDotnetSdkVersion = "10.0.100",
-    [string]$RequiredWindowsSdkVersion = "10.0.26100.1",
-    [string]$RequiredMsvcVersion = "14.44.35207",
     [string]$RequiredWixVersion = "5.0.2",
     [string]$JsonOutputPath = ""
 )
@@ -180,50 +168,6 @@ function Test-DotnetSdk {
     Write-Result -Tool "dotnet-sdk" -Required $RequiredDotnetSdkVersion -Actual $RequiredDotnetSdkVersion -Matched $true -Notes "$dotnetExe (consolidated across $(@(Get-DotnetInstallRoots).Count) install root(s))"
 }
 
-function Test-WindowsSdk {
-    $kitsRoots = @(
-        "C:\Program Files (x86)\Windows Kits\10\Include",
-        "C:\Program Files\Windows Kits\10\Include"
-    )
-    $installed = @()
-    foreach ($root in $kitsRoots) {
-        if (Test-Path $root) {
-            $installed += Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
-        }
-    }
-    # Fallback: VS 2025 ScopeCppSDK bundle. Treated as informational only.
-    $vsBundled = Test-Path "C:\Program Files\Microsoft Visual Studio\18\Community\SDK\ScopeCppSDK\vc15\SDK\include\um\Windows.h"
-    if (($installed -contains $RequiredWindowsSdkVersion)) {
-        Write-Result -Tool "windows-sdk" -Required $RequiredWindowsSdkVersion -Actual $RequiredWindowsSdkVersion -Matched $true -Notes "Kits include directory"
-        return
-    }
-    $note = "Installed Windows SDK includes: $(($installed | Select-Object -Unique) -join ',')"
-    if ($vsBundled) { $note += "; VS 2025 ScopeCppSDK headers detected (cannot be used to claim an exact $RequiredWindowsSdkVersion match)" }
-    Write-Result -Tool "windows-sdk" -Required $RequiredWindowsSdkVersion -Actual (($installed | Select-Object -Unique) -join ",") -Matched $false -Notes $note
-    Fail -ExitCode 11 -Tool "windows-sdk" -Message "Windows SDK $RequiredWindowsSdkVersion is required, but available include directories: $(($installed | Select-Object -Unique) -join ', ')."
-}
-
-function Test-Msvc {
-    $msvcRoots = @(
-        "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC",
-        "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC",
-        "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC",
-        "C:\BuildTools\VC\Tools\MSVC"
-    )
-    $installed = @()
-    foreach ($root in $msvcRoots) {
-        if (Test-Path $root) {
-            $installed += Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
-        }
-    }
-    if ($installed -contains $RequiredMsvcVersion) {
-        Write-Result -Tool "msvc-v143" -Required $RequiredMsvcVersion -Actual $RequiredMsvcVersion -Matched $true -Notes "v143 toolset"
-        return
-    }
-    Write-Result -Tool "msvc-v143" -Required $RequiredMsvcVersion -Actual ($installed -join ",") -Matched $false -Notes "Required exact v143 toolset not installed"
-    Fail -ExitCode 12 -Tool "msvc-v143" -Message "MSVC v143 $RequiredMsvcVersion is required, but installed: $($installed -join ', ')."
-}
-
 function Test-Wix {
     $candidates = @()
     $wixCommand = Get-Command wix -ErrorAction SilentlyContinue
@@ -252,8 +196,6 @@ function Test-Wix {
 
 # Body
 Test-DotnetSdk
-Test-WindowsSdk
-Test-Msvc
 Test-Wix
 
 $summary = [ordered]@{

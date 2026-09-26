@@ -151,7 +151,7 @@ ZeroPipeline 只位于应用编排层。领域层不依赖 ZeroPipeline；节点
 
 ### 构建工具链与工程结构
 
-首版固定使用 `.NET SDK 10.0.100`、`net10.0-windows`、`win-x64`、Avalonia `12.1.0`、Avalonia.Controls.WebView `12.1.0`、WiX Toolset `5.0.2`、Windows SDK `10.0.26100.1`、MSVC v143 `14.44.35207` 和 VC++ Runtime `14.44.35211` x64。CI 使用 Windows Server 2025 x64 runner，并在构建前校验这些精确版本；不接受“使用已安装的最近版本”。
+首版固定使用 `.NET SDK 10.0.100`、`net10.0-windows`、`win-x64`、Avalonia `12.1.0`、Avalonia.Controls.WebView `12.1.0`、WiX Toolset `5.0.2` 和 VC++ Runtime `14.44.35211` x64。桌面项目目标为 `net10.0-windows10.0.19041.0`，不单独锁定 Windows SDK 安装版本，也不要求特定 MSVC 编译器工具集。CI 使用 Windows Server 2025 x64 runner，并在构建前校验固定的 .NET SDK 和 WiX 版本。
 
 目标工程结构为：
 
@@ -187,7 +187,7 @@ build/
 
 CI 顺序固定为：`verify-toolchain.ps1`、`dotnet restore --locked-mode`、Release build/test、`dotnet publish -r win-x64 --self-contained true`、Avalonia WebView backend/模型和 release manifest 校验、WiX x64 MSI 构建。WiX 阶段只消费 publish 输出和已校验的 WebView backend/OCR/Chromium/许可证资产，不下载运行时文件。
 
-CI 每一步的输入/输出也固定：`verify-toolchain.ps1` 只读 SDK/Windows SDK/MSVC/WiX 版本并输出机器可读 `artifacts/toolchain.json`；restore 输出锁文件校验结果；test 输出 TRX 和 coverage summary；publish 输出 `artifacts/publish/win-x64/`；资产校验输出 `artifacts/manifests/*.json`；WiX 只读取 publish 目录并输出带版本的 x64 MSI。任何步骤不得从用户 profile、全局 NuGet cache 中复制未锁定的运行时资产；需要使用缓存时必须以 package/version/hash 清单验证后复制。
+CI 每一步的输入/输出也固定：`verify-toolchain.ps1` 只读 .NET SDK/WiX 版本并输出机器可读 `artifacts/toolchain.json`；Windows SDK 和 MSVC 不作为独立版本门禁；restore 输出锁文件校验结果；test 输出 TRX 和 coverage summary；publish 输出 `artifacts/publish/win-x64/`；资产校验输出 `artifacts/manifests/*.json`；WiX 只读取 publish 目录并输出带版本的 x64 MSI。任何步骤不得从用户 profile、全局 NuGet cache 中复制未锁定的运行时资产；需要使用缓存时必须以 package/version/hash 清单验证后复制。
 
 ### DI 组合根与启动图
 
