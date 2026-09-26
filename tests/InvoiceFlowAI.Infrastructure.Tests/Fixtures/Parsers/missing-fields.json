@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1.0",
+  "parserId": "railway-ticket",
+  "version": "1.0",
+  "fixtureId": "railway-ticket-missing-fields",
+  "sourceKind": "pdf",
+  "documentId": "document-railway-2",
+  "fields": {
+    "invoiceDate": "2026-09-15",
+    "purchaser": "ACME Holdings",
+    "seller": "中国铁路",
+    "amount": "58.50"
+  },
+  "missingFields": ["taxAmount", "totalAmount", "invoiceNumber", "documentType"]
+}
