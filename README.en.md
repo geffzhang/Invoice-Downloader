@@ -300,7 +300,7 @@ By using this software, you acknowledge and accept the following terms.
 
 | Service | Purpose | Provider |
 |---------|---------|----------|
-| Zhipu GLM API | Invoice OCR and visual recognition | Beijing Zhipu Huazhang Technology Co., Ltd. |
+| DeepSeek API | Invoice OCR and visual recognition | DeepSeek |
 | QQ Mailbox IMAP | Email reading | Tencent Technology (Shenzhen) Co., Ltd. |
 | 163 Mailbox IMAP | Email reading | NetEase (Hangzhou) Network Co., Ltd. |
 
@@ -313,8 +313,6 @@ Licensed under the [Apache License 2.0](LICENSE). Commercial use, modification, 
 ---
 
 <div align="center">
-
-Made with ❤️ by **EthanYoQ / Yong Qi**
 
 [Report Issues](https://github.com/EthanYoQ/Invoice-Downloader/issues) · [DeepSeek Open Platform](https://platform.deepseek.com/) · [163 Mailbox Help](https://help.mail.163.com/) · [QQ Mailbox Help](https://service.mail.qq.com/detail/0/339)
 

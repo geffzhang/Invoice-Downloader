@@ -300,7 +300,7 @@ flowchart TD
 
 | 服务 | 用途 | 服务方 |
 |------|------|--------|
-| 智谱 GLM API | 发票 OCR 与视觉识别 | 北京智谱华章科技有限公司 |
+| DeepSeek API | 发票 OCR 与视觉识别 | DeepSeek |
 | QQ 邮箱 IMAP | 邮件读取 | 腾讯科技（深圳）有限公司 |
 | 163 邮箱 IMAP | 邮件读取 | 网易（杭州）网络有限公司 |
 
@@ -313,8 +313,6 @@ flowchart TD
 ---
 
 <div align="center">
-
-Made with ❤️ by **EthanYoQ / Yong Qi**
 
 [报告问题](https://github.com/EthanYoQ/Invoice-Downloader/issues) · [DeepSeek 开放平台](https://platform.deepseek.com/) · [163邮箱帮助](https://help.mail.163.com/) · [QQ邮箱帮助](https://service.mail.qq.com/detail/0/339)
 
