@@ -45,7 +45,7 @@
 
 - [ ] **步骤 1：先写失败的工具链检查**
 
-创建 `build/verify-toolchain.ps1`。当 `.NET SDK 10.0.100`、Windows SDK `10.0.26100.1`、MSVC `14.44.35207` 或 WiX `5.0.2` 缺失时，脚本必须返回非零，并指出第一个缺失或版本不匹配的工具。
+创建 `build/verify-toolchain.ps1`。当 `.NET SDK 10.0.100` 或 WiX `5.0.2` 缺失时，脚本必须返回非零，并指出第一个缺失或版本不匹配的工具。Windows SDK 和 MSVC 不做独立精确版本门禁；桌面 TFM 指定最低 Windows 平台版本。
 
 - [ ] **步骤 2：运行检查并确认 scaffold 前失败**
 
