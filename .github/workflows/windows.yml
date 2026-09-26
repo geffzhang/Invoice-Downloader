@@ -97,7 +97,7 @@ jobs:
       - name: Prepare Windows release assets
         shell: pwsh
         run: |
-          $tag = $env:GITHUB_REF_NAME
+          $tag = $env:GITHUB_REF_NAME -replace '/', '-'
           $assetRoot = Join-Path $PWD "dist/release-assets"
           New-Item -ItemType Directory -Force -Path $assetRoot | Out-Null
           Copy-Item dist/InvoiceFlowAI-setup.msi (Join-Path $assetRoot "InvoiceFlowAI-$tag-windows-x64-setup.msi")
@@ -140,7 +140,8 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           cd release-assets
-          sha256sum --check "InvoiceFlowAI-${RELEASE_TAG}-SHA256SUMS.txt"
-          gh release create "$RELEASE_TAG" InvoiceFlowAI-"$RELEASE_TAG"-* \
+          safe_tag="${RELEASE_TAG//\//-}"
+          sha256sum --check "InvoiceFlowAI-${safe_tag}-SHA256SUMS.txt"
+          gh release create "$RELEASE_TAG" InvoiceFlowAI-"$safe_tag"-* \
             --verify-tag --title "InvoiceFlowAI $RELEASE_TAG" \
             --notes "Windows x64 desktop release built from the C#/.NET runtime. macOS desktop and DSH plugin releases have been retired."
