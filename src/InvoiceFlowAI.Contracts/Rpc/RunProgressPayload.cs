@@ -9,4 +9,8 @@ public sealed record RunProgressPayload(
     RunProgressStats? Stats = null,
     string? LastError = null,
     bool QuotaExhausted = false,
-    string? QuotaMessage = null);
+    string? QuotaMessage = null)
+{
+    public IReadOnlyList<RunMailboxFetchFailureDiagnostic> MailboxFetchFailures { get; init; }
+        = Array.Empty<RunMailboxFetchFailureDiagnostic>();
+}

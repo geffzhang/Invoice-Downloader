@@ -8,6 +8,8 @@ namespace InvoiceFlowAI.Infrastructure.Pipeline;
 
 public sealed class DocumentExtractionStage : IDocumentExtractionStage
 {
+    private const int MaxSafeRemoteConcurrency = 2;
+
     private static readonly IReadOnlyDictionary<string, string> FormatParserIds =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -49,14 +51,22 @@ public sealed class DocumentExtractionStage : IDocumentExtractionStage
             results.Add((index, terminalResults[index]));
         }
 
+        var pending = new List<PreparedCandidate>(input.Items.Count);
         for (var index = 0; index < input.Items.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var item = input.Items[index];
-            CandidateProcessResult result;
             try
             {
-                result = await ProcessCandidateAsync(item, cancellationToken).ConfigureAwait(false);
+                var preflight = await PreflightCandidateAsync(item, index, cancellationToken).ConfigureAwait(false);
+                if (preflight.TerminalResult is { } terminal)
+                {
+                    results.Add((terminalResults.Count + index, terminal));
+                }
+                else
+                {
+                    pending.Add(preflight.Prepared!);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -64,10 +74,41 @@ public sealed class DocumentExtractionStage : IDocumentExtractionStage
             }
             catch (Exception)
             {
-                result = Failure(item.Candidate, "EXTRACTION_STAGE_FAILED", "Document extraction could not be completed.", FailureCategory.Internal);
+                results.Add((terminalResults.Count + index, Failure(
+                    item.Candidate,
+                    "EXTRACTION_STAGE_FAILED",
+                    "Document extraction could not be completed.",
+                    FailureCategory.Internal)));
+            }
+        }
+
+        CandidateProcessResult? breaker = null;
+        var position = 0;
+        while (position < pending.Count)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (breaker is not null)
+            {
+                AddPropagatedResults(pending, position, terminalResults.Count, breaker, results);
+                break;
             }
 
-            results.Add((terminalResults.Count + index, result));
+            if (!IsParallelSafe(pending[position].Item))
+            {
+                var current = pending[position++];
+                var outcome = await ExtractSafelyAsync(current, cancellationToken).ConfigureAwait(false);
+                results.Add((terminalResults.Count + current.InputOrder, outcome));
+                if (IsBreaker(outcome)) breaker = outcome;
+                continue;
+            }
+
+            var segmentStart = position;
+            while (position < pending.Count && IsParallelSafe(pending[position].Item)) position++;
+            breaker = await ExecuteSafeSegmentAsync(
+                pending.GetRange(segmentStart, position - segmentStart),
+                terminalResults.Count,
+                results,
+                cancellationToken).ConfigureAwait(false);
         }
 
         var ordered = results
@@ -78,18 +119,21 @@ public sealed class DocumentExtractionStage : IDocumentExtractionStage
         return new ExtractionBatch(ordered) { PreflightResults = terminalResults };
     }
 
-    private async Task<CandidateProcessResult> ProcessCandidateAsync(CandidateWorkItem item, CancellationToken cancellationToken)
+    private async Task<PreflightResult> PreflightCandidateAsync(
+        CandidateWorkItem item,
+        int inputOrder,
+        CancellationToken cancellationToken)
     {
         var candidate = item.Candidate;
         var sourceKind = GetSourceKind(candidate.ContentType, candidate.OriginalFileName);
         var formatOutcome = await RunFormatParserAsync(item, sourceKind, cancellationToken).ConfigureAwait(false);
         if (formatOutcome is { Disposition: ParserOutcomeDisposition.Resolved })
         {
-            return FromParserOutcome(candidate, formatOutcome);
+            return PreflightResult.Terminal(FromParserOutcome(candidate, formatOutcome));
         }
         if (formatOutcome is { Disposition: ParserOutcomeDisposition.Failed })
         {
-            return FromParserOutcome(candidate, formatOutcome);
+            return PreflightResult.Terminal(FromParserOutcome(candidate, formatOutcome));
         }
 
         var deterministicSource = formatOutcome?.Invoice;
@@ -98,12 +142,12 @@ public sealed class DocumentExtractionStage : IDocumentExtractionStage
             var specialOutcome = await RunSpecialParserAsync(item, sourceKind, cancellationToken).ConfigureAwait(false);
             if (specialOutcome.Conflict is not null)
             {
-                return Failure(candidate, specialOutcome.Conflict.ReasonCode,
-                    "Multiple document parsers claimed this candidate.", FailureCategory.Validation);
+                return PreflightResult.Terminal(Failure(candidate, specialOutcome.Conflict.ReasonCode,
+                    "Multiple document parsers claimed this candidate.", FailureCategory.Validation));
             }
             if (specialOutcome.Selected is { Disposition: not ParserOutcomeDisposition.NeedsFallback } selected)
             {
-                return FromParserOutcome(candidate, selected);
+                return PreflightResult.Terminal(FromParserOutcome(candidate, selected));
             }
             if (specialOutcome.Selected?.Invoice is { } specialInvoice)
             {
@@ -111,7 +155,163 @@ public sealed class DocumentExtractionStage : IDocumentExtractionStage
             }
         }
 
-        return await RunGenericExtractorAsync(item, deterministicSource, cancellationToken).ConfigureAwait(false);
+        return PreflightResult.Remote(new PreparedCandidate(item, inputOrder, deterministicSource));
+    }
+
+    private async Task<CandidateProcessResult?> ExecuteSafeSegmentAsync(
+        IReadOnlyList<PreparedCandidate> segment,
+        int terminalResultCount,
+        List<(int Order, CandidateProcessResult Result)> results,
+        CancellationToken cancellationToken)
+    {
+        using var segmentCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var queued = new Queue<PreparedCandidate>(segment);
+        var active = new Dictionary<Task<CandidateProcessResult>, PreparedCandidate>();
+        CandidateProcessResult? breaker = null;
+
+        void FillSlots()
+        {
+            while (breaker is null && queued.Count > 0 && active.Count < MaxSafeRemoteConcurrency)
+            {
+                segmentCancellation.Token.ThrowIfCancellationRequested();
+                var prepared = queued.Dequeue();
+                active.Add(ExtractSafelyAsync(prepared, segmentCancellation.Token), prepared);
+            }
+        }
+
+        try
+        {
+            FillSlots();
+            while (active.Count > 0)
+            {
+                var completedTask = await Task.WhenAny(active.Keys).ConfigureAwait(false);
+                var completed = active.Keys
+                    .Where(static task => task.IsCompleted)
+                    .OrderBy(task => active[task].InputOrder)
+                    .ToArray();
+                if (completed.Length == 0) completed = [completedTask];
+
+                foreach (var task in completed)
+                {
+                    var prepared = active[task];
+                    active.Remove(task);
+                    var outcome = await task.ConfigureAwait(false);
+                    results.Add((terminalResultCount + prepared.InputOrder, outcome));
+                    if (breaker is null && IsBreaker(outcome))
+                    {
+                        breaker = outcome;
+                        AddPropagatedResults(queued, terminalResultCount, breaker, results);
+                    }
+                }
+
+                FillSlots();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            await segmentCancellation.CancelAsync().ConfigureAwait(false);
+            try
+            {
+                await Task.WhenAll(active.Keys).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            throw;
+        }
+
+        return breaker;
+    }
+
+    private async Task<CandidateProcessResult> ExtractSafelyAsync(
+        PreparedCandidate prepared,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await RunGenericExtractorAsync(prepared.Item, prepared.DeterministicSource, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return Failure(prepared.Item.Candidate, "EXTRACTION_STAGE_FAILED",
+                "Document extraction could not be completed.", FailureCategory.Internal);
+        }
+    }
+
+    private static bool IsParallelSafe(CandidateWorkItem item)
+    {
+        var candidate = item.Candidate;
+        if (item.SourceUrlCandidate is not null
+            || item.SourceUrlGroup is not null
+            || candidate.SourceUrl is not null
+            || candidate.SourceKind.Equals("url", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var metadata = candidate.Metadata;
+        if (metadata is null) return true;
+        if (metadata.TryGetValue("parallel_safe", out var parallelSafe)
+            && bool.TryParse(parallelSafe, out var explicitlySafe)
+            && !explicitlySafe)
+        {
+            return false;
+        }
+
+        return !HasTruthyMetadata(metadata, "is_url")
+            && !HasTruthyMetadata(metadata, "browser_recovery")
+            && !HasTruthyMetadata(metadata, "provider_recovery")
+            && !HasTruthyMetadata(metadata, "provider_family");
+    }
+
+    private static bool HasTruthyMetadata(IReadOnlyDictionary<string, string> metadata, string key)
+        => metadata.TryGetValue(key, out var value)
+            && (bool.TryParse(value, out var flag) ? flag : !string.IsNullOrWhiteSpace(value));
+
+    private static bool IsBreaker(CandidateProcessResult result)
+        => result.Status is CandidateStatus.QuotaExhausted or CandidateStatus.AuthFailed;
+
+    private static void AddPropagatedResults(
+        IReadOnlyList<PreparedCandidate> pending,
+        int start,
+        int terminalResultCount,
+        CandidateProcessResult breaker,
+        List<(int Order, CandidateProcessResult Result)> results)
+    {
+        for (var index = start; index < pending.Count; index++)
+        {
+            var prepared = pending[index];
+            results.Add((terminalResultCount + prepared.InputOrder,
+                PropagateBreaker(prepared.Item.Candidate, breaker)));
+        }
+    }
+
+    private static void AddPropagatedResults(
+        Queue<PreparedCandidate> queued,
+        int terminalResultCount,
+        CandidateProcessResult breaker,
+        List<(int Order, CandidateProcessResult Result)> results)
+    {
+        while (queued.TryDequeue(out var prepared))
+        {
+            results.Add((terminalResultCount + prepared.InputOrder,
+                PropagateBreaker(prepared.Item.Candidate, breaker)));
+        }
+    }
+
+    private static CandidateProcessResult PropagateBreaker(DocumentCandidate candidate, CandidateProcessResult breaker)
+        => new(candidate, breaker.Status, Failure: breaker.Failure);
+
+    private sealed record PreparedCandidate(CandidateWorkItem Item, int InputOrder, InvoiceDocument? DeterministicSource);
+    private sealed record PreflightResult(PreparedCandidate? Prepared, CandidateProcessResult? TerminalResult)
+    {
+        public static PreflightResult Remote(PreparedCandidate prepared) => new(prepared, null);
+        public static PreflightResult Terminal(CandidateProcessResult result) => new(null, result);
     }
 
     private async Task<ParserOutcome?> RunFormatParserAsync(

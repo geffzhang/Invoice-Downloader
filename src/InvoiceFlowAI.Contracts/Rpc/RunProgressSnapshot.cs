@@ -14,4 +14,8 @@ public sealed record RunProgressSnapshot(
     string? QuotaMessage,
     string? BuildIdentity,
     string? RawDateRange,
-    string? ImapQueryRange);
+    string? ImapQueryRange)
+{
+    public IReadOnlyList<RunMailboxFetchFailureDiagnostic> MailboxFetchFailures { get; init; }
+        = Array.Empty<RunMailboxFetchFailureDiagnostic>();
+}

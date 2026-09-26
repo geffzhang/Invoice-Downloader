@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FluentAssertions;
 using InvoiceFlowAI.Application.Persistence;
 using InvoiceFlowAI.Application.Reports;
@@ -51,8 +52,10 @@ public sealed class EfReportRunDataStoreTests : IClassFixture<SqliteTestFixture>
             await store.TryCreateAsync(NewRun("run-other"), otherRunUow, CancellationToken.None);
             await otherRunUow.CommitAsync(CancellationToken.None);
         }
+        var resolvedSource = NewDocument("doc-resolved");
+        resolvedSource.SourceLocator = "https://fixture.invalid/download?token=report-secret";
         context.Documents.AddRange(
-            NewDocument("doc-resolved"), NewDocument("doc-review"), NewDocument("doc-other"));
+            resolvedSource, NewDocument("doc-review"), NewDocument("doc-other"));
         await context.SaveChangesAsync(CancellationToken.None);
         context.DocumentProcessing.AddRange(
             NewProcessing("run-report", "doc-resolved", 1, "Resolved", ""),
@@ -95,6 +98,9 @@ public sealed class EfReportRunDataStoreTests : IClassFixture<SqliteTestFixture>
         data.FailureReasonCounts.Should().BeEquivalentTo(summary.FailureReasonCounts);
         data.ExistingRelativePath.Should().Be("reports/run-report/report.xlsx");
         data.ExistingContentHash.Should().Be("existing-hash");
+        var reportProjection = JsonSerializer.Serialize(data);
+        reportProjection.Should().NotContain("fixture.invalid");
+        reportProjection.Should().NotContain("report-secret");
     }
 
     [Theory]

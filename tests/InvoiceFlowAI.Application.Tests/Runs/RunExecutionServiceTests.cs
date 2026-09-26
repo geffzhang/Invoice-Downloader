@@ -98,6 +98,45 @@ public sealed class RunExecutionServiceTests
     }
 
     [Fact]
+    public async Task Run_publishes_fetch_failures_as_non_terminal_progress_diagnostics()
+    {
+        var order = new List<string>();
+        var services = new ServiceCollection();
+        services.AddInvoiceFlowApplication();
+        services.AddSingleton<IMailboxScanner, FetchFailureMailboxScanner>();
+        services.AddSingleton<ICandidateCollectionStage, EmptyCandidateStage>();
+        services.AddSingleton<IUrlRecoveryStage, PassThroughRecoveryStage>();
+        services.AddSingleton<IDocumentExtractionStage, EmptyExtractionStage>();
+        services.AddSingleton<IArtifactPairingStage, EmptyPairingStage>();
+        services.AddSingleton<IDocumentArchivingStage, EmptyArchiveStage>();
+        services.AddSingleton<IReportExportStage, CompletedReportStage>();
+        await using var provider = services.BuildServiceProvider();
+        var coordinator = new RecordingCoordinator(order);
+        var publisher = new RecordingEventPublisher(order);
+        var service = new RunExecutionService(
+            provider.GetRequiredService<InvoiceFlowAI.Application.Configuration.RecipeRegistry>(),
+            provider.GetRequiredService<PipelineRunFactory>(), coordinator, publisher, TimeProvider.System);
+
+        await service.ExecuteAsync(new RunStartRequest(
+            "run-fetch-diagnostic", "account-1", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30),
+            Path.GetTempPath(), "Example Co", "standard"), CancellationToken.None);
+
+        var diagnosticProgress = publisher.Events
+            .Where(item => item.EventName == "run.progress")
+            .Select(item => item.Payload.Should().BeOfType<RunProgressPayload>().Subject)
+            .Where(payload => payload.MailboxFetchFailures.Count > 0)
+            .ToArray();
+        diagnosticProgress.Should().NotBeEmpty();
+        diagnosticProgress[^1].MailboxFetchFailures.Should().ContainSingle().Which.Should()
+            .BeEquivalentTo(new RunMailboxFetchFailureDiagnostic(7, "IMAP_MESSAGE_FETCH_FAILED"));
+        coordinator.FinalizationRequests.Should().ContainSingle();
+        coordinator.FinalizationRequests[0].RunFailure.Should().BeNull();
+        coordinator.FinalizationRequests[0].CancellationRequested.Should().BeFalse();
+        coordinator.FinalizationRequests[0].AllCandidatesArrived.Should().BeTrue();
+        publisher.Events.Last().EventName.Should().Be("run.terminal");
+    }
+
+    [Fact]
     public async Task Terminal_publish_waits_for_in_flight_progress_commit()
     {
         var order = new List<string>();
@@ -317,6 +356,18 @@ public sealed class RunExecutionServiceTests
                 [new MailboxMessage("INBOX", "1", 1, null, "", "", [], false),
                  new MailboxMessage("INBOX", "2", 1, null, "", "", [], false)],
                 Array.Empty<MailboxAttachmentCandidate>(), 2, "", false));
+    }
+
+    private sealed class FetchFailureMailboxScanner : IMailboxScanner
+    {
+        public Task<MailboxScanResult> ScanAsync(MailboxScanRequest request, CancellationToken cancellationToken)
+            => Task.FromResult(new MailboxScanResult(
+                [new MailboxMessage("INBOX", "6", 42, null, "Synthetic", "sender@fixture.invalid", [], false)],
+                Array.Empty<MailboxAttachmentCandidate>(), 7, "42", false)
+            {
+                AccountId = request.AccountId,
+                FetchFailures = [new MailboxFetchFailure(7, "IMAP_MESSAGE_FETCH_FAILED")],
+            });
     }
 
     private sealed class CancellingMailboxScanner(CancellationTokenSource cancellation) : IMailboxScanner

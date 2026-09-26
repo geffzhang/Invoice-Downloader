@@ -1420,6 +1420,19 @@ class InvoiceAppAPI:
             },
         )
 
+    @staticmethod
+    def _runtime_truth_audit_contract(email_address, auth_code, date_from, date_to):
+        email_text = str(email_address or "").strip()
+        email_domain = email_text.rsplit("@", 1)[-1].lower() if "@" in email_text else ""
+        return {
+            "status": "skipped",
+            "reason": "STRICT_TRUTH_AUDIT_RUNS_AFTER_BATCH",
+            "email_domain": email_domain,
+            "has_auth_code": bool(auth_code),
+            "date_from": str(date_from or ""),
+            "date_to": str(date_to or ""),
+        }
+
     def _start_truth_audit_async(self, email_address, auth_code):
         if not self._run_context.get("enabled") or not email_address or not auth_code:
             self._truth_audit_thread = None
@@ -1477,10 +1490,7 @@ class InvoiceAppAPI:
 
         def _runner():
             try:
-                module = importlib.import_module("audit_email_truth")
-                collect_truth_table = getattr(module, "collect_truth_table")
-
-                report = collect_truth_table(
+                report = self._runtime_truth_audit_contract(
                     email_address,
                     auth_code,
                     date_from,

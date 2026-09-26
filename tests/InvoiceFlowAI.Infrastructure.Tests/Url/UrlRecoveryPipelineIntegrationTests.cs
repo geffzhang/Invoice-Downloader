@@ -3,8 +3,10 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using FluentAssertions;
+using InvoiceFlowAI.Application.Archive;
 using InvoiceFlowAI.Application.Candidates;
 using InvoiceFlowAI.Application.Mail;
+using InvoiceFlowAI.Application.Pairing;
 using InvoiceFlowAI.Application.Persistence;
 using InvoiceFlowAI.Application.Pipeline;
 using InvoiceFlowAI.Application.Runs;
@@ -12,6 +14,7 @@ using InvoiceFlowAI.Application.Url;
 using InvoiceFlowAI.Domain.Candidates;
 using InvoiceFlowAI.Domain.Runs;
 using InvoiceFlowAI.Infrastructure;
+using InvoiceFlowAI.Infrastructure.Archive;
 using InvoiceFlowAI.Infrastructure.Url;
 using InvoiceFlowAI.Infrastructure.Url.Worker;
 using Microsoft.Extensions.DependencyInjection;
@@ -110,6 +113,61 @@ public sealed class UrlRecoveryPipelineIntegrationTests : IDisposable
         transport.Requests.Should().ContainSingle();
     }
 
+    [Fact]
+    public async Task Direct_provider_identity_mismatch_routes_to_review_without_archive_commit()
+    {
+        const string expectedInvoiceNumber = "11111111111111111111";
+        const string providerInvoiceNumber = "22222222222222222222";
+        var archiveBytes = CreateZip(
+            ("invoice.xml", Encoding.UTF8.GetBytes($"<?xml version=\"1.0\"?><Invoice><InvoiceNumber>{providerInvoiceNumber}</InvoiceNumber></Invoice>")),
+            ("first.pdf", Encoding.ASCII.GetBytes("%PDF-1.7 first")),
+            ("second.pdf", Encoding.ASCII.GetBytes("%PDF-1.7 second")));
+        var transport = new FakeDirectTransport(new UrlTransportResponse(HttpStatusCode.OK, archiveBytes, "application/zip", null));
+        var policy = new PublicUrlPolicy((_, _) => Task.FromResult<IReadOnlyList<IPAddress>>([IPAddress.Parse("203.0.114.7")]));
+        var recovery = new UrlRecoveryStage(new DirectStrategyClient(new DirectInvoiceRecoveryStrategy(new DirectArtifactProbe(
+            new PublicUrlRecoveryClient(policy, transport, 4096, TimeSpan.FromSeconds(2)),
+            maxAttempts: 1,
+            delayAsync: static (_, _) => Task.CompletedTask))));
+        var urlCandidate = new MailboxUrlCandidate(
+            "acct", "INBOX", "validity", "78", new Uri("https://files.example/mismatch.zip"),
+            "chinatax_direct_invoice", "mismatch-group",
+            new Dictionary<string, string> { ["invoice_number"] = expectedInvoiceNumber }, 0);
+        var group = new UrlCandidateGroup(
+            urlCandidate.ProviderFamily,
+            [urlCandidate],
+            new Dictionary<string, string> { ["invoice_number"] = expectedInvoiceNumber },
+            new Dictionary<string, IReadOnlyList<ExpectedFieldEvidence>>(),
+            DocumentIdentity.Create("mismatch-group"));
+        var candidate = new DocumentCandidate(DocumentIdentity.Create("source-candidate"), 1, "corr", "78",
+            "invoice.zip", "application/zip", 0, 0, "url", urlCandidate.SourceUrl);
+        var recoveryBatch = await recovery.ExecuteAsync(new CandidateBatch([
+            new CandidateWorkItem(candidate, ReadOnlyMemory<byte>.Empty,
+                SourceUrlCandidate: urlCandidate, SourceUrlGroup: group)]), CancellationToken.None);
+        var archiveCommit = new RecordingArchiveCoordinator();
+        var reviewStore = new RecordingReviewStore();
+        var archiveStage = new DocumentArchivingStage(
+            new ArchiveNamingPolicy(),
+            archiveCommit,
+            new MissingSourceFileSystem(),
+            new RecordingPairingStore(),
+            reviewStore,
+            new TestUnitOfWorkFactory());
+
+        recoveryBatch.Items.Should().BeEmpty();
+        recoveryBatch.EffectiveTerminalResults.Should().ContainSingle().Which.Failure!.ReasonCode
+            .Should().Be("DIRECT_INVOICE_PDF_ENTITY_MISMATCH");
+        var archived = await archiveStage.ExecuteAsync(
+            new ArchiveStageRequest("run-provider-mismatch", Path.Combine(Path.GetTempPath(), "invoiceflow-review-only"),
+                new PairingBatch([], recoveryBatch.EffectiveTerminalResults)),
+            CancellationToken.None);
+
+        reviewStore.Items.Should().ContainSingle(item =>
+            item.DocumentId == "source-candidate" && item.Reason == "DIRECT_INVOICE_PDF_ENTITY_MISMATCH");
+        archiveCommit.Requests.Should().BeEmpty();
+        archived.Artifacts.Should().BeEmpty();
+        transport.Requests.Should().ContainSingle();
+    }
+
     private static byte[] CreateZip(params (string Name, byte[] Content)[] members)
     {
         using var output = new MemoryStream();
@@ -190,6 +248,69 @@ public sealed class UrlRecoveryPipelineIntegrationTests : IDisposable
             Requests.Add(request);
             return Task.FromResult(response);
         }
+    }
+
+    private sealed class RecordingArchiveCoordinator : IArchiveCommitCoordinator
+    {
+        public List<ArchiveCommitRequest> Requests { get; } = [];
+
+        public Task<ArchiveCommitResult> CommitAsync(ArchiveCommitRequest request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            throw new InvalidOperationException("A missing-source mismatch must not reach archive commit.");
+        }
+    }
+
+    private sealed class MissingSourceFileSystem : IArchiveFileSystem
+    {
+        public Task<IReadOnlyList<string>> EnumerateDirectChildFilesAsync(string directoryPath, CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>([]);
+        public Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+        public Task<bool> FileExistsAsync(string path, CancellationToken cancellationToken) => Task.FromResult(false);
+        public Task<string> CopyToSiblingTempAsync(string sourcePath, string finalFilePath, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+        public Task AtomicMoveAsync(string sourcePath, string targetPath, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+        public Task FlushToDiskAsync(string path, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task DeleteAsync(string path, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task WriteTextAtomicAsync(string path, string content, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+    }
+
+    private sealed class RecordingPairingStore : IPairingStore
+    {
+        public Task UpsertAsync(PairingRecord record, IUnitOfWork transaction, CancellationToken cancellationToken)
+            => Task.CompletedTask;
+        public Task ReconcileArchiveStateAsync(string runId, IReadOnlyList<ArchiveArtifactSnapshot> artifacts,
+            IUnitOfWork transaction, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingReviewStore : IManualReviewItemStore
+    {
+        public List<(string RunId, string DocumentId, int Revision, string Reason)> Items { get; } = [];
+        public Task UpsertOpenAsync(string runId, string documentId, int processingRevision, string reasonCode,
+            IUnitOfWork transaction, CancellationToken cancellationToken)
+        {
+            Items.Add((runId, documentId, processingRevision, reasonCode));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class TestUnitOfWorkFactory : IUnitOfWorkFactory
+    {
+        public Task<IUnitOfWork> BeginAsync(TransactionPurpose purpose, CancellationToken cancellationToken)
+            => Task.FromResult<IUnitOfWork>(new TestUnitOfWork(purpose));
+    }
+
+    private sealed class TestUnitOfWork(TransactionPurpose purpose) : IUnitOfWork
+    {
+        public string TransactionId { get; } = Guid.NewGuid().ToString("N");
+        public TransactionPurpose Purpose { get; } = purpose;
+        public bool IsCompleted { get; private set; }
+        public Task CommitAsync(CancellationToken cancellationToken) { IsCompleted = true; return Task.CompletedTask; }
+        public Task RollbackAsync(CancellationToken cancellationToken) { IsCompleted = true; return Task.CompletedTask; }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class FakeRunner : IUrlRecoveryWorkerProcessRunner

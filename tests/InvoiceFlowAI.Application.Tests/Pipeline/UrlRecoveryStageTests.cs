@@ -164,7 +164,7 @@ public sealed class UrlRecoveryStageTests
         var client = new BarrierGroupRecoveryClient(10);
         var stage = new UrlRecoveryStage(client, new RecoveredArtifactIdentityFactory());
         var items = Enumerable.Range(0, 12)
-            .Select(index => GroupWorkItem(index, "generic"))
+            .Select(index => GroupWorkItem(index, string.Empty))
             .ToArray();
         var execution = stage.ExecuteAsync(new CandidateBatch(items), CancellationToken.None);
 
@@ -176,6 +176,27 @@ public sealed class UrlRecoveryStageTests
 
         result.Items.Select(item => item.Candidate.Sequence).Should().Equal(Enumerable.Range(0, 12).Select(index => (long)index));
         client.MaximumActive.Should().Be(10);
+    }
+
+    [Fact]
+    public async Task Recovery_outputs_input_order_when_group_requests_complete_out_of_order()
+    {
+        var client = new OrderedCompletionRecoveryClient(3);
+        var stage = new UrlRecoveryStage(client, new RecoveredArtifactIdentityFactory());
+        var items = Enumerable.Range(0, 3).Select(index => GroupWorkItem(index, string.Empty)).ToArray();
+        var execution = stage.ExecuteAsync(new CandidateBatch(items), CancellationToken.None);
+
+        await client.AllStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        foreach (var index in new[] { 2, 1, 0 })
+        {
+            client.Release(index);
+            await client.Completed[index].Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        client.CompletionOrder.Should().Equal(2, 1, 0);
+        result.Items.Select(item => item.Candidate.Sequence).Should().Equal(0, 1, 2);
     }
 
     [Fact]
@@ -209,9 +230,15 @@ public sealed class UrlRecoveryStageTests
             })
             .ToArray();
         var client = new SerialTrackingUrlRecoveryClient();
+        var item = WorkItem(candidates[0], "same-provider-group") with
+        {
+            SourceUrlGroup = Group(candidates, "same-provider-group-identity"),
+        };
+        var stage = new UrlRecoveryStage(client, new RecoveredArtifactIdentityFactory());
 
-        await ((IUrlRecoveryClient)client).RecoverAsync(Group(candidates, "same-provider-group"), CancellationToken.None);
+        var result = await stage.ExecuteAsync(new CandidateBatch([item]), CancellationToken.None);
 
+        result.Items.Should().ContainSingle();
         client.RequestedUris.Should().Equal(candidates.Select(candidate => candidate.SourceUrl));
         client.MaximumActive.Should().Be(1);
     }
@@ -375,6 +402,33 @@ public sealed class UrlRecoveryStageTests
                 lock (_sync) _active--;
             }
         }
+    }
+
+    private sealed class OrderedCompletionRecoveryClient(int groupCount) : IUrlRecoveryClient
+    {
+        private readonly object _sync = new();
+        private int _started;
+        public TaskCompletionSource AllStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource[] Completed { get; } = Enumerable.Range(0, groupCount)
+            .Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
+        public List<int> CompletionOrder { get; } = [];
+        private TaskCompletionSource[] Releases { get; } = Enumerable.Range(0, groupCount)
+            .Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
+
+        public Task<UrlRecoveryResult> RecoverAsync(Uri sourceUrl, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public async Task<UrlRecoveryResult> RecoverAsync(UrlCandidateGroup group, CancellationToken cancellationToken)
+        {
+            var index = int.Parse(group.GroupIdentity.Value[(group.GroupIdentity.Value.LastIndexOf('-') + 1)..]);
+            if (Interlocked.Increment(ref _started) == groupCount) AllStarted.TrySetResult();
+            await Releases[index].Task.WaitAsync(cancellationToken);
+            lock (_sync) CompletionOrder.Add(index);
+            Completed[index].TrySetResult();
+            return new UrlRecoveryResult(Encoding.ASCII.GetBytes("%PDF-1.7 ordered"), "application/pdf");
+        }
+
+        public void Release(int index) => Releases[index].TrySetResult();
     }
 
     private sealed class SerialTrackingUrlRecoveryClient : IUrlRecoveryClient

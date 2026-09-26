@@ -48,6 +48,7 @@ const DEFAULT_PROGRESS = {
     can_stop: false,
     quota_exhausted: false,
     quota_message: "",
+    mailbox_fetch_failures: [],
     build_identity: null,
 };
 
@@ -1243,6 +1244,7 @@ function ProcessingPage({ onOpenDisclaimer }) {
 
     const stats = progressState.stats || DEFAULT_PROGRESS.stats;
     const logs = progressState.logs || [];
+    const mailboxFetchFailures = progressState.mailbox_fetch_failures || [];
     const statusTone = progressState.run_state === "failed" ? "error" : progressState.run_state === "completed" ? "success" : progressState.is_running ? "info" : "neutral";
     const statusLabel = progressState.run_state === "failed" ? "处理失败" : progressState.run_state === "completed" ? "处理完成" : progressState.is_running ? "实时连接已建立" : UI_COPY.pages.processing.statusWaiting;
 
@@ -1279,6 +1281,7 @@ function ProcessingPage({ onOpenDisclaimer }) {
                         <div className="progress-caption"><span className="material-symbols-outlined">sync</span><span>{progressState.stop_requested ? UI_COPY.pages.processing.stopPending : UI_COPY.pages.processing.liveRefresh}</span></div>
                         {progressState.last_error && progressState.run_state === "failed" ? <NoticeBox tone="error">{progressState.last_error}</NoticeBox> : null}
                         {progressState.quota_exhausted && progressState.quota_message ? <NoticeBox tone="warning">{progressState.quota_message}</NoticeBox> : null}
+                        {mailboxFetchFailures.length > 0 ? <NoticeBox tone="warning" className="mailbox-fetch-failures"><div><div>部分邮件读取失败，其他邮件仍会继续处理。</div><ul>{mailboxFetchFailures.map((failure) => <li key={failure.uid}>UID {failure.uid}：{failure.reasonCode}</li>)}</ul></div></NoticeBox> : null}
                         {progressState.stop_requested && progressState.run_state !== "failed" ? <NoticeBox tone="warning">{UI_COPY.pages.processing.stopNotice}</NoticeBox> : null}
                     </div>
                 </section>

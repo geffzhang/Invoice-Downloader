@@ -140,6 +140,33 @@ test("loads typed progress and sends stop for the explicit run id", async () => 
     assert.equal(stopped.alreadyRequested, true);
 });
 
+test("maps mailbox fetch diagnostics and preserves them through legacy progress and terminal events", async () => {
+    const diagnostics = [{ uid: 7, reasonCode: "IMAP_MESSAGE_FETCH_FAILED" }];
+    const rpc = createRpcClient({
+        "run.progress.get": async () => progressSnapshot({ mailboxFetchFailures: diagnostics }),
+    });
+    const mapped = await runRpc.getProgress(rpc, "run-1");
+    assert.deepEqual(mapped.mailbox_fetch_failures, diagnostics);
+
+    const updates = [];
+    const feed = runRpc.watchProgress(rpc, "run-1", (value) => updates.push(value));
+    await feed.initial;
+    rpc.emit("run.progress", {
+        runId: "run-1", eventSequence: 1,
+        payload: { stage: "archive-documents", percent: 70 },
+    });
+    rpc.emit("run.terminal", {
+        runId: "run-1", eventSequence: 2,
+        payload: { runState: "completed", reasonCode: "RUN_COMPLETED" },
+    });
+
+    assert.deepEqual(updates.at(-1).mailbox_fetch_failures, diagnostics);
+    feed.dispose();
+
+    const legacyRpc = createRpcClient({ "run.progress.get": async () => progressSnapshot() });
+    assert.deepEqual((await runRpc.getProgress(legacyRpc, "run-legacy")).mailbox_fetch_failures, []);
+});
+
 test("subscribes before snapshot, replays buffered events in sequence order, and ignores duplicates", async () => {
     let resolveSnapshot;
     const rpc = createRpcClient({

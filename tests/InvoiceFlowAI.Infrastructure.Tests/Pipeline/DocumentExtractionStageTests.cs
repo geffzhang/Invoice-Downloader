@@ -137,6 +137,105 @@ public sealed class DocumentExtractionStageTests
     }
 
     [Fact]
+    public async Task Remote_provider_or_browser_fallbacks_do_not_overlap()
+    {
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var extractor = new BarrierFieldExtractor(firstStarted, secondStarted, releaseFirst);
+        var stage = CreateStage([], extractor);
+        var first = WorkItem("provider", sequence: 0) with
+        {
+            Candidate = Candidate("provider", 0) with
+            {
+                SourceKind = "url",
+                SourceUrl = new Uri("https://provider.example/invoice"),
+                Metadata = new Dictionary<string, string> { ["provider_recovery"] = "true" },
+            },
+        };
+        var second = WorkItem("browser", sequence: 1) with
+        {
+            Candidate = Candidate("browser", 1) with
+            {
+                SourceKind = "url",
+                SourceUrl = new Uri("https://browser.example/invoice"),
+                Metadata = new Dictionary<string, string> { ["browser_recovery"] = "true" },
+            },
+        };
+
+        var execution = stage.ExecuteAsync(new CandidateBatch([first, second]), CancellationToken.None);
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        secondStarted.Task.IsCompleted.Should().BeFalse();
+        releaseFirst.TrySetResult();
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        result.Results.Should().HaveCount(2);
+        extractor.MaximumActive.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Safe_remote_extraction_overlaps_at_two_after_batch_preflight_completes()
+    {
+        var parser = new FakeParser("pdf-text-invoice", "pdf", 400, true, NeedsFallback);
+        var extractor = new BoundedOverlapFieldExtractor();
+        var stage = CreateStage([parser], extractor);
+        var items = Enumerable.Range(0, 4)
+            .Select(index => WorkItem($"safe-{index}", sequence: index))
+            .ToArray();
+
+        var execution = stage.ExecuteAsync(new CandidateBatch(items), CancellationToken.None);
+        var firstPairStarted = await Task.WhenAny(extractor.TwoStarted.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+        var preflightCountAtOverlap = parser.CallCount;
+        extractor.ReleaseFirstPair.TrySetResult();
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        firstPairStarted.Should().Be(extractor.TwoStarted.Task);
+        preflightCountAtOverlap.Should().Be(4);
+        extractor.MaximumActive.Should().Be(2);
+        extractor.CompletionOrder.Take(2).Should().Equal(1, 0);
+        result.Results.Select(item => item.Candidate.Sequence).Should().Equal(0, 1, 2, 3);
+    }
+
+    [Fact]
+    public async Task Authentication_failure_stops_queued_safe_remote_extractions()
+    {
+        var extractor = new AuthenticationBreakerFieldExtractor();
+        var stage = CreateStage([], extractor);
+        var items = Enumerable.Range(0, 4)
+            .Select(index => WorkItem($"safe-{index}", sequence: index) with { Content = ReadOnlyMemory<byte>.Empty })
+            .ToArray();
+
+        var result = await stage.ExecuteAsync(new CandidateBatch(items), CancellationToken.None);
+
+        extractor.CallCount.Should().Be(2);
+        result.Results.Should().HaveCount(4);
+        result.Results[0].Status.Should().Be(CandidateStatus.AuthFailed);
+        result.Results[1].Status.Should().Be(CandidateStatus.Resolved);
+        result.Results.Skip(2).Should().OnlyContain(item =>
+            item.Status == CandidateStatus.AuthFailed
+            && item.Failure!.ReasonCode == "AI_AUTHENTICATION_FAILED");
+    }
+
+    [Fact]
+    public async Task Caller_cancellation_cancels_and_observes_all_in_flight_safe_workers()
+    {
+        var extractor = new CancellationTrackingFieldExtractor();
+        var stage = CreateStage([], extractor);
+        using var cancellation = new CancellationTokenSource();
+        var items = Enumerable.Range(0, 4)
+            .Select(index => WorkItem($"safe-{index}", sequence: index) with { Content = ReadOnlyMemory<byte>.Empty })
+            .ToArray();
+        var execution = stage.ExecuteAsync(new CandidateBatch(items), cancellation.Token);
+
+        await extractor.TwoStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
+        await extractor.BothCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public async Task One_result_is_returned_per_input_and_terminal_candidate()
     {
         var terminal = new CandidateProcessResult(Candidate("retained", 2), CandidateStatus.Retained);
@@ -148,7 +247,7 @@ public sealed class DocumentExtractionStageTests
         result.Results.Should().HaveCount(batch.Items.Count + batch.EffectiveTerminalResults.Count);
     }
 
-    private static DocumentExtractionStage CreateStage(IReadOnlyList<IParser> parsers, FakeFieldExtractor extractor)
+    private static DocumentExtractionStage CreateStage(IReadOnlyList<IParser> parsers, IInvoiceFieldExtractor extractor)
     {
         return new DocumentExtractionStage(
             parsers,
@@ -190,6 +289,12 @@ public sealed class DocumentExtractionStageTests
         Array.Empty<string>(), ExtractionRoute.VisionFallback, "AI_VISION_FAILED",
         new ExtractionTrace(ExtractionRoute.VisionFallback, "FAILED", "FAILED", "AI_VISION_FAILED", TimeSpan.Zero, "", "document"));
 
+    private static FieldExtractionResult AuthenticationFailedExtraction(DocumentIdentity identity) => new(
+        identity, null, AcceptanceDisposition.Rejected,
+        [new InvoiceAcceptanceFailure("AI_AUTHENTICATION_FAILED", FailureCategory.Authentication, false, "The configured AI credentials were rejected.")],
+        Array.Empty<string>(), ExtractionRoute.OcrText, "AI_AUTHENTICATION_FAILED",
+        new ExtractionTrace(ExtractionRoute.OcrText, "REJECTED", "NOT_RUN", "AI_AUTHENTICATION_FAILED", TimeSpan.Zero, "fake", "document"));
+
     private sealed class FakeFieldExtractor(Func<DocumentIdentity, FieldExtractionResult> outcome) : IInvoiceFieldExtractor
     {
         public int CallCount { get; private set; }
@@ -205,6 +310,124 @@ public sealed class DocumentExtractionStageTests
                 && File.Exists(request.Source.LocalPath);
             SourceBytesDuringCall = SourceExistedDuringCall ? File.ReadAllBytes(request.Source.LocalPath) : null;
             return Task.FromResult(outcome(request.Candidate.DocumentId));
+        }
+    }
+
+    private sealed class BarrierFieldExtractor(
+        TaskCompletionSource firstStarted,
+        TaskCompletionSource secondStarted,
+        TaskCompletionSource releaseFirst) : IInvoiceFieldExtractor
+    {
+        private int _active;
+        private int _calls;
+        public int MaximumActive { get; private set; }
+
+        public async Task<FieldExtractionResult> ExtractAsync(FieldExtractionRequest request, CancellationToken cancellationToken)
+        {
+            var call = Interlocked.Increment(ref _calls);
+            var active = Interlocked.Increment(ref _active);
+            MaximumActive = Math.Max(MaximumActive, active);
+            if (call == 1)
+            {
+                firstStarted.TrySetResult();
+                await releaseFirst.Task.WaitAsync(cancellationToken);
+            }
+            else
+            {
+                secondStarted.TrySetResult();
+            }
+
+            Interlocked.Decrement(ref _active);
+            return AcceptedExtraction(request.Candidate.DocumentId);
+        }
+    }
+
+    private sealed class BoundedOverlapFieldExtractor : IInvoiceFieldExtractor
+    {
+        private int _active;
+        private int _calls;
+        private int _maximumActive;
+        private readonly object _completionLock = new();
+        private readonly TaskCompletionSource _sequenceOneCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource TwoStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstPair { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int MaximumActive => Volatile.Read(ref _maximumActive);
+        public List<long> CompletionOrder { get; } = [];
+
+        public async Task<FieldExtractionResult> ExtractAsync(FieldExtractionRequest request, CancellationToken cancellationToken)
+        {
+            var call = Interlocked.Increment(ref _calls);
+            var active = Interlocked.Increment(ref _active);
+            UpdateMaximum(active);
+            if (active == 2) TwoStarted.TrySetResult();
+
+            try
+            {
+                if (request.Candidate.Sequence <= 1)
+                {
+                    await ReleaseFirstPair.Task.WaitAsync(cancellationToken);
+                }
+                if (request.Candidate.Sequence == 0)
+                {
+                    await _sequenceOneCompleted.Task.WaitAsync(cancellationToken);
+                }
+                lock (_completionLock) CompletionOrder.Add(request.Candidate.Sequence);
+                if (request.Candidate.Sequence == 1) _sequenceOneCompleted.TrySetResult();
+                return AcceptedExtraction(request.Candidate.DocumentId);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _active);
+            }
+        }
+
+        private void UpdateMaximum(int value)
+        {
+            while (true)
+            {
+                var current = Volatile.Read(ref _maximumActive);
+                if (value <= current || Interlocked.CompareExchange(ref _maximumActive, value, current) == current)
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    private sealed class AuthenticationBreakerFieldExtractor : IInvoiceFieldExtractor
+    {
+        public int CallCount { get; private set; }
+
+        public Task<FieldExtractionResult> ExtractAsync(FieldExtractionRequest request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CallCount++;
+            return Task.FromResult(CallCount == 1
+                ? AuthenticationFailedExtraction(request.Candidate.DocumentId)
+                : AcceptedExtraction(request.Candidate.DocumentId));
+        }
+    }
+
+    private sealed class CancellationTrackingFieldExtractor : IInvoiceFieldExtractor
+    {
+        private int _started;
+        private int _cancelled;
+        public TaskCompletionSource TwoStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource BothCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<FieldExtractionResult> ExtractAsync(FieldExtractionRequest request, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref _started) == 2) TwoStarted.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                throw new InvalidOperationException("The blocked extractor unexpectedly completed.");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                if (Interlocked.Increment(ref _cancelled) == 2) BothCancelled.TrySetResult();
+                throw;
+            }
         }
     }
 
