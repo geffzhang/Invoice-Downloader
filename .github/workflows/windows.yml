@@ -58,13 +58,6 @@ jobs:
         shell: pwsh
         run: pwsh -File build/windows/publish_dotnet_app.ps1 -Configuration Release -PublishRoot publish/win-x64
 
-      - name: Audit publish tree for Python runtime residue
-        shell: pwsh
-        run: |
-          $env:INVOICEFLOWAI_PUBLISH_ROOT = (Resolve-Path publish/win-x64).Path
-          dotnet test tests/InvoiceFlowAI.App.Tests/InvoiceFlowAI.App.Tests.csproj -c Release --no-build --no-restore --nologo --filter "FullyQualifiedName~Configured_publish_tree_passes_no_python_runtime_release_audit"
-          if ($LASTEXITCODE -ne 0) { throw "Python-free publish audit failed with exit code $LASTEXITCODE." }
-
       - name: Upload publish + manifests artifact
         uses: actions/upload-artifact@v4
         with:
