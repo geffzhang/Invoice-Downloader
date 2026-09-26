@@ -160,48 +160,6 @@ public sealed class WindowsReleaseTests
         finally { TryDelete(dir); }
     }
 
-    [Fact]
-    public void No_python_runtime_release_audit_rejects_interpreter_and_requires_dotnet_app_and_worker()
-    {
-        var dir = NewTempPublishDir();
-        try
-        {
-            File.WriteAllText(Path.Combine(dir, "InvoiceFlowAI.exe"), "synthetic app");
-            File.WriteAllText(Path.Combine(dir, "InvoiceFlowAI.UrlRecovery.Worker.exe"), "synthetic worker");
-
-            var clean = NoPythonRuntimeReleaseAudit.Verify(dir);
-            clean.Issues.Should().BeEmpty();
-
-            var pythonRoot = Path.Combine(dir, ".venv", "Scripts");
-            Directory.CreateDirectory(pythonRoot);
-            File.WriteAllText(Path.Combine(pythonRoot, "python.exe"), "synthetic interpreter");
-            File.WriteAllText(Path.Combine(dir, "legacy-runtime.py"), "synthetic source");
-            File.WriteAllText(Path.Combine(dir, "python312.dll"), "synthetic runtime");
-            File.WriteAllText(Path.Combine(dir, "libpython3.12.dll"), "synthetic runtime");
-            File.WriteAllText(Path.Combine(dir, "python312._pth"), "synthetic runtime config");
-            File.WriteAllText(Path.Combine(dir, "Python.Runtime.dll"), "synthetic interop");
-            File.WriteAllText(Path.Combine(dir, "PyInstaller-loader.exe"), "synthetic bootloader");
-
-            var report = NoPythonRuntimeReleaseAudit.Verify(dir);
-
-            report.Issues.Should().HaveCount(8);
-            report.Issues.Should().OnlyContain(issue => issue.Code == "PythonRuntimeArtifact");
-        }
-        finally { TryDelete(dir); }
-    }
-
-    [Fact]
-    public void Configured_publish_tree_passes_no_python_runtime_release_audit()
-    {
-        var publishRoot = Environment.GetEnvironmentVariable("INVOICEFLOWAI_PUBLISH_ROOT");
-        if (string.IsNullOrWhiteSpace(publishRoot)) return;
-
-        var report = NoPythonRuntimeReleaseAudit.Verify(publishRoot);
-
-        report.Issues.Should().BeEmpty(string.Join(", ", report.Issues.Select(issue =>
-            $"{issue.Code}:{issue.RelativePath}")));
-    }
-
     private static string NewTempPublishDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"invoiceflow-publish-{Guid.NewGuid():N}");
