@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>InvoiceFlowAI.Infrastructure.Tests</RootNamespace>
+    <AssemblyName>InvoiceFlowAI.Infrastructure.Tests</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Platforms>x64</Platforms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\InvoiceFlowAI.Domain\InvoiceFlowAI.Domain.csproj" />
+    <ProjectReference Include="..\..\src\InvoiceFlowAI.Contracts\InvoiceFlowAI.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\InvoiceFlowAI.Application\InvoiceFlowAI.Application.csproj" />
+    <ProjectReference Include="..\..\src\InvoiceFlowAI.Infrastructure\InvoiceFlowAI.Infrastructure.csproj" />
+    <ProjectReference Include="..\InvoiceFlowAI.UrlRecovery.WorkerProcessFixture\InvoiceFlowAI.UrlRecovery.WorkerProcessFixture.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CopyUrlRecoveryWorkerProcessFixture" AfterTargets="Build">
+    <ItemGroup>
+      <WorkerProcessFixtureFiles Include="..\InvoiceFlowAI.UrlRecovery.WorkerProcessFixture\bin\$(Configuration)\net10.0\*" />
+    </ItemGroup>
+    <MakeDir Directories="$(OutDir)worker-process-fixture" />
+    <Copy SourceFiles="@(WorkerProcessFixtureFiles)" DestinationFolder="$(OutDir)worker-process-fixture" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

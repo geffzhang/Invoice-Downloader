@@ -1,0 +1,77 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>InvoiceFlowAI.App</RootNamespace>
+    <AssemblyName>InvoiceFlowAI</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Controls.WebView" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Serilog" />
+    <PackageReference Include="Serilog.Extensions.Hosting" />
+    <PackageReference Include="Serilog.Sinks.File" />
+  </ItemGroup>
+
+
+  <ItemGroup>
+    <ProjectReference Include="..\InvoiceFlowAI.Domain\InvoiceFlowAI.Domain.csproj" />
+    <ProjectReference Include="..\InvoiceFlowAI.Contracts\InvoiceFlowAI.Contracts.csproj" />
+    <ProjectReference Include="..\InvoiceFlowAI.Application\InvoiceFlowAI.Application.csproj" />
+    <ProjectReference Include="..\InvoiceFlowAI.Infrastructure\InvoiceFlowAI.Infrastructure.csproj" />
+    <ProjectReference Include="..\InvoiceFlowAI.UrlRecovery.Worker\InvoiceFlowAI.UrlRecovery.Worker.csproj"
+              ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Frontend assets get copied to the publish root by MSBuild so the Avalonia
+         WebView control can load them via the File protocol from a known directory.
+         The full local-loading wiring, RPC bridge, and lifecycle live in Tasks 9+
+         per the migration implementation plan. -->
+    <Content Include="..\..\templates\index.html" Link="Web\index.html"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
+    <Content Include="..\..\templates\index_app.js" Link="Web\index_app.js"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
+    <Content Include="..\..\templates\index_app.compiled.js" Link="Web\index_app.compiled.js"
+         CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
+    <Content Include="..\..\templates\rpc_client.js" Link="Web\rpc_client.js"
+           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
+        <Content Include="..\..\templates\settings_rpc.js" Link="Web\settings_rpc.js"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
+            <Content Include="..\..\templates\run_page_rpc.js" Link="Web\run_page_rpc.js"
+              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
+    <Content Include="..\..\templates\bridge-bootstrap.js" Link="Web\bridge-bootstrap.js"
+           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
+    <Content Include="..\..\templates\static\**" Link="Web\static\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
+  </ItemGroup>
+
+  <Target Name="CopyUrlRecoveryWorkerForDevelopment" AfterTargets="Build" Condition="'$(RuntimeIdentifier)' == ''">
+    <PropertyGroup>
+      <UrlRecoveryWorkerOutput>$(MSBuildProjectDirectory)\..\InvoiceFlowAI.UrlRecovery.Worker\bin\$(Configuration)\net10.0</UrlRecoveryWorkerOutput>
+    </PropertyGroup>
+    <ItemGroup>
+      <UrlRecoveryWorkerSidecar Include="$(UrlRecoveryWorkerOutput)\InvoiceFlowAI.UrlRecovery.Worker.exe" Condition="'$(OS)' == 'Windows_NT'" />
+      <UrlRecoveryWorkerSidecar Include="$(UrlRecoveryWorkerOutput)\InvoiceFlowAI.UrlRecovery.Worker" Condition="'$(OS)' != 'Windows_NT'" />
+      <UrlRecoveryWorkerSidecar Include="$(UrlRecoveryWorkerOutput)\InvoiceFlowAI.UrlRecovery.Worker.dll" />
+      <UrlRecoveryWorkerSidecar Include="$(UrlRecoveryWorkerOutput)\InvoiceFlowAI.UrlRecovery.Worker.deps.json" />
+      <UrlRecoveryWorkerSidecar Include="$(UrlRecoveryWorkerOutput)\InvoiceFlowAI.UrlRecovery.Worker.runtimeconfig.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(UrlRecoveryWorkerSidecar)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

@@ -3,6 +3,27 @@
 .env.*
 .venv/
 
+# .NET / MSBuild build output
+**/[Bb]in/
+**/[Oo]bj/
+**/*.user
+**/*.suo
+**/*.userprefs
+**/*.cachefile
+**/*.swp
+.vs/
+.idea/
+.vscode/
+TestResults/
+[Dd]ebug/
+[Rr]elease/
+# Source-tree folders named "Release" are not build output — keep them tracked.
+!src/**/[Rr]elease/
+!tests/**/[Rr]elease/
+[Bb]uild[Ll]og.*
+*.[Pp]ublish.xml
+artifacts/
+
 # Python caches
 __pycache__/
 **/__pycache__/
@@ -29,6 +50,7 @@ build/work/
 build/runtime/
 build/windows/version-info.generated.txt
 build/windows/build-identity.generated.json
+artifacts/
 *.log
 HANDOFF_*.md
 frontend-current-*.png
@@ -41,3 +63,4 @@ Thumbs.db
 # Local worktree metadata
 .claude/worktrees/
 .gstack/
+/publish

@@ -1,0 +1,3598 @@
+# InvoiceFlowAI .NET 10 迁移设计
+
+## 1. 目标与范围
+
+将 InvoiceFlowAI 重写为面向 Windows 11 的 .NET 10 桌面应用。新应用使用 Avalonia 12 作为原生窗口外壳，通过 `Avalonia.Controls.WebView` 承载现有 HTML/JavaScript 用户界面。所有运行时业务逻辑均使用 C# 实现，发布后的应用不依赖 Python。
+
+迁移目标是完整功能对等，包括：
+
+- IMAP 邮箱扫描和发票候选筛选；
+- PDF、OFD、XML 发票处理；
+- 使用 `Sdcb.SimdPaddleOCR` 的本地 OCR；
+- DeepSeek Flash 文本提取和多模态提取；
+- 发票与凭证配对；
+- 发票链接恢复；
+- 归档命名和分类规则；
+- Excel 报表和人工复核输出；
+- 运行生命周期、真值/审计证据、诊断、重试、取消和进度事件；
+- 现有 HTML/JavaScript 交互模型，并将其接入 C# JSON/RPC 后端。
+
+首个版本只支持 Windows 11 x64。不提供旧配置格式或旧运行状态格式的运行时兼容；但首次启动必须执行一次性 legacy importer，将可安全迁移的非秘密字段导入新账户/设置，并将旧 secret 标记为必须重新录入。输出行为可以重新设计，但功能结果必须保持等价。
+
+## 2. 迁移策略
+
+采用带稳定前后端契约的垂直业务切片迁移。Python 实现仅作为行为参考和测试样本来源，不作为新应用的运行时依赖。
+
+迁移顺序如下：
+
+1. Avalonia 12/Avalonia.Controls.WebView 外壳和 JSON/RPC 桥接层；
+2. ZeroPipeline DAG、领域契约、运行生命周期、取消、进度和诊断；
+3. XML、OFD、PDF、本地 OCR、字段提取、校验和归档的本地文件节点；
+4. IMAP 扫描和候选筛选节点；
+5. 通过 `IChatClient` 接入 DeepSeek Flash 文本和多模态提取节点；
+6. 链接恢复和供应商专用节点；
+7. 配对、高级规则、报表、真值审计和发布加固。
+
+每个切片都必须先具备可执行的测试面，再扩展到下一个切片。
+
+## 3. 解决方案架构
+
+```text
+src/
+  InvoiceFlowAI.App/
+    App.axaml
+    MainWindow.axaml
+    WebView/
+    Rpc/
+  InvoiceFlowAI.Application/
+    Runs/
+    Pipeline/
+    Commands/
+    Events/
+    Services/
+  InvoiceFlowAI.Domain/
+    Invoices/
+    Candidates/
+    Pairing/
+    Rules/
+    Truth/
+  InvoiceFlowAI.Infrastructure/
+    Mail/
+    Ocr/
+    Ai/
+    Documents/
+    Browser/
+    Archive/
+    Reports/
+    Persistence/
+    Security/
+    Logging/
+  InvoiceFlowAI.Contracts/
+    Rpc/
+    Models/
+    Errors/
+
+tests/
+  InvoiceFlowAI.Domain.Tests/
+  InvoiceFlowAI.Application.Tests/
+  InvoiceFlowAI.Infrastructure.Tests/
+  InvoiceFlowAI.App.Tests/
+```
+
+应用层引用 ZeroPipeline 的核心编排包：
+
+- `ZeroPipeline.Core` `1.2.0`：DAG、拓扑调度、typed ports、背压和执行器；
+- `ZeroPipeline.Recipe` `1.2.0`：JSON Recipe 序列化、节点注册和图构建。
+
+```xml
+<PackageReference Include="ZeroPipeline.Core" Version="1.2.0" />
+<PackageReference Include="ZeroPipeline.Recipe" Version="1.2.0" />
+```
+
+`ZeroPipeline.Core` 和 `ZeroPipeline.Recipe` 都固定为 `1.2.0`，并在解决方案锁文件中固定传递依赖；不能使用浮动版本。
+
+IMAP 处理固定使用以下包：
+
+```xml
+<PackageReference Include="MailKit" Version="4.18.0" />
+```
+
+本地持久化使用 EF Core SQLite：
+
+```xml
+<PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.12" />
+<PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
+```
+
+PDF 页面渲染固定使用 PDFiumCore：
+
+```xml
+<PackageReference Include="PDFiumCore" Version="155.0.8057" />
+<PackageReference Include="PdfPig" Version="0.1.17-alpha-202609192350-df33d" />
+<PackageReference Include="SkiaSharp" Version="4.154.0-preview.1.26454.9" />
+<PackageReference Include="Sdcb.SimdPaddleOCR" Version="1.4.2" />
+```
+
+Avalonia.Controls.WebView 使用精确锁定的 12.1.0 版本：
+
+```xml
+<PackageReference Include="Avalonia" Version="12.1.0" />
+<PackageReference Include="Avalonia.Desktop" Version="12.1.0" />
+<PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.0" />
+<PackageReference Include="Avalonia.Controls.WebView" Version="12.1.0" />
+<PackageReference Include="Microsoft.Playwright" Version="1.62.0" />
+<PackageReference Include="ClosedXML" Version="0.105.1" />
+```
+
+DeepSeek 的统一 AI 适配器固定使用：
+
+```xml
+<PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.0" />
+```
+
+其传递依赖的 `Microsoft.Extensions.AI`、OpenAI 客户端和相关 `10.x` 包必须通过锁文件固定，避免预览版或浮动依赖改变多模态消息序列化结果。
+
+ZeroPipeline 参考仓库：<https://github.com/kzxl/ZeroPipeline/tree/master>。
+其 `1.2.0` 核心包支持 `net8.0` 和 `netstandard2.0`，可由 .NET 10 应用引用。暂不使用 `ZeroPipeline.UI`，因为本项目的界面由 Avalonia 12 + `Avalonia.Controls.WebView` 承载，不需要把 ZeroPipeline 画布控件作为 UI 基础。
+
+### 职责边界
+
+- `InvoiceFlowAI.App`：Avalonia 窗口、Avalonia.Controls.WebView 初始化、生命周期、DPI、打包和桥接接线。不包含发票业务规则。
+- `InvoiceFlowAI.Contracts`：可 JSON 序列化的命令、事件、DTO、稳定错误码和前端契约。
+- `InvoiceFlowAI.Application`：使用 ZeroPipeline 构建运行 DAG，负责准入校验、取消、重试策略、阶段转换、并发限制和进度发送。
+- `InvoiceFlowAI.Domain`：发票实体、解析结果、分类规则、配对规则、校验和真值契约。该层不依赖 Avalonia.Controls.WebView、HTTP、数据库或供应商 SDK。
+- `InvoiceFlowAI.Infrastructure`：IMAP、文档、OCR、AI、浏览器、归档、报表、持久化、凭据和日志等具体实现。
+
+`Avalonia`、`Avalonia.Desktop`、`Avalonia.Themes.Fluent` 和 `Avalonia.Controls.WebView` 只由 `InvoiceFlowAI.App` 引用。Avalonia 负责窗口和 WebView 控件宿主，WebView 控件负责加载随应用发布的 HTML/JavaScript 资源，并通过宿主桥接接入 JSON/RPC；页面脚本不能直接访问文件系统、DPAPI、数据库或外部 API。
+
+整体分层借鉴 `E:/GitHub/qingpiao/src/QingPiao` 中 `Services/Parsers/Exporters` 的职责拆分，同时使用接口替代具体依赖，以适配桌面端编排和自动化测试。
+
+ZeroPipeline 只位于应用编排层。领域层不依赖 ZeroPipeline；节点通过应用层定义的端口 DTO 与领域服务通信，避免将 DAG 类型扩散到业务实体中。
+
+### 构建工具链与工程结构
+
+首版固定使用 `.NET SDK 10.0.100`、`net10.0-windows`、`win-x64`、Avalonia `12.1.0`、Avalonia.Controls.WebView `12.1.0`、WiX Toolset `5.0.2` 和 VC++ Runtime `14.44.35211` x64。桌面项目目标为 `net10.0-windows10.0.19041.0`，不单独锁定 Windows SDK 安装版本，也不要求特定 MSVC 编译器工具集。CI 使用 Windows Server 2025 x64 runner，并在构建前校验固定的 .NET SDK 和 WiX 版本。
+
+目标工程结构为：
+
+```text
+InvoiceFlowAI.sln
+global.json
+Directory.Build.props
+Directory.Build.targets
+Directory.Packages.props
+NuGet.Config
+src/
+  InvoiceFlowAI.App/InvoiceFlowAI.App.csproj
+  InvoiceFlowAI.Application/InvoiceFlowAI.Application.csproj
+  InvoiceFlowAI.Contracts/InvoiceFlowAI.Contracts.csproj
+  InvoiceFlowAI.Domain/InvoiceFlowAI.Domain.csproj
+  InvoiceFlowAI.Infrastructure/InvoiceFlowAI.Infrastructure.csproj
+  InvoiceFlowAI.Installer/InvoiceFlowAI.Installer.wixproj
+tests/
+  InvoiceFlowAI.Domain.Tests/InvoiceFlowAI.Domain.Tests.csproj
+  InvoiceFlowAI.Application.Tests/InvoiceFlowAI.Application.Tests.csproj
+  InvoiceFlowAI.Infrastructure.Tests/InvoiceFlowAI.Infrastructure.Tests.csproj
+  InvoiceFlowAI.App.Tests/InvoiceFlowAI.App.Tests.csproj
+build/
+  verify-toolchain.ps1
+  model-manifest.ps1
+  release-manifest.ps1
+  licenses/
+```
+
+`Domain` 不引用基础设施或 ZeroPipeline；`Contracts` 只承载跨层 DTO；`Application` 引用 Domain、Contracts、ZeroPipeline；`Infrastructure` 实现应用接口；只有 `App` 引用 Avalonia、`Avalonia.Controls.WebView` 和 Windows host interop；只有 `Installer` 引用 WiX。
+
+`global.json` 固定 `10.0.100`、`rollForward=disable`、`allowPrerelease=false`。`Directory.Build.props` 固定 nullable、deterministic build、CI build 和 warnings-as-errors。`Directory.Packages.props` 集中维护所有精确 NuGet 版本；每个项目生成 `packages.lock.json`，CI 使用 `dotnet restore --locked-mode`。`NuGet.Config` 只允许审查过的 package sources。
+
+CI 顺序固定为：`verify-toolchain.ps1`、`dotnet restore --locked-mode`、Release build/test、`dotnet publish -r win-x64 --self-contained true`、Avalonia WebView backend/模型和 release manifest 校验、WiX x64 MSI 构建。WiX 阶段只消费 publish 输出和已校验的 WebView backend/OCR/Chromium/许可证资产，不下载运行时文件。
+
+CI 每一步的输入/输出也固定：`verify-toolchain.ps1` 只读 .NET SDK/WiX 版本并输出机器可读 `artifacts/toolchain.json`；Windows SDK 和 MSVC 不作为独立版本门禁；restore 输出锁文件校验结果；test 输出 TRX 和 coverage summary；publish 输出 `artifacts/publish/win-x64/`；资产校验输出 `artifacts/manifests/*.json`；WiX 只读取 publish 目录并输出带版本的 x64 MSI。任何步骤不得从用户 profile、全局 NuGet cache 中复制未锁定的运行时资产；需要使用缓存时必须以 package/version/hash 清单验证后复制。
+
+### DI 组合根与启动图
+
+`InvoiceFlowAI.App` 是唯一组合根。`InvoiceFlowAI.Infrastructure` 提供 `AddInvoiceFlowInfrastructure(IServiceCollection, AppPaths)`，`InvoiceFlowAI.Application` 提供 `AddInvoiceFlowApplication(IServiceCollection)`；页面桥接和 Avalonia/Win32 生命周期不反向注册到 Domain。所有 singleton/scoped/transient 生命周期固定如下：
+
+| 生命周期 | 服务 |
+| --- | --- |
+| Singleton | `ISecretStore`、`IProviderRuleRegistry`、`IDocumentSpecialCaseParserRegistry`、`IUrlRecoveryProviderRegistry`、`IRecipeRegistry`、`IEventReplayStore`、`IProgressPublisher`、`IChatClient` factory、`Serilog ILogger` |
+| Scoped/run scoped | `InvoiceFlowDbContext`、`IUnitOfWorkFactory`、仓储、`IRuleSetStore`、`IMailboxAccountStore`、`IRunStateStore`、`IAuditStore`、`RunCoordinator`、`PipelineContext`、`IInvoiceFieldExtractor` |
+| Transient | `IRpcDispatcher` handlers、`IInvoiceParser` adapters、`IInvoiceOcr` request wrapper、`IUrlRecoveryService`、`IArchiveService`、`IReportExporter`、DTO validators |
+
+启动状态机固定为：
+
+```text
+ProcessStart
+  -> SingleInstanceLock
+  -> AppPathsResolved
+  -> SerilogStarted
+  -> ReleaseManifestVerified
+  -> AvaloniaApplicationCreated
+  -> MainWindowCreated
+  -> AvaloniaWebViewControlCreated
+  -> WebViewBrowserBackendVerified
+  -> SQLiteOpenedAndIntegrityChecked
+  -> EFCoreMigrationsApplied
+  -> BuiltInRegistriesFrozen
+  -> BuiltInRecipeValidated
+  -> DependencyGraphBuilt
+  -> AvaloniaWebViewLocalAssetsLoaded
+  -> RpcBridgeReady
+  -> Ready
+```
+
+任一启动步骤失败都不得打开可运行的设置页：manifest/资源失败返回 `WEB_ASSET_INVALID`，WebView backend/runtime 验证失败返回 `WEBVIEW_RUNTIME_UNAVAILABLE`，数据库迁移/完整性失败返回 `DB_MIGRATION_FAILED` 或 `DB_CORRUPTED`，Recipe/registry 失败返回 `RECIPE_*`。`bridge.hello` 只能在 `RpcBridgeReady` 后成功。启动期间不读取或解密 API Key/邮箱授权码；只有 `run.start` 或账户测试命令在服务边界内按 secret reference 读取。
+
+`RunCoordinator` 每次运行创建独立的 run-scoped service scope、`DbContext`、UoW factory、ZeroPipeline graph 和 `PipelineContext`；窗口关闭、Avalonia WebView 控件重建、Avalonia 窗口重建和页面重载不释放活动 run scope。运行终态提交后由 coordinator 释放 scope，启动恢复则根据数据库的 run snapshot 建立新的 scope，禁止复用上次进程的 service 实例。
+
+## 4. Avalonia.Controls.WebView 契约
+
+前端通过 `Avalonia.Controls.WebView` 的宿主消息桥接向 `InvoiceFlowAI.App` 发送 JSON/RPC 请求，并接收响应和异步事件。具体浏览器 backend 由控件在 Windows x64 上提供并在启动时验证；协议固定为 `invoiceflow.rpc.v1`，JSON 属性使用 camelCase，时间使用 UTC ISO-8601，金额使用字符串或已明确精度的 JSON number，所有 ID 使用不透明字符串。页面不直接访问文件系统、DPAPI、数据库、MailKit、HTTP 或 ZeroPipeline。
+
+### 消息 envelope
+
+请求、响应和事件使用不同但可判别的 envelope：
+
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-1",
+  "method": "run.start",
+  "params": {
+    "dateFrom": "2026-09-01",
+    "dateTo": "2026-09-23",
+    "savePath": "C:/Invoices",
+    "customRules": "",
+    "accountId": "mail-account-1",
+    "mailbox": "INBOX",
+    "runMode": "interactive"
+  }
+}
+```
+
+成功响应：
+
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-1",
+  "ok": true,
+  "result": {
+    "runId": "run-1",
+    "state": "created"
+  }
+}
+```
+
+失败响应：
+
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-1",
+  "ok": false,
+  "error": {
+    "code": "RUN_ALREADY_ACTIVE",
+    "scope": "run",
+    "retryable": false,
+    "userMessage": "已有运行正在处理。",
+    "detailsAvailable": true
+  }
+}
+```
+
+异步事件：
+
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "event": "run.progress",
+  "runId": "run-1",
+  "eventSequence": 12,
+  "emittedAtUtc": "2026-09-23T10:00:00Z",
+  "payload": {
+    "stage": "extracting",
+    "completed": 4,
+    "total": 10,
+    "percent": 40
+  }
+}
+```
+
+`id` 只用于一次 RPC 请求关联，前端必须保证同一活动请求中唯一；`runId` 标识长任务；`eventSequence` 在单个 run 内严格递增，事件不能依赖 WebView 控件传输顺序来重排。后端对重复的幂等请求返回相同语义的响应，不重复创建运行或重复取消。
+
+### Avalonia.Controls.WebView 安全边界
+
+Avalonia 只负责 Windows 窗口、DPI、焦点和 WebView 控件生命周期；`Avalonia.Controls.WebView` 只承载随安装包发布的本地 UI，不被当作通用浏览器或本地文件管理器使用。启动时必须验证控件在 Windows x64 下实际选择的 browser backend、runtime 目录、版本和资源 manifest；校验失败不得导航。
+
+安全策略固定为：
+
+- 只允许初始导航到应用生成的本地 `Web/index.html`；WebView 控件的导航回调拒绝所有 `http`、`https`、`file`、`data` 和未知 scheme 导航，外部链接只能由后端校验后交给 `ProcessStartInfo.UseShellExecute=true`；
+- 只接受当前 WebView 控件实例的消息，消息必须是 UTF-8 JSON，单条请求上限 1 MiB，单条事件上限 4 MiB，超过上限返回 `RPC_MESSAGE_TOO_LARGE` 并断开当前 pending request；
+- 初始化后注入固定 CSP：禁止 `connect-src` 外联、禁止对象和插件、禁止 inline script/eval；本地资源依赖必须来自 manifest 中的相对路径；
+- 不启用控件的 host object 注入、自动下载、摄像头、麦克风、地理位置、通知、剪贴板读取或持久化浏览器凭据；页面不得访问 `localStorage` 保存秘密；
+- WebView 控件的资源请求回调只允许 `Web/` 根目录下的 manifest 资源，拒绝路径穿越、绝对路径、UNC 路径和符号链接解析后的目录外路径；
+- 控件 backend 的 DevTools、默认上下文菜单、缩放控制和密码保存默认关闭；Debug 构建也只能由显式环境变量开启 DevTools，Release 永久关闭；
+- Avalonia host 不向页面暴露 DPAPI、数据库连接、MailKit、HTTP client、ZeroPipeline 或任意文件系统对象；桥接层只暴露单一 JSON message channel；
+- 处理控件导航、资源或 backend 失败时记录脱敏诊断并显示 `WEBVIEW_BRIDGE_NOT_READY`/`WEB_ASSET_INVALID`，不得把异常文本或本地路径发送给页面；
+- WebView 控件重建或页面重载不终止后端运行，重新建立 message channel 后必须重新 `bridge.hello`，再通过 `run.get` 恢复状态。
+
+桥接层还必须设置请求级取消和生命周期边界：窗口关闭时先拒绝新请求，再等待 bridge flush 的短超时；窗口最小化、WebView backend 崩溃和页面导航失败不能触发 `run.cancel`。所有 WebView 控件事件处理器在控件销毁时注销，防止旧页面继续向新运行发送消息。控件安全设置、backend/runtime 版本和资源 manifest 版本参与启动诊断，但不参与业务 `ConfigurationFingerprint`。
+
+宿主实现拆分为三个只位于 `InvoiceFlowAI.App` 的组件：
+
+```csharp
+public interface IAvaloniaWebViewHost : IAsyncDisposable
+{
+  Task InitializeAsync(CancellationToken cancellationToken);
+  Task NavigateLocalAsync(CancellationToken cancellationToken);
+  Task PostJsonAsync(JsonDocument message, CancellationToken cancellationToken);
+  event EventHandler<JsonDocument>? MessageReceived;
+  event EventHandler<WebViewFailure>? Failed;
+}
+
+public interface IWebViewAssetVerifier
+{
+  Task VerifyAsync(string webRoot, string manifestPath, CancellationToken cancellationToken);
+}
+
+public interface IWebViewNavigationPolicy
+{
+  bool IsAllowedLocalUri(Uri uri);
+  bool IsAllowedExternalUri(Uri uri);
+}
+```
+
+`AvaloniaWebViewHost.InitializeAsync` 的固定顺序为：Avalonia `MainWindow` 创建 -> 创建 `Avalonia.Controls.WebView` -> 配置控件 backend 和安全策略 -> 注册导航、资源、消息和 backend 生命周期事件 -> 完成 manifest 校验 -> 设置本地 `Web/index.html` source -> `NavigateLocalAsync`。消息只把 JSON 交给 `IRpcDispatcher`; dispatcher 在 UI synchronization context 外执行 handler，响应和事件回到 Avalonia UI thread。任何 handler 不得直接调用 Avalonia 控件。
+
+本地资源映射固定为控件支持的本地 `Web/index.html` source；source 只允许发布目录下的规范化相对路径。导航 policy 允许的唯一初始页面是 `Web/index.html`，外部 URI 只允许 `http/https` 且通过 `IWebViewNavigationPolicy` 交给系统 shell，不能在控件内打开。消息原始 JSON 在进入 serializer 前检查字节上限和 UTF-8 合法性；请求取消 token 与 WebView 控件 page instance 绑定，旧 page 的 response 不得写入新 page。
+
+宿主测试必须使用 fake `IAvaloniaWebViewHost` 验证：控件创建/销毁、bounds/DPI 同步、初始化顺序、backend/runtime 验证失败、manifest hash 失败、非法导航、路径穿越、超大消息、重复 response、页面重载、控件重建、旧 page 消息丢弃和关闭时 pending request 清理。至少一个 Windows UI 集成测试使用 Avalonia.Controls.WebView 的实际 Windows backend 验证本地 `index.html`、CSS、JS、字体和第一条 `bridge.hello` 往返消息。
+
+### 方法契约
+
+首版只公开以下方法，未知方法返回 `RPC_METHOD_NOT_FOUND`，未知参数返回 `RPC_INVALID_PARAMS`：
+
+| 方法 | 请求参数 | 成功结果 | 幂等/副作用 |
+| --- | --- | --- | --- |
+| `bridge.hello` | `clientVersion`、`supportedProtocolVersions` | `protocolVersion`、`serverVersion`、能力列表 | 无副作用；页面加载后必须先调用。 |
+| `run.start` | `RunInput` 的 RPC 映射 | `runId`、初始状态 | 同一 `id` 重复请求返回原响应；新 `id` 创建新 run。 |
+| `run.get` | `runId`、可选 `afterEventSequence` | 当前快照和可重放事件 | 只读；用于页面重连恢复。 |
+| `run.cancel` | `runId`、`reason` | `runId`、`state`、`accepted` | 重复取消安全；已终态运行返回当前终态。 |
+| `run.retry` | `runId`、`documentIds` 或 `retryAllEligible` | 新的 `runId` 或重试批次 ID | 只允许重试具有 `Retryable=true` 的候选。 |
+| `review.list` | `runId`、分页和状态筛选 | 人工复核摘要分页 | 只读。 |
+| `review.get` | `reviewId` | 脱敏的复核详情和字段 | 只读，不返回原始凭据。 |
+| `review.submit` | `reviewId`、修正字段、决定 | 更新后的候选终态 | 必须带 revision，重复 revision 不重复应用。 |
+| `settings.get` | 无或设置分组 | 非秘密设置 | API Key、邮箱授权码只返回 `configured` 和掩码状态。 |
+| `settings.update` | 非秘密设置，含公司匹配规则和上次输出目录 | 更新结果和配置指纹 | 不允许携带 API Key、邮箱授权码或其他秘密字段。 |
+| `account.list` | 无 | 非秘密邮箱账户摘要 | 只读；不返回授权码。 |
+| `account.save` | 非秘密账户 DTO、`expectedRevision` | 账户摘要和新 revision | 乐观并发；不保存 secret value。 |
+| `account.delete` | `accountId`、`expectedRevision` | 删除确认 | 活动运行引用时拒绝。 |
+| `account.test` | `accountId`、可选 `mailbox` | 脱敏连接结果 | 不修改账户；省略 mailbox 时使用 `UserSettings.DefaultMailbox`；授权码按 `CredentialName` 从秘密服务读取。 |
+| `provider.test` | provider ID、credential name | 脱敏模型连接结果 | 不修改设置；密钥由后端从 DPAPI 或当前会话秘密存储解析。 |
+| `directory.choose` | 无 | 取消状态和选中的规范化目录 | 只打开原生目录选择器；页面不能传入待访问路径。 |
+| `report.export` | `runId`、可选 `reportName` | `ReportExportResult` | 幂等；同一 run 和 template 返回同一 content hash。 |
+| `ruleset.list` | `ruleSetId` | 规则版本摘要分页/列表 | 只读；按 version 降序返回。 |
+| `ruleset.get` | `ruleSetId`、`version` 可选 | 脱敏规则 JSON、AST fingerprint 和版本元数据 | 只读。 |
+| `ruleset.save` | `ruleSetId`、`expectedVersion`、schema JSON | 新规则版本、fingerprint 和配置指纹 | 乐观并发；不覆盖历史版本。 |
+| `ruleset.rollback` | `ruleSetId`、`targetVersion`、`expectedCurrentVersion` | 新 rollback 版本和配置指纹 | 创建新版本，不删除目标版本。 |
+| `secret.set` | `name`、`value`、`retention` (`persistent` 或 `session`) | `name`、`configured`、`persistent` | 只允许受控的秘密名称；persistent 写入 DPAPI，session 仅保存在进程内存，不回显 value。 |
+| `secret.delete` | `name` | `name`、`configured=false` | 幂等删除 DPAPI 和会话值；不返回旧值。 |
+| `report.open` | `runId`、报告类型 | 受控临时打开 token | 后端验证路径，不接受前端任意路径。 |
+
+`run.start` 的参数映射为 `RunInput`：`dateFrom`、`dateTo` 使用 `yyyy-MM-dd`；`savePath` 必须是用户可访问的目录；`accountId` 必须引用已保存的邮箱配置；`mailbox` 是本次运行的有效 mailbox，显式传入时覆盖 `UserSettingsSnapshot.DefaultMailbox`，省略时由后端补齐；`customRules` 有长度上限但首版非空值必须拒绝，规则只能通过 `ruleset.save/rollback` 修改；`runMode` 只能取 `interactive` 或首版明确支持的枚举值。后端重新校验所有字段，不能信任前端校验。
+
+### 方法 DTO、分页和 JSON fixtures
+
+所有方法的 `params` 和 `result` 在 `InvoiceFlowAI.Contracts.Rpc` 中使用显式 record；禁止用 `Dictionary<string, object>` 作为业务 DTO。未知字段默认拒绝，缺失必填字段返回 `RPC_INVALID_PARAMS`，`error.details` 使用统一的 field error 数组：
+
+```csharp
+public sealed record RpcFieldError(
+    string Path,
+    string Code,
+    string Message);
+
+public sealed record ReviewListRequest(
+    string RunId,
+    ManualReviewState? State = null,
+    int Offset = 0,
+    int Limit = 50);
+
+public sealed record ReviewSummary(
+    string ReviewId,
+    string DocumentId,
+    string ReasonCode,
+    ManualReviewState State,
+    int Revision,
+    DateTimeOffset CreatedAtUtc);
+
+public sealed record ReviewListResult(
+    IReadOnlyList<ReviewSummary> Items,
+    int Offset,
+    int Limit,
+    int Total,
+    bool HasMore,
+    int? NextOffset);
+
+public sealed record ReviewGetRequest(string ReviewId);
+
+public sealed record ReviewDetail(
+    ManualReviewItem Item,
+    IReadOnlyList<string> EditableFields,
+    IReadOnlyList<string> AvailableDecisions,
+    string SourceFileName,
+    string SourceKind);
+
+public sealed record ReviewSubmitRequest(
+    string ReviewId,
+    int ExpectedRevision,
+    ManualReviewDecision Decision,
+    InvoiceCorrectionPatch? Correction = null,
+    string Comment = "");
+
+public sealed record InvoiceCorrectionPatch(
+    DateOnly? InvoiceDate = null,
+    string? Purchaser = null,
+    string? Seller = null,
+    decimal? Amount = null,
+    decimal? TaxAmount = null,
+    decimal? TotalAmount = null,
+    string? InvoiceCode = null,
+    string? InvoiceNumber = null,
+    InvoiceDocumentType? DocumentType = null,
+    string? Category = null,
+    InvoiceRoute? Route = null,
+    IReadOnlyList<InvoiceItem>? Items = null);
+
+public sealed record ReviewSubmitResult(
+    string ReviewId,
+    string DocumentId,
+    int NewProcessingRevision,
+    CandidateStatus Status,
+    string ReasonCode,
+    bool RearchiveQueued,
+    bool ReportRefreshQueued);
+
+public sealed record RunRetryRequest(
+    string RunId,
+    IReadOnlyList<string>? DocumentIds = null,
+    bool RetryAllEligible = false,
+    int MaxDocuments = 100);
+
+public sealed record RunRetryResult(
+    string RetryRunId,
+    IReadOnlyList<string> AcceptedDocumentIds,
+    IReadOnlyList<string> RejectedDocumentIds,
+    string State);
+
+public sealed record PipelineOptionsPatch(
+  int? MailboxScanConcurrency = null,
+  int? OcrPageConcurrency = null,
+  int? AiRequestConcurrency = null,
+  int? BrowserConcurrency = null,
+  int? MaxInFlightCandidates = null,
+  int? MaxRetryAttempts = null);
+
+public sealed record SettingsUpdateRequest(
+    int ExpectedRevision,
+    string? AccountId = null,
+    string? Mailbox = null,
+  string? CompanyName = null,
+  string? LastOutputDirectory = null,
+    MailboxFilterRules? MailboxFilters = null,
+    PipelineOptionsPatch? Pipeline = null,
+    string? CustomRuleSetJson = null,
+    bool? AllowVisionFallback = null);
+
+public sealed record SettingsUpdateResult(
+    int Revision,
+    string ConfigurationFingerprint,
+    IReadOnlyList<string> ChangedSections);
+
+public sealed record UserSettingsSnapshot(
+  int Revision,
+  string? CurrentAccountId,
+  string DefaultMailbox,
+  string CompanyName,
+  string? LastOutputDirectory,
+  MailboxFilterRules MailboxFilters,
+  PipelineOptions Pipeline,
+  bool AllowVisionFallback,
+  string RuleSetId,
+  int RuleSetVersion,
+  string ConfigurationFingerprint,
+  DateTimeOffset UpdatedAtUtc);
+
+public sealed record AccountSaveRequest(
+  MailboxAccountDraft Account,
+  int ExpectedRevision);
+
+public sealed record AccountDeleteRequest(
+  string AccountId,
+  int ExpectedRevision);
+
+public sealed record AccountTestRequest(
+  string AccountId,
+  string? Mailbox = null);
+
+public sealed record AccountMutationResult(
+  MailboxAccountSnapshot Account,
+  string ConfigurationFingerprint);
+
+public sealed record AccountTestResult(
+  string AccountId,
+  bool Succeeded,
+  string? FailureCode = null,
+  string SafeMessage = "");
+
+public sealed record ReportExportRequest(
+  string RunId,
+  string? ReportName = null);
+
+public sealed record ReportExportRpcResult(
+  string RunId,
+  string ReportPath,
+  string ContentHash,
+  int InvoiceRowCount,
+  int ManualReviewRowCount,
+  string TemplateVersion,
+  bool AlreadyExisted);
+
+public sealed record LegacyReportProjection(
+  string LegacySheetName,
+  string NewSheetName,
+  IReadOnlyList<string> LegacyColumns,
+  IReadOnlyList<string> NewColumns,
+  string CandidateStatusMappingVersion);
+
+public sealed record RuleSetListRequest(string RuleSetId);
+
+public sealed record RuleSetGetRequest(string RuleSetId, int? Version = null);
+
+public sealed record RuleSetSaveRequest(
+  string RuleSetId,
+  int ExpectedVersion,
+  JsonElement RuleSetJson);
+
+public sealed record RuleSetRollbackRequest(
+  string RuleSetId,
+  int TargetVersion,
+  int ExpectedCurrentVersion);
+
+public sealed record RuleSetVersionDto(
+  string RuleSetId,
+  string SchemaVersion,
+  int Version,
+  int? ParentVersion,
+  int? RollbackFromVersion,
+  int? RollbackTargetVersion,
+  string SourceFingerprint,
+  string AstFingerprint,
+  bool IsCurrent,
+  DateTimeOffset CreatedAtUtc);
+
+public sealed record RuleSetGetResult(
+  RuleSetVersionDto Version,
+  JsonElement NormalizedRuleSetJson);
+
+public sealed record RuleSetMutationResult(
+  RuleSetVersionDto Version,
+  string ConfigurationFingerprint);
+```
+
+分页规则固定为 offset/limit：`Offset >= 0`、`1 <= Limit <= 100`，排序为 `CreatedAtUtc ASC, ReviewId ASC`，返回 `Total`、`HasMore` 和 `NextOffset`。`review.get` 不返回 OCR 原文、图片、完整邮件正文、秘密或本地绝对路径；`EditableFields` 是后端白名单，不由前端决定。`review.submit` 的 `Decision` 与 `Correction` 组合必须满足：`CorrectAndAccept` 必须有 correction，其他决定不能携带 correction；`ExpectedRevision` 必须等于当前 review revision。
+
+`run.retry` 的 `DocumentIds` 与 `RetryAllEligible` 互斥；单次最多 100 个 document，只有 `Retryable=true` 且未超过最大次数的候选进入 `AcceptedDocumentIds`，其余进入 `RejectedDocumentIds` 并带稳定原因详情。`settings.update` 只允许非秘密用户设置；修改 `CurrentAccountId`、`DefaultMailbox`、公司匹配规则、上次输出目录、筛选器、pipeline 或视觉 fallback 时递增 `UserSettings.Revision`，`ExpectedRevision` 冲突返回 `SETTINGS_REVISION_CONFLICT`。`settings.update` 不直接写入规则 JSON，`CustomRuleSetJson` 非空时返回 `RPC_INVALID_PARAMS`。
+
+`ruleset.save` 的 `RuleSetJson` 只能由后端按 `schemaVersion`、字段白名单、目录白名单、priority 范围和冲突规则解析；前端不得发送已解析 AST 作为权威输入。`ruleset.rollback` 只接受存在的历史版本，结果总是新的 version；规则保存/回滚只递增 `RuleSet.Version`，不递增 `UserSettings.Revision`，但立即基于新的规则版本计算并返回新的 `ConfigurationFingerprint`，已运行任务仍使用原配置快照。规则 RPC 的未知字段、版本冲突、未知目标版本和无权限目录分别映射为 `RPC_INVALID_PARAMS`、`RULESET_REVISION_CONFLICT`、`RULESET_VERSION_NOT_FOUND` 和 `RULESET_INVALID`。
+
+首版 JSON fixtures 固定覆盖以下请求/响应：
+
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-review-list-1",
+  "method": "review.list",
+  "params": {
+    "runId": "run-1",
+    "state": "open",
+    "offset": 0,
+    "limit": 50
+  }
+}
+```
+
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-review-submit-1",
+  "method": "review.submit",
+  "params": {
+    "reviewId": "review-1",
+    "expectedRevision": 2,
+    "decision": "CorrectAndAccept",
+    "correction": {
+      "invoiceDate": "2026-09-22",
+      "amount": "100.00",
+      "seller": "Example Seller"
+    },
+    "comment": "日期和金额已人工确认"
+  }
+}
+```
+
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-retry-1",
+  "method": "run.retry",
+  "params": {
+    "runId": "run-1",
+    "documentIds": ["document-1", "document-2"],
+    "retryAllEligible": false,
+    "maxDocuments": 100
+  }
+}
+```
+
+```json
+{
+  "protocol": "invoiceflow.rpc.v1",
+  "id": "request-settings-update-1",
+  "method": "settings.update",
+  "params": {
+    "expectedRevision": 4,
+    "mailbox": "INBOX",
+    "allowVisionFallback": true,
+    "pipeline": {
+      "aiRequestConcurrency": 1
+    }
+  }
+}
+```
+
+fixture 还必须包含 `RPC_INVALID_PARAMS`、`REVIEW_REVISION_CONFLICT`、`SETTINGS_REVISION_CONFLICT`、`RUN_RETRY_SELECTION_INVALID` 和未知字段的失败响应；所有 fixture 通过 Contracts serializer round-trip 测试，确保 camelCase、DateOnly、Decimal 和 enum 字符串表示稳定。
+
+当前已提交的 golden fixture 路径为：
+
+- `docs/superpowers/fixtures/recipe/invoiceflow.default.v1.json`：Recipe schema、节点注册、连接和执行策略；
+- `docs/superpowers/fixtures/rules/default.v1.json`：RuleSet schema、priority 和 action；
+- `docs/superpowers/fixtures/rpc/account-save.request.json`：账户保存 RPC request；
+- `docs/superpowers/fixtures/rpc/account-save.response.json`：账户保存成功 response；
+- `docs/superpowers/fixtures/rpc/account-revision-conflict.response.json`：账户 revision 冲突 response；
+- `docs/superpowers/fixtures/rpc/run-progress.event.json`：事件 reducer 的顺序与重放样本；
+- `docs/superpowers/fixtures/providers/registry.v1.json`：首版内置供应商规则注册表和 parser 绑定；
+- `docs/superpowers/fixtures/providers/conflict.response.json`：`PROVIDER_RULE_CONFLICT` 字段级 details；
+- `docs/superpowers/fixtures/parsers/registry.v1.json`：首版特殊 parser registry；
+- `docs/superpowers/fixtures/parsers/conflict.response.json`：`SPECIAL_PARSER_CONFLICT` 字段级 details；
+- `docs/superpowers/fixtures/rpc/account-test.request.json`：账户测试 RPC request；
+- `docs/superpowers/fixtures/rpc/account-test.response.json`：账户测试成功 response；
+- `docs/superpowers/fixtures/rpc/account-test.error.json`：账户 TLS 失败 RPC response；
+- `docs/superpowers/fixtures/rpc/account-test.auth-error.json`：账户认证失败 response；
+- `docs/superpowers/fixtures/rpc/account-test.mailbox-not-found.json`：mailbox 不存在 response；
+- `docs/superpowers/fixtures/rpc/account-test.credentials-missing.json`：凭据缺失 response；
+- `docs/superpowers/fixtures/url/provider-registry.v1.json`：首版 URL provider 注册表；
+- `docs/superpowers/fixtures/url/errors.v1.json`：URL 恢复错误、重试和 browser fallback 矩阵；
+- `docs/superpowers/fixtures/email-body/baiwang.receipt.json`：邮件正文 canonical receipt 解析样本；
+- `docs/superpowers/fixtures/release/release-manifest.example.json`：发布 manifest 字段和资源条目示例。
+
+这些 fixture 是测试输入，不是用户数据，也不包含真实凭据。正式 .NET scaffold 后，测试项目必须将它们复制或链接到 `tests/*/Fixtures`，并为每个 fixture 增加 serializer round-trip、schema validation 和 fingerprint golden test。
+
+### 事件契约
+
+事件只由后端发送，前端不能伪造运行事件。所有事件都包含 `protocol`、`event`、`runId`、`eventSequence`、`emittedAtUtc` 和 `payload`。同一 `eventSequence` 只能发送一次；前端发现序号跳跃时调用 `run.get`，使用 `afterEventSequence` 请求缺失事件。
+
+- `run.stageChanged`：`previousStage`、`stage`、`stageSequence`；
+- `run.progress`：`stage`、`completed`、`total`、`percent`；
+- `run.documentResult`：脱敏的 `DocumentId`、sequence、`CandidateStatus`、reason code、人工复核标记和归档相对路径；
+- `run.failed`：`RunFailure` 的安全映射，包含 stage、reason code、retryable 和 `detailsAvailable`；
+- `run.completed`：`RunSummary` 的安全映射；
+- `run.cancelled`：取消原因、已完成数量、未处理数量和最终摘要。
+
+`run.documentResult` 不发送 OCR 文本、原始邮件、图片、完整 URL、API Key、完整模型响应或本地绝对路径。相同 candidate 的重试结果带有新的 processing revision，但不能改变原始 sequence。
+
+### 连接、取消和错误规则
+
+页面加载后先执行 `bridge.hello`；在 hello 成功前，后端只接受 hello 和诊断级握手请求。Avalonia WebView 控件重新加载或暂时断开不会取消运行，页面重新连接后通过 `run.get` 恢复当前快照和事件；事件重放有固定上限，超出范围时返回完整快照并要求前端丢弃旧事件缓存。
+
+`run.cancel` 只设置运行取消信号，不强制终止线程或删除已提交结果。节点在下一个安全检查点停止读取新输入，候选结果按 `Cancelled` 终态写入，最终发送且只发送一次 `run.cancelled`。取消一个不存在的 run 返回 `RUN_NOT_FOUND`，取消已完成 run 返回 `accepted=false` 和当前状态。
+
+错误 envelope 只使用稳定的 `code`、`scope`、`retryable`、`userMessage`、`detailsAvailable` 和可选的脱敏 `details`。原始异常类型、堆栈、完整 URL、邮件内容、OCR 内容和秘密不能进入 RPC。错误码至少覆盖：`RPC_INVALID_JSON`、`RPC_PROTOCOL_UNSUPPORTED`、`RPC_METHOD_NOT_FOUND`、`RPC_INVALID_PARAMS`、`RUN_ALREADY_ACTIVE`、`RUN_NOT_FOUND`、`RUN_NOT_CANCELLABLE`、`REVIEW_REVISION_CONFLICT`、`SETTINGS_REVISION_CONFLICT`、`RUN_RETRY_SELECTION_INVALID`、`CREDENTIALS_NOT_CONFIGURED`、`RUN_FAILED`、`PERSISTENCE_UNAVAILABLE` 和 `WEBVIEW_BRIDGE_NOT_READY`。
+
+桥接层负责传输、请求关联、序列化和事件转发，不负责邮箱扫描或发票解析。
+
+### 现有 HTML/JavaScript 前端接入映射
+
+首版继续使用仓库中的 `templates/index.html`、`templates/index_app.js` 和 `templates/static/**`，但 Python `window.pywebview.api` 不进入 .NET 运行时。Avalonia 12 通过 `Avalonia.Controls.WebView` 加载本地 `Web/index.html`，页面使用一个显式 `RpcClient` 和一个单一 `AppStore`；页面组件不直接调用控件宿主对象，也不直接持有运行级状态。
+
+现有页面到 .NET 模块的映射固定如下：
+
+| 现有前端表面 | .NET/Avalonia.Controls.WebView 目标 | RPC/事件 |
+| --- | --- | --- |
+| `SettingsPage` 路由 `/` | `SettingsView` + `SettingsStore` | `bridge.hello`, `settings.get/update`, `account.list/save/test`, `provider.test`, `directory.choose`, `secret.set/delete`, `run.start` |
+| `ProcessingPage` 路由 `/processing` | `ProcessingView` + `RunStore` | `run.get`, `run.cancel`, `run.retry`; 消费 `run.stageChanged`, `run.progress`, `run.documentResult`, `run.failed`, `run.completed`, `run.cancelled` |
+| `AnalysisPage` 路由 `/analysis` | `AnalysisView` + `ReviewStore` | `review.list`, `review.get`, `review.submit`, `report.open` |
+| `callApi()`/`waitForApi()` | `RpcClient` | request ID、超时、取消、错误 envelope、hello 状态和 WebView message transport |
+| 页面多个 `useState` | `AppStore` reducer | 所有页面通过 selector 读取状态，只能 dispatch action |
+| `load_user_settings` | `settings.get` | 非秘密设置、revision、fingerprint、秘密 configured/masked 状态 |
+| `save_user_settings` | `settings.update` | `ExpectedRevision`、规则集 revision、pipeline patch 和新的 fingerprint |
+| `test_email_auth` / `test_connection` | `account.test` / `provider.test` | 分别测试 IMAP 与 GLM；只返回脱敏成功/失败状态，不返回秘密 |
+| `start_processing` | `run.start` | 只发送 `accountId`、非秘密运行参数和 secret reference |
+| `get_progress` | `run.get` + 推送事件 | 不再轮询；断线或 event sequence 跳跃时请求快照/补发事件 |
+| `get_results` | `run.get`、`review.list`、`report.open` | 分离运行摘要、复核分页和受控文件打开 |
+| `open_folder` / `view_invoice` | `report.open` 或受控 artifact command | 后端根据 `runId`、artifact ID 和相对路径校验，不接受任意绝对路径 |
+
+#### 旧前端适配和淘汰规则
+
+旧 `window.pywebview.api` 方法只作为迁移输入映射，不作为 .NET 兼容 API：
+
+| 旧方法/状态 | 迁移动作 | 新行为 |
+| --- | --- | --- |
+| `load_user_settings` | 读取旧设置仅用于一次性导入 | 拆成 `settings.get`、`account.list` 和秘密 configured 状态；旧明文 secret 不回显到页面 |
+| `save_user_settings` | 只读取非秘密字段 | 写入 `UserSettings`/账户 revision；`auth_code`、`api_key` 被拒绝并要求 `secret.set` |
+| `choose_directory` | 不接受页面传入的候选路径 | 调用 `directory.choose`，取消时返回明确的取消状态 |
+| `test_email_auth` | 旧参数不直接转发 | 转换为 `account.test(accountId, mailbox?)` |
+| `test_connection` | 不保留旧位置参数或 GLM endpoint 直连 | 转换为 `provider.test`；密钥由后端解析，不返回供应商原始响应 |
+| `start_processing` | 旧位置参数解析一次 | 转换为显式 `run.start` DTO，缺失字段返回 `RPC_INVALID_PARAMS` |
+| `get_progress` | 不再轮询 | 转换为 `run.get` 快照和 `run.*` event reducer |
+| `stop_processing` | 不接受无 run ID 的全局停止 | 转换为 `run.cancel(runId, reason)`，重复请求安全 |
+| `get_results` | 不返回旧结果字典 | 转换为 `run.get`、`review.list` 和 `report.open` |
+| `open_folder`/`view_invoice` | 旧绝对路径永不接受 | 通过 run/artifact 相对路径生成一次性 report token |
+
+旧方法名在迁移测试 fixture 中允许出现，但不注册到 `IRpcDispatcher`。页面完成 `bridge.hello` 前不得调用任何旧方法；Avalonia WebView 页面重载后必须丢弃旧 pending calls，并重新进行 RPC 握手。
+
+`RpcClient` 的唯一传输入口是：
+
+```javascript
+class RpcClient {
+  async call(method, params, options) {}
+  subscribe(handler) {}
+  close() {}
+}
+```
+
+它使用 `window.chrome.webview.postMessage(request)` 发送 JSON，监听 `window.chrome.webview.addEventListener("message", ...)` 接收 response/event。每个 request 使用唯一 `id`，维护 `pending[id]`，在超时、页面卸载或显式取消时清理；后端错误统一转换为 `{ code, scope, retryable, userMessage, detailsAvailable, details }`。`RpcClient` 只负责协议，不负责把错误写入页面文案。
+
+`AppStore` 的首版状态形状固定为：
+
+```javascript
+{
+  bridge: { status: "connecting|ready|degraded", protocolVersion: null, capabilities: [] },
+  settings: { value: null, revision: 0, configurationFingerprint: null, dirty: false, error: null },
+  run: { snapshot: null, events: [], lastEventSequence: 0, status: "idle", error: null },
+  reviews: { items: [], offset: 0, limit: 50, total: 0, hasMore: false, selected: null },
+  ui: { route: "/", busy: false, toast: null }
+}
+```
+
+reducer 只接受协议相关 action：`BRIDGE_READY`、`SETTINGS_LOADED`、`SETTINGS_UPDATED`、`RUN_STARTED`、`RUN_SNAPSHOT_REPLACED`、`RUN_EVENT_APPLIED`、`RUN_EVENT_GAP_DETECTED`、`RUN_CANCEL_REQUESTED`、`RUN_TERMINAL`、`REVIEW_PAGE_LOADED`、`REVIEW_SELECTED`、`REVIEW_UPDATED` 和 `RPC_FAILED`。事件 reducer 必须检查 `runId`、`eventSequence` 和终态幂等性：重复序号丢弃，序号跳跃触发 `run.get`，旧 run 的事件不能污染当前 run，终态事件只应用一次。React 组件不得自行合并后端事件或用本地计时器推断进度。
+
+页面启动顺序固定为：加载本地资源 -> `bridge.hello` -> `settings.get` 和当前 run 探测 -> 注册事件 listener -> 渲染设置页。Avalonia WebView 控件重新加载不会取消后端运行；重连后先用 `run.get(afterEventSequence)` 恢复，再开放取消、复核和导出操作。秘密永不写入 `sessionStorage`；sessionStorage 只允许保存当前路由、非秘密表单草稿和受控 QA token。
+
+资源复制和发布规则固定为：
+
+1. `templates/index.html` 复制为发布目录 `Web/index.html`；
+2. `templates/index_app.js` 复制为 `Web/index_app.js`；
+3. `templates/static/**` 原样复制为 `Web/static/**`，包括 React、ReactDOM、React Router、Tailwind、Material Symbols 字体；
+4. MSBuild `Content` 项目必须声明 `CopyToOutputDirectory=PreserveNewest` 和 `CopyToPublishDirectory=Always`，禁止运行时从 CDN 或网络补齐依赖；
+5. 每个 Web 资源进入 `release-manifest.json`，记录相对路径、长度、SHA-256 和资源版本；
+6. Avalonia WebView 控件固定加载本地 `Web/index.html`，禁止导航到外部 URL，外部链接必须交给受控 shell command；
+7. 任一资源缺失、manifest hash 不匹配或本地导航失败都阻止进入可运行状态，并返回 `WEB_ASSET_INVALID`。
+
+迁移验收必须覆盖现有三页的路由进入、设置加载/更新、秘密 configured 状态、run.start、事件实时更新、断线重连、事件缺口重放、取消、复核 revision 冲突、报告打开和资源 hash 校验。旧的 Python 方法名只能出现在映射测试 fixture 中，不能作为 .NET RPC 的公开方法名。
+
+#### 设置表单与任务操作分阶段迁移
+
+设置页保留单邮箱式表单与现有操作顺序，不在本迁移中改为多账户管理界面。底层仍使用账户实体和 account RPC，以保持账户 ID、凭据引用和 revision 的明确边界。页面初始化加载非秘密设置和当前账户摘要；秘密输入始终为空，页面只接收 configured/masked 状态。用户可输入新秘密、保留已配置秘密，或通过明确操作清除秘密。邮箱测试走 `account.test`，GLM 测试走 `provider.test`，二者互不隐式触发。
+
+`remember_settings` 的行为必须与旧实现一致：开启时保存非秘密偏好并将秘密以 DPAPI CurrentUser 范围持久化；关闭时恢复非秘密默认值且不持久化新秘密。为支持关闭记忆时本次仍能测试或启动任务，`secret.set` 的 `retention=session` 将值放入只存在于应用进程内存的会话秘密存储，应用退出后不可恢复；`retention=persistent` 使用 DPAPI。秘密服务按逻辑名称先查会话值、再查 DPAPI 值。切换为不记忆时必须删除同名的持久化秘密，避免旧值在下次启动时被误用；清除秘密时同时删除两个存储中的值。开启记忆并确认保存时，当前会话秘密应在 host 内转存到 DPAPI，不要求页面重新读取或回显秘密。账户和设置更新不得引用尚未成功设置的秘密。应用服务应先完成字段验证，再写秘密和账户/设置，确保失败时不会发布悬空凭据引用；跨 SQLite 与 DPAPI 不承诺分布式原子事务。
+
+当前设置契约缺少旧表单使用的公司名称和上次输出目录。扩展 `UserSettingsSnapshot` 与 `SettingsUpdateRequest`，以非秘密字段保存这两项；公司名称继续用于现有购买方匹配语义。`run.start` 使用显式选择的输出目录，未显式更改时可使用上次目录，但后端每次都必须验证该目录。配置指纹包含公司匹配规则等影响业务结果的非秘密配置，不包含秘密值或本机秘密密文。
+
+任务启动参数必须包括日期范围、输出目录、账户 ID、有效 mailbox、run mode 和公司匹配规则；GLM provider ID 与 credential name 只作为逻辑引用传递，原始授权码和 API Key 只在 `secret.set`、邮件连接或模型连接的服务边界短暂出现。Raw secret 不进入 `RunInput`、事件、运行快照、审计载荷或持久化 JSON。运行参数缺少的公司规则、provider/credential reference 必须补入 RPC 请求或从不可变设置快照确定，不得从旧位置参数隐式推断。
+
+迁移分为三个可单独验证的切片：
+
+1. **设置与账户**：注册设置、账户、秘密、目录选择、IMAP 测试和 GLM 测试 handlers；补齐公司和输出目录契约；完成单邮箱表单读写、revision 冲突、秘密 configured 状态和“记住设置”行为。不得在此阶段假报 run.start 成功。
+2. **任务生命周期**：先实现真实的应用级 run service，再成组迁移 `run.start`、`run.get`/重连、进度事件和 `run.cancel`。当前 `IRunCoordinator` 只处理数据包提交和终态决策，不是任务执行器；新服务必须拥有真实 Pipeline 执行、单活动任务约束、运行快照、事件序号和幂等取消。若运行不能端到端执行，该切片不算完成，UI 不得显示已启动。
+3. **结果操作**：运行切片提供稳定 run ID 和终态结果后，再迁移结果读取、目录/发票打开和汇总导出。每个操作都必须有 typed RPC contract，通过 run/artifact ID 或一次性受控 token 定位资源；不能接受页面任意绝对路径。
+
+每个切片只在对应 handler、应用服务和契约测试就绪后切换其前端调用。不要新增通用旧方法适配器；也不要提前删除尚未被完整替换的调用组。每组迁移需覆盖 RPC handler、严格 JSON round-trip、前端行为和秘密不泄漏测试；首次完整设置到 handler 链路另需 Windows Avalonia WebView 集成 smoke test。每个切片运行对应 .NET/JavaScript 测试、桌面应用构建、Web 资源校验和 `git diff --check`。
+
+## 5. ZeroPipeline 编排与运行生命周期
+
+由 `RunCoordinator` 创建运行上下文并构建 ZeroPipeline 图，由 `PipelineExecutor` 执行图。每次 `run.start` 都创建独立的图实例和运行上下文，不共享带状态的节点。
+
+推荐的节点图如下：
+
+```text
+ValidateRequest
+  -> ScanMailbox
+  -> CollectCandidates
+  -> RecoverUrls
+  -> ExtractDocuments
+  -> PairArtifacts
+  -> ArchiveDocuments
+  -> ExportReport
+```
+
+节点之间使用 typed ports 传递候选、文档、解析结果和报表数据。候选级处理使用有界队列和背压，避免邮箱附件、OCR 页面或 AI 请求无限制堆积。单文件失败作为结果端口输出并进入人工复核分支，不直接使整张 DAG 失败。
+
+运行生命周期仍保持以下状态：
+
+```text
+Created
+  -> Validating
+  -> ScanningMailbox
+  -> CollectingCandidates
+  -> RecoveringUrls
+  -> ExtractingDocuments
+  -> PairingArtifacts
+  -> Archiving
+  -> ExportingReport
+  -> Completed
+```
+
+运行也可能以 `Cancelled`、`Failed`、`PartialSuccess` 或 `NeedsManualReview` 结束。单个损坏文档不能中断整批任务；只有凭据无效、存储不可用或无法恢复的持久化错误等运行级错误才终止整次运行。
+
+每个阶段都接收 `CancellationToken`，写入审计事件，并发送安全的进度事件。凭据、原始授权值和未脱敏的敏感 URL 不能出现在事件或日志中。
+
+### Serilog 结构化日志
+
+运行日志使用 Serilog，通过 `Microsoft.Extensions.Logging` 的 `ILogger<T>` 注入到应用层和基础设施层。日志输出为结构化事件，不在业务代码中拼接长字符串。
+
+每条日志尽量包含以下公共字段：
+
+- `Timestamp`、`Level`、`MessageTemplate`；
+- `Application`、`Version`、`ProcessId`；
+- `RunId`、`Stage`、`NodeId`、`DocumentId`；
+- `EventType`、`ReasonCode`、`Retryable`、`DurationMs`；
+- `MachineName` 和脱敏后的外部服务域名。
+
+ZeroPipeline 节点在执行开始、成功、失败、重试和取消时写入结构化事件。Avalonia WebView bridge 记录 RPC 方法名、请求 ID、运行 ID 和耗时，但不记录参数中的凭据、原始 OCR 文本或图片内容。DeepSeek 调用只记录模型名、输入类型、token/耗时元数据和结果状态，不记录 API Key、完整提示词、发票图像或完整发票文本。OFD 解析只记录来源 XML 路径、解析分支和结果状态，不记录完整 XML。
+
+日志与审计分离：Serilog 日志用于诊断和运行观测；真值审计事件使用独立的 `IAuditStore` 持久化，并以稳定 schema 保存。日志可以按保留策略滚动清理，不能替代审计证据。
+
+默认写入 `%LocalAppData%/InvoiceFlowAI/logs/invoiceflowai-.log`，按日期滚动并限制文件大小和保留数量。发布版默认记录 `Information` 及以上级别；调试模式可以提升到 `Debug`，但仍必须执行相同的脱敏策略。未配置可用的日志文件目录时，应用回退到安全的诊断目录，并将失败写入启动诊断信息。
+
+### ZeroPipeline 适配边界
+
+- `RunCoordinator`：创建/销毁图实例、绑定运行 ID、接收取消请求、汇总节点状态并向 Avalonia WebView 发事件；
+- `PipelineGraph`：描述阶段依赖和数据流，不承载用户凭据或持久化状态；
+- `PipelineExecutor`：执行拓扑调度、节点并发和背压；
+- 应用节点：将 `IMailboxScanner`、`IInvoiceParser`、`IInvoiceOcr`、`IInvoiceFieldExtractor`、`IArchiveService` 和 `IReportExporter` 适配为 ZeroPipeline 节点；
+- `ZeroPipeline.Recipe`：保存可诊断的流程版本和节点元数据，不保存授权码、API Key 或原始发票内容。
+
+ZeroPipeline 的 DAG 调度负责节点依赖、队列和执行顺序；业务重试、错误码、审计写入和人工复核规则仍由应用层控制，避免把业务语义隐藏在通用编排器中。
+
+#### Recipe 运行契约
+
+首版 Recipe 的业务 schema 独立于 `ZeroPipeline.Recipe` NuGet 版本。NuGet 包版本固定为 `1.2.0`；Recipe schema 固定为 `1.0`。二者都必须写入诊断信息，但不能互相替代。首版只接受 `schemaVersion == "1.0"`，未知 schema 版本在构建 `PipelineGraph` 前以 `RECIPE_SCHEMA_UNSUPPORTED` 拒绝；同一 schema 的未知字段默认拒绝，避免拼写错误静默改变运行行为。
+
+Recipe 是不可变的、可诊断的 DAG 描述。它只包含节点类型、稳定节点 ID、参数、端口连接、执行策略和版本元数据，不包含 API Key、邮箱授权码、解密后的秘密、原始邮件、OCR 原文、图片、临时路径或未脱敏 URL。秘密参数只能使用 `secretRef` 逻辑引用，实际值由运行时从 `ISecretStore` 获取。
+
+首版 Recipe 的根对象契约如下：
+
+```csharp
+public sealed record PipelineRecipe(
+    string SchemaVersion,
+    string RecipeId,
+    string RecipeVersion,
+    string ZeroPipelineRecipeVersion,
+    IReadOnlyList<RecipeNode> Nodes,
+    IReadOnlyList<RecipeConnection> Connections,
+    RecipeExecutionPolicy Execution,
+    IReadOnlyDictionary<string, string>? Metadata = null);
+
+public sealed record RecipeNode(
+    string NodeId,
+    string Type,
+    string TypeVersion,
+    IReadOnlyDictionary<string, object?> Parameters,
+    IReadOnlyDictionary<string, RecipePortBinding>? Ports = null);
+
+public sealed record RecipePortBinding(
+  string Name,
+  string Direction,
+  string PacketType);
+
+public sealed record RecipeConnection(
+    string FromNodeId,
+    string FromPort,
+    string ToNodeId,
+    string ToPort);
+
+public sealed record RecipeExecutionPolicy(
+    int ControlCapacity,
+    int MailboxBatchCapacity,
+    int CandidateBatchCapacity,
+    int ExtractionCapacity,
+    int ResultCapacity,
+    int EventCapacity,
+    int ImapConcurrency,
+    int OcrPageConcurrency,
+    int OcrLineWorkers,
+    int DeepSeekConcurrency,
+    int BrowserConcurrency,
+    int ArchiveConcurrency,
+    int SqliteWriterConcurrency,
+    int MaxInFlightCandidates,
+    int MaxReorderItems,
+    int MaxRetryAttempts,
+    int NodeTimeoutSeconds,
+    int RetryGapTimeoutSeconds);
+```
+
+`RecipeVersion` 是应用维护的可诊断版本，不采用 SemVer 兼容判断；首版值为 `2026-09-23-v1`。`ZeroPipelineRecipeVersion` 固定为 `1.2.0`。`RecipeId` 固定为 `invoiceflow.default`，未来允许多个内置流程但每个 ID 必须拥有独立的注册和 fixture。`Metadata` 只能保存非敏感的人类可读信息，不能参与业务参数解析。
+
+首版节点类型注册表固定如下。注册表是代码内的唯一来源；Recipe 中的 `Type`、`TypeVersion`、端口类型和参数名称必须逐项命中注册表，不能由 JSON 反射任意加载 CLR 类型。
+
+| Type | TypeVersion | 输入端口 | 输出端口 | 参数 |
+| --- | --- | --- | --- | --- |
+| `validate-request` | `1.0` | `Input<RunInput>` | `Valid<ValidatedRunInput>`, `Failure<RunFailure>` | `stagingDirectory:string`, `requireCredentials:boolean` |
+| `scan-mailbox` | `1.0` | `Input<ValidatedRunInput>` | `Messages<PipelineItem<MailboxMessageBatch>>`, `Failure<RunFailure>` | `headerBatchSize:int=200`, `messageBatchSize:int=25`, `maxAttempts:int=2` |
+| `collect-candidates` | `1.0` | `Messages<PipelineItem<MailboxMessageBatch>>` | `Candidates<PipelineItem<CandidateBatch>>`, `Failure<RunFailure>` | `maxAttachmentBytes:int64=5242880`, `allowNestedZip:boolean=true` |
+| `recover-urls` | `1.0` | `Candidates<PipelineItem<CandidateBatch>>` | `Candidates<PipelineItem<CandidateBatch>>`, `Failure<RunFailure>` | `maxAttempts:int=2`, `requestTimeoutSeconds:int=60`, `maxDownloadBytes:int64=5242880`, `allowBrowserFallback:boolean=true` |
+| `extract-documents` | `1.0` | `Candidates<PipelineItem<CandidateBatch>>` | `Results<PipelineItem<ExtractionBatch>>`, `Failure<RunFailure>` | `allowOcrFallback:boolean=true`, `allowVisionFallback:boolean=true`, `minimumConfidence:number=0.85` |
+| `pair-artifacts` | `1.0` | `Results<PipelineItem<ExtractionBatch>>` | `Pairs<PipelineItem<PairingBatch>>`, `Failure<RunFailure>` | `autoAcceptScore:number=180`, `manualReviewScore:number=100`, `allowCrossMessagePairing:boolean=true` |
+| `archive-documents` | `1.0` | `Pairs<PipelineItem<PairingBatch>>` | `Archived<PipelineItem<ArchiveBatch>>`, `Failure<RunFailure>` | `overwriteExisting:boolean=false`, `preserveOriginal:boolean=true`, `namingPolicyVersion:string="2026-09-23-v1"` |
+| `export-report` | `1.0` | `Archived<PipelineItem<ArchiveBatch>>` | `Completed<RunSummary>`, `Failure<RunFailure>` | `templateVersion:string="2026-09-23-v1"` |
+
+注册项还必须声明每个参数的 JSON 类型、是否必需、默认值、允许范围、是否参与指纹和是否敏感。首版允许的参数类型只有 `string`、`boolean`、`integer`、`number`、`string[]` 和受限的对象；`number` 使用 invariant culture 和固定小数序列化，禁止 NaN、Infinity 和本地化小数格式。参数校验发生在图构建之前，失败分别使用 `RECIPE_NODE_UNKNOWN`、`RECIPE_NODE_VERSION_UNSUPPORTED`、`RECIPE_PARAMETER_UNKNOWN`、`RECIPE_PARAMETER_TYPE_INVALID`、`RECIPE_PARAMETER_RANGE_INVALID` 和 `RECIPE_PORT_INVALID`。
+
+首版完整 fixture 为 `invoiceflow.default` 的最小可运行 DAG。它同时是序列化、反序列化、注册表校验、拓扑构建和指纹稳定性测试的黄金样本：
+
+```json
+{
+  "schemaVersion": "1.0",
+  "recipeId": "invoiceflow.default",
+  "recipeVersion": "2026-09-23-v1",
+  "zeroPipelineRecipeVersion": "1.2.0",
+  "nodes": [
+    { "nodeId": "validate", "type": "validate-request", "typeVersion": "1.0", "parameters": { "stagingDirectory": "%LOCALAPPDATA%/InvoiceFlowAI/staging", "requireCredentials": true } },
+    { "nodeId": "scan", "type": "scan-mailbox", "typeVersion": "1.0", "parameters": { "headerBatchSize": 200, "messageBatchSize": 25, "maxAttempts": 2 } },
+    { "nodeId": "candidates", "type": "collect-candidates", "typeVersion": "1.0", "parameters": { "maxAttachmentBytes": 5242880, "allowNestedZip": true } },
+    { "nodeId": "recover", "type": "recover-urls", "typeVersion": "1.0", "parameters": { "maxAttempts": 2, "requestTimeoutSeconds": 60, "maxDownloadBytes": 5242880, "allowBrowserFallback": true } },
+    { "nodeId": "extract", "type": "extract-documents", "typeVersion": "1.0", "parameters": { "allowOcrFallback": true, "allowVisionFallback": true, "minimumConfidence": 0.85 } },
+    { "nodeId": "pair", "type": "pair-artifacts", "typeVersion": "1.0", "parameters": { "autoAcceptScore": 180, "manualReviewScore": 100, "allowCrossMessagePairing": true } },
+    { "nodeId": "archive", "type": "archive-documents", "typeVersion": "1.0", "parameters": { "overwriteExisting": false, "preserveOriginal": true, "namingPolicyVersion": "2026-09-23-v1" } },
+    { "nodeId": "report", "type": "export-report", "typeVersion": "1.0", "parameters": { "templateVersion": "2026-09-23-v1" } }
+  ],
+  "connections": [
+    { "fromNodeId": "validate", "fromPort": "Valid", "toNodeId": "scan", "toPort": "Input" },
+    { "fromNodeId": "scan", "fromPort": "Messages", "toNodeId": "candidates", "toPort": "Messages" },
+    { "fromNodeId": "candidates", "fromPort": "Candidates", "toNodeId": "recover", "toPort": "Candidates" },
+    { "fromNodeId": "recover", "fromPort": "Candidates", "toNodeId": "extract", "toPort": "Candidates" },
+    { "fromNodeId": "extract", "fromPort": "Results", "toNodeId": "pair", "toPort": "Results" },
+    { "fromNodeId": "pair", "fromPort": "Results", "toNodeId": "archive", "toPort": "Results" },
+    { "fromNodeId": "archive", "fromPort": "Results", "toNodeId": "report", "toPort": "Results" }
+  ],
+  "execution": {
+    "controlCapacity": 1,
+    "mailboxBatchCapacity": 4,
+    "candidateBatchCapacity": 8,
+    "extractionCapacity": 4,
+    "resultCapacity": 8,
+    "eventCapacity": 64,
+    "imapConcurrency": 1,
+    "ocrPageConcurrency": 2,
+    "ocrLineWorkers": 2,
+    "deepSeekConcurrency": 2,
+    "browserConcurrency": 1,
+    "archiveConcurrency": 2,
+    "sqliteWriterConcurrency": 1,
+    "maxInFlightCandidates": 32,
+    "maxReorderItems": 32,
+    "maxRetryAttempts": 2,
+    "nodeTimeoutSeconds": 300,
+    "retryGapTimeoutSeconds": 600
+  },
+  "metadata": { "displayName": "InvoiceFlowAI default pipeline" }
+}
+```
+
+fixture 中的 `%LOCALAPPDATA%` 只允许作为受限路径 token 出现在 `stagingDirectory`，加载后必须解析为应用目录并重新以规范化绝对路径参与指纹；Recipe 文件本身不得写入用户机器的具体绝对路径。所有节点必须最终连接到一个入口路径和一个报告/终态路径；孤立节点、重复端口连接、环或缺少 EOF 汇聚都属于 `RECIPE_GRAPH_INVALID`。每个节点的 `Failure<RunFailure>` 是由 `RunCoordinator` 隐式绑定的控制面输出，不作为业务 DAG 边写入 Recipe；未绑定失败端口或无法汇总运行级失败仍属于 `RECIPE_GRAPH_INVALID`。
+
+#### Recipe 指纹与 ConfigurationFingerprint
+
+系统同时保存两个不同层次的指纹：
+
+- `RecipeFingerprint`：只覆盖规范化后的 Recipe schema、节点注册表版本、节点类型和版本、业务参数、端口连接以及 `RecipeExecutionPolicy`。它回答“编排图和节点运行策略是否相同”。
+- `ConfigurationFingerprint`：覆盖 `RecipeFingerprint`、规范化后的非秘密用户设置、规则 AST 的 `SourceFingerprint`、供应商/邮箱账户的非秘密标识、模型和 OCR manifest 版本、应用兼容版本以及实际生效的 `PipelineOptions`。它回答“本次运行的完整行为配置是否相同”。
+
+两者都使用确定性 JSON 序列化后计算 SHA-256，结果使用小写十六进制字符串。规范化规则固定为：对象属性按 ordinal 字典序排序；数组保持业务顺序，节点按 `NodeId` 排序，连接按 `FromNodeId, FromPort, ToNodeId, ToPort` 排序；省略未参与指纹的字段；所有路径先转为规范化应用相对 token；浮点和 Decimal 使用 invariant culture；禁止时间戳、随机 ID、机器名和运行 ID 进入指纹。`RecipeFingerprint` 计算不能读取或解密秘密；`secretRef` 的名称可以参与指纹，秘密值本身不能参与。
+
+`ConfigurationFingerprint` 的生成顺序固定为：加载内置 Recipe -> 注册表校验 -> 读取 `UserSettings` revision -> 读取 `MailboxAccount` 当前 revision 和非秘密连接身份 -> 读取 `DefaultMailbox`/本次有效 mailbox -> 读取 `RuleSetId + RuleSetVersion` -> 合并 `PipelineOptions` -> 生成 `RecipeFingerprint` -> 生成 `ConfigurationFingerprint`。账户保存、默认账户或默认 mailbox 变更、规则保存/回滚、非秘密设置变更、Recipe 或模型 manifest 更新都会生成新的完整指纹；账户 revision、settings revision 和 RuleSet version 各自独立递增。运行开始后不允许修改该运行使用的快照。`ValidatedRunInput.ConfigurationFingerprint`、`ParserContext.ConfigurationFingerprint`、`PairingContext.ConfigurationFingerprint` 和 `Runs.ConfigurationFingerprint` 必须使用同一值。
+
+`Runs` 另外保存 `SettingsRevision`、`AccountId + AccountRevision`、有效 `Mailbox`、`RuleSetId + RuleSetVersion`、`RecipeVersion` 和 `RecipeFingerprint`。恢复、重试和人工复核必须使用这些原运行快照，而不是当前默认设置、账户或规则；若任一快照记录或 `ConfigurationFingerprint` 不可用，返回 `RUN_CONFIGURATION_SNAPSHOT_MISSING`，禁止静默使用新配置。`MailboxAccount` 只表示连接主机、邮箱地址、TLS 和 secret reference；它不拥有默认 mailbox。默认 mailbox 属于单例 `UserSettings.DefaultMailbox`，本次运行的显式 mailbox 只写入 `Runs.Mailbox`，不回写默认设置。应用启动时只加载内置 fixture；用户修改配置不会直接修改已运行 Recipe 或已保存运行快照。
+
+### ZeroPipeline 节点输入输出契约
+
+ZeroPipeline `1.2.0` 的执行模型是：`IPipelineNode.ExecuteAsync` 每次执行一个 cycle；节点从 `InputPort<T>` 取出一个 `DataPacket<T>`，处理后通过 `OutputPort<T>` 发布；`DataPacket<T>` 携带 `SequenceNumber`、时间戳和 `IsEndOfStream`。输入端口是有界队列，首版业务端口统一使用 `BackpressurePolicy.Block`，禁止使用 `DropOldest` 或 `DropNewest` 丢失发票数据。
+
+因此，业务层不把 ZeroPipeline 的 `PipelineContext` 字典当作数据通道，也不把一个大批次藏在 context 中。`PipelineContext` 只保存本次运行的只读运行标识、配置快照、取消令牌和基础设施服务引用；候选、文档、发票和失败结果全部通过强类型端口传递。
+
+节点使用以下通用包装类型承载运行和候选关联信息：
+
+```csharp
+public sealed record PipelineItem<T>(
+  string RunId,
+  long Sequence,
+  string CorrelationId,
+  T? Value,
+  CandidateFailure? Failure = null);
+
+public sealed record RunInput(
+  string RunId,
+  DateOnly DateFrom,
+  DateOnly DateTo,
+  string SavePath,
+  string CustomRules,
+  string AccountId,
+  string Mailbox = "INBOX",
+  string RunMode = "interactive");
+
+public sealed record ValidatedRunInput(
+  RunInput Request,
+  string StagingDirectory,
+  string ConfigurationFingerprint);
+
+public sealed record MailboxMessageBatch(
+  string AccountId,
+  string Mailbox,
+  long BatchSequence,
+  IReadOnlyList<MailboxMessage> Messages,
+  bool IsFinalBatch,
+  int ScannedCount);
+
+public sealed record CandidateBatch(
+  IReadOnlyList<DocumentCandidate> Candidates,
+  int SourceMessageCount,
+  bool IsFinalBatch,
+  IReadOnlyList<CandidateProcessResult>? TerminalResults = null);
+
+public sealed record ExtractionBatch(
+  IReadOnlyList<CandidateProcessResult> Results,
+  bool IsFinalBatch);
+```
+
+`PipelineItem<T>.Sequence` 是业务顺序，必须与外层 `DataPacket<T>.SequenceNumber` 保持一致。允许节点在内部有限并发处理，但输出由 `SequenceReorderBuffer` 按 sequence 释放；下游永远收到确定顺序的结果。一个节点不能依赖执行线程顺序，也不能把 `DataPacket` 实例写入数据库。
+
+节点图的端口契约固定如下：
+
+| 节点 | 输入端口 | 输出端口 | 处理规则 |
+| --- | --- | --- | --- |
+| `ValidateRequestNode` | `Input<RunInput>` | `Valid<ValidatedRunInput>`、`Failure<RunFailure>` | 参数、路径、日期范围、凭据引用和配置指纹校验；失败是运行级结果，不启动后续节点。 |
+| `ScanMailboxNode` | `Input<ValidatedRunInput>` | `Messages<PipelineItem<MailboxMessageBatch>>`、`Failure<RunFailure>` | 按页读取 IMAP；每页一个 packet，结束时发送 EOF；单封邮件损坏转候选前置失败，不中断扫描。 |
+| `CollectCandidatesNode` | `Messages<PipelineItem<MailboxMessageBatch>>` | `Candidates<PipelineItem<CandidateBatch>>`、`Failure<RunFailure>` | 过滤发票候选、递归展开附件和嵌套 ZIP，生成不可变 candidate；保持 source message 和 candidate sequence。 |
+| `RecoverUrlsNode` | `Candidates<PipelineItem<CandidateBatch>>` | `Candidates<PipelineItem<CandidateBatch>>`、`Failure<RunFailure>` | URL 候选逐项恢复；成功候选保留在 `Candidates`，失败候选写入同一批次的 `TerminalResults`，不抛批次异常。 |
+| `ExtractDocumentsNode` | `Candidates<PipelineItem<CandidateBatch>>` | `Results<PipelineItem<ExtractionBatch>>`、`Failure<RunFailure>` | XML/OFD/PDF/OCR/DeepSeek 处理；输入批次中的既有终态结果原样转发，尚未终态的 candidate 必须补充一个 `CandidateProcessResult`。 |
+| `PairArtifactsNode` | `Results<PipelineItem<ExtractionBatch>>` | `Pairs<PipelineItem<PairingBatch>>`、`Failure<RunFailure>` | 只消费已终态结果；配对冲突和无法配对更新为人工复核结果，既有失败结果原样转发，不使整次运行失败。 |
+| `ArchiveDocumentsNode` | `Pairs<PipelineItem<PairingBatch>>` | `Archived<PipelineItem<ArchiveBatch>>`、`Failure<RunFailure>` | 归档操作必须幂等；单文件路径、命名或移动失败追加/更新候选结果，最终统一进入 `ArchiveBatch.Results`。 |
+| `ExportReportNode` | `Archived<PipelineItem<ArchiveBatch>>` | `Completed<RunSummary>`、`Failure<RunFailure>` | 汇总所有候选终态并生成报表；报表写入、数据库提交或审计提交失败属于运行级故障。 |
+
+`Messages`、`Candidates`、`Results` 等批次 DTO 只用于减少端口连接数量，不改变候选级语义；批次内部仍按 `DocumentCandidate.Sequence` 排序，且不得无限扩大。`CandidateBatch.TerminalResults` 用于恢复阶段提前失败的 candidate；后续节点必须将这些结果转发到唯一的结果端口，不得另建旁路失败端口。默认批次大小、端口容量和节点并发由 `PipelineOptions` 固定配置，并在启动日志中记录。
+
+### PipelineOptions 与流控默认值
+
+首版不使用 ZeroPipeline 默认的所有端口容量，而是在应用层统一创建 `PipelineOptions`，并把容量和并发限制作为每次运行的不可变配置快照：
+
+```csharp
+public sealed record PipelineOptions(
+  int ControlPortCapacity = 1,
+  int MailboxBatchPortCapacity = 4,
+  int CandidateBatchPortCapacity = 8,
+  int ExtractionBatchPortCapacity = 4,
+  int ResultBatchPortCapacity = 8,
+  int EventPortCapacity = 64,
+  int HeaderBatchSize = 200,
+  int MessageBatchSize = 25,
+  int CandidateBatchSize = 16,
+  int MaxInFlightCandidates = 32,
+  int MailboxScanConcurrency = 1,
+  int OcrPageConcurrency = 2,
+  int OcrLineWorkerCount = 2,
+  int AiRequestConcurrency = 2,
+  int BrowserConcurrency = 1,
+  int ArchiveConcurrency = 2,
+  int DatabaseWriterConcurrency = 1,
+  int MaxReorderBufferItems = 32,
+  int MaxRetryAttempts = 2,
+  int MaxEventReplayItems = 1000,
+  TimeSpan NodeExecutionTimeout,
+  TimeSpan RetryGapTimeout)
+{
+  public static PipelineOptions Default => new(
+    NodeExecutionTimeout: TimeSpan.FromMinutes(5),
+    RetryGapTimeout: TimeSpan.FromMinutes(10));
+}
+```
+
+实现必须从 `PipelineOptions.Default` 或显式配置工厂创建实例，不能直接传入 `TimeSpan.Zero`；`TimeSpan.Zero` 不表示无限等待，而是非法配置。所有业务输入端口使用 `BackpressurePolicy.Block`，禁止 `DropOldest` 和 `DropNewest`。控制 packet、EOF 和终态事件使用容量 1 或 64；邮箱 batch 使用容量 4；候选 batch 使用容量 8；OCR/AI 载荷使用容量 4；结果和归档 batch 使用容量 8。容量以 batch/packet 数计算，图像字节数另由 `MaxInFlightCandidates`、页面尺寸和 DeepSeek 请求体上限约束。
+
+并发上限是硬上限而不是建议值：每个运行只能有 1 个 IMAP 扫描 producer；OCR 最多同时处理 2 个页面，单个 `PaddleOcrAll` 实例内最多 2 个 line worker；DeepSeek 最多 2 个 in-flight request；Playwright 浏览器恢复全局最多 1 个活动 context；归档最多 2 个文件操作；SQLite writer 固定为 1。单个 run 的 `MaxInFlightCandidates` 为 32，多个 run 不共享带状态的节点或这些并发槽。配置文件可以降低上限，但不能超过首版硬上限。
+
+### SequenceReorderBuffer 的位置和语义
+
+`SequenceReorderBuffer<T>` 位于 `InvoiceFlowAI.Application.Pipeline.Ordering`，是节点内部有限并发 worker 与 ZeroPipeline `OutputPort<T>` 之间的应用层组件。它不放在 Domain，不修改 ZeroPipeline.Core，也不把排序逻辑放进 `PipelineContext`：
+
+```csharp
+public sealed class SequenceReorderBuffer<T>
+{
+  public SequenceReorderBuffer(long firstSequence, int capacity);
+
+  public IReadOnlyList<DataPacket<T>> Add(DataPacket<T> packet);
+
+  public IReadOnlyList<DataPacket<T>> CompleteEndOfStream(
+    DataPacket<T> endOfStream);
+}
+```
+
+规则如下：
+
+- 按 `DataPacket.SequenceNumber` 保存乱序 packet，只有从 `nextExpectedSequence` 连续可用时才释放到输出端口；
+- 小于已释放 sequence 的重复 packet 被视为幂等重放并丢弃，payload 不重复写库；
+- 超过 `MaxReorderBufferItems` 时停止向 worker 投递并依靠输入端口背压；
+- 收到 EOF 只记录结束 sequence，不立即传播；只有所有低于 EOF 的 sequence 已释放且 retry barrier 已清空时才传播 EOF；
+- 出现无法补齐的 sequence 时等待 `RetryGapTimeout`，之后抛出 `PIPELINE_SEQUENCE_GAP` 节点级故障，不能静默跳过；
+- `Add` 和 `CompleteEndOfStream` 只在单个节点的应用层协调器内调用，不跨线程共享同一个 ZeroPipeline port。
+
+### Retry 重新投递与 EOF
+
+候选失败后，`IRetryCoordinator` 在结果进入最终结果端口前决定是否重试。可重试 candidate 会保留原始 `DocumentId`、`Sequence` 和 `CorrelationId`，增加 `Attempt` 与 `ProcessingRevision`，重新进入对应阶段的 retry input；不创建新的业务 sequence。`SequenceReorderBuffer` 将该 sequence 标记为 reserved，后续已完成 sequence 可以暂存在 buffer，但不能越过它向下游释放。
+
+retry 发生时遵循以下顺序：
+
+1. 当前尝试的临时输出和未提交事务回滚；
+2. `IRetryCoordinator.Decide` 生成退避和下一次 attempt；
+3. candidate 进入有界 retry queue，队列满时通过上游背压；
+4. 成功或最终失败的唯一 `CandidateProcessResult` 替换 reserved sequence；
+5. buffer 连续释放结果，随后才允许下游消费。
+
+源节点收到 EOF 不代表整条链路可以立即结束。每个有 retry 能力的节点维护 `RetryBarrier`：`sourceEofReceived && retryQueueEmpty && activeAttempts==0 && reorderBufferEmpty` 全部成立时，才向下游发送 EOF。取消时不等待新的 retry，直接取消未开始的 retry，并为 reserved sequence 产生 `Cancelled` 结果后再关闭输出。retry 超时或持久化失败升级为节点/运行级失败，不发送伪造的 EOF。
+
+### 多输入汇聚与 EOF
+
+所有需要多个上游的汇聚节点使用 `AllInputsCompletionPolicy`，为每个已连接输入维护独立状态：`Open`、`EndOfStream`、`Faulted`、`Cancelled`。节点必须等待所有输入都达到 `EndOfStream` 后，才能产生最终汇总并向下游传播 EOF；一个输入没有数据不等于 EOF。
+
+汇聚规则固定为：
+
+- 业务 packet 按 `(RunId, Sequence, CorrelationId)` 归并；每个 required input 对同一 key 必须提供 packet 或显式 `NoValue` marker，不能用超时猜测缺失；
+- 任一输入发生 `RunFailure` 或节点异常，立即停止汇聚并使运行失败；候选级 `CandidateProcessResult` 作为普通值继续转发；
+- 重复 EOF 幂等忽略；EOF 到达后该输入不得再发送业务 packet，违反则产生 `PIPELINE_DATA_AFTER_EOF`；
+- 所有输入 EOF 且 retry barrier 清空后，汇聚节点发送一次最终 `PairingBatch`、`ArchiveBatch` 或 `RunSummary`，再向每个输出端口发送一次 EOF；
+- 取消时等待已取出的 packet 完成安全收尾，为未配对 key 生成 `Cancelled`/人工复核结果后关闭；
+- `RunCoordinator` 以所有 required output 汇聚节点完成为最终屏障，不以某一个上游 EOF 或 `PipelineExecutor` cycle 结束作为运行完成条件。
+
+### 失败语义与异常边界
+
+ZeroPipeline 的 `PipelineNode.ExecuteAsync` 在异常后会把节点置为 `Faulted`，`PipelineExecutor` 也会触发 `NodeFaulted` 并抛出异常。因此应用节点遵守以下边界：
+
+1. **候选级失败不抛异常**：文件损坏、格式不支持、号码缺失、OCR 低质量、DeepSeek 非法 JSON、URL 恢复失败、配对冲突、归档单文件失败，都转换为 `CandidateProcessResult`，写入当前阶段唯一的结果端口，并继续处理其他候选。候选失败不得通过独立旁路端口绕过后续汇总。
+2. **可重试候选失败不在节点内部无限重试**：节点根据 `RetryPolicy` 产生带 `Retryable=true` 的结果；应用层 `RetryCoordinator` 根据错误码、尝试次数和退避计划重新投递同一个 candidate，保持原 `DocumentId`、`Sequence` 和幂等键。
+3. **节点级故障才抛异常**：端口类型错误、节点配置非法、依赖初始化失败、不可恢复的内部不变量破坏、无法创建临时目录等，抛出带稳定 `ReasonCode` 的 `PipelineNodeException`，由 `RunCoordinator` 将运行置为 `Failed`。
+4. **运行级故障终止 DAG**：凭据认证失败、数据库迁移/提交失败、日志和审计存储不可用、输出根目录不可写、ZeroPipeline 图校验失败，写入 `RunFailure` 并停止新的输入；已完成的候选结果保留。
+5. **取消不是失败**：收到 `CancellationToken` 后，节点停止读取新 packet；已取出的候选按 `CANCELLED` 产生终态结果，未取出的输入由上游清空或发送 EOF，运行最终为 `Cancelled`。不得把 `OperationCanceledException` 记录为普通错误或自动重试。
+6. **EOF 必须传播**：源节点对每个输出端口发送一次 `DataPacket<T>.EndOfStream(sequence)`；转换节点收到 EOF 后只传播 EOF，不再消费业务数据；汇聚节点在所有上游 EOF 后输出最终汇总。
+
+候选级结果使用以下稳定模型，不用异常文本驱动前端：
+
+```csharp
+public enum CandidateStatus
+{
+  Resolved,
+  Duplicate,
+  Retained,
+  ManualReview,
+  Unresolved,
+  Cancelled,
+  QuotaExhausted,
+  AuthFailed,
+  Timeout
+}
+
+public enum FailureScope
+{
+  Candidate,
+  Node,
+  Run
+}
+
+public enum FailureCategory
+{
+  Input,
+  Document,
+  Network,
+  Authentication,
+  Quota,
+  Persistence,
+  Cancellation,
+  Validation,
+  Internal
+}
+
+public sealed record CandidateFailure(
+  string ReasonCode,
+  FailureScope Scope,
+  FailureCategory Category,
+  bool Retryable,
+  string SafeMessage,
+  int Attempt = 0,
+  int MaxAttempts = 0,
+  string ExceptionType = "",
+  string Fingerprint = "");
+
+public sealed record CandidateProcessResult(
+  DocumentCandidate Candidate,
+  CandidateStatus Status,
+  InvoiceDocument? Invoice = null,
+  string ArtifactPath = "",
+  CandidateFailure? Failure = null,
+  IReadOnlyList<string>? Warnings = null,
+  IReadOnlyDictionary<string, string>? Trace = null);
+
+public sealed record RunFailure(
+  string RunId,
+  string Stage,
+  string ReasonCode,
+  FailureCategory Category,
+  bool Retryable,
+  string SafeMessage,
+  string ExceptionType = "",
+  string Fingerprint = "");
+```
+
+`CandidateProcessResult` 必须满足：同一个 `DocumentId` 在一次运行中最多产生一个最终结果；重复投递时由 `DocumentId + processing revision` 幂等去重；`ManualReview`、`Unresolved`、`Retained` 和 `Cancelled` 都是已终态，不得被下游重新解释为成功。每个阶段只能有一个候选结果输出端口；下游节点对已终态结果只允许转发、补充阶段 trace 或按明确规则更新状态，不得复制成第二个结果。`RunSummary` 统计各状态数量、阶段耗时、失败原因计数、报表路径和审计提交状态，但不包含 OCR 原文、图片、凭据或完整邮件正文。
+
+`RunCoordinator` 负责将 ZeroPipeline 节点事件映射到运行状态：`NodeExecuting` 更新阶段开始，`NodeCompleted` 更新阶段耗时，`NodeFaulted` 只处理节点/运行级异常；候选级失败只能由结果端口汇总。这样可以保留 Python `ExtractionOutcome` 的候选级隔离、`RunLifecycle` 的运行级失败和取消语义，同时适配 ZeroPipeline 的异常模型。
+
+### 运行终态优先级
+
+运行阶段状态与运行终态分开保存。阶段可以是 `Scanning`、`Extracting`、`Archiving` 等；终态只在最终汇总屏障后确定，并且只写入一次：
+
+```csharp
+public enum RunTerminalStatus
+{
+  Completed,
+  PartialSuccess,
+  NeedsManualReview,
+  Cancelled,
+  Failed
+}
+```
+
+终态判定按以下优先级执行：
+
+1. **`Failed`**：存在运行级 `RunFailure`，包括凭据不可用、数据库/审计提交失败、输出目录不可写、ZeroPipeline 图校验失败、报表生成失败和不可恢复的节点故障。运行级失败优先于候选统计。
+2. **`Cancelled`**：没有更早记录的运行级失败，且用户取消已被接受。已完成的候选和已提交的归档不回滚，未处理候选产生 `Cancelled` 终态。
+3. **`NeedsManualReview`**：没有运行级失败或取消，但至少一个候选为 `ManualReview`，或所有候选均未得到可用发票结果而需要人工判断。
+4. **`PartialSuccess`**：没有运行级失败、取消或人工复核，但存在 `Unresolved`、`Timeout`、`QuotaExhausted` 或候选级 `AuthFailed`，表示批次完成但存在候选级失败。至少一个候选成功不是必要条件；零成功的批次也使用此状态，并通过 `NO_RESOLVED_CANDIDATES` 原因码说明。
+5. **`Completed`**：没有以上条件。包括所有候选为 `Resolved`、`Duplicate` 或 `Retained`，以及扫描完成但没有候选的 `NO_CANDIDATES` 运行。
+
+取消与失败的竞争按首次记录的原因决定：取消信号先被 `RunCoordinator` 接受且之后没有运行级失败时为 `Cancelled`；运行级失败先记录时为 `Failed`。报表、数据库提交和必需审计提交失败属于 `Failed`；邮箱断开、临时文件清理等非关键收尾失败只写入 `finalizerFailures`，不覆盖已经确定的终态。`RunSummary` 必须同时包含终态、终态原因、各 `CandidateStatus` 数量、运行级失败和收尾失败摘要。
+
+### 业务服务接口
+
+以下接口位于 `InvoiceFlowAI.Application`，实现位于 `InvoiceFlowAI.Infrastructure`，都只返回领域 DTO 或稳定失败结果，不向调用方泄漏供应商 SDK 类型。接口实现必须支持取消、幂等键和脱敏 trace。
+
+#### 配对
+
+```csharp
+public sealed record PairingContext(
+  string RunId,
+  string ConfigurationFingerprint,
+  decimal AutoAcceptScore,
+  decimal ManualReviewScore);
+
+public interface IPairingService
+{
+  Task<PairingBatch> PairAsync(
+    IReadOnlyList<CandidateProcessResult> results,
+    PairingContext context,
+    CancellationToken cancellationToken);
+}
+```
+
+配对只消费 `Resolved` 的 `InvoiceDocument` 和显式的 companion candidate；`Duplicate`、`Retained`、`Cancelled`、`Unresolved` 等结果原样进入 `PairingBatch.Results`。评分达到 `AutoAcceptScore` 自动配对，处于两个阈值之间进入 `ManualReview`，低于 `ManualReviewScore` 生成 `UNPAIRED_ARTIFACT` 候选结果。配对不得修改 invoice identity 或 source sequence。
+
+配对首版规则固定为：
+
+1. 先按文档类型建立 family 和 role：`打车 -> ride_invoice/ride_itinerary`、`住宿 -> hotel_invoice/hotel_folio`；不在同一 family 或 role 不匹配时不建边。
+2. 兼容性 gate 依次检查金额、供应商、日期窗口和必要的 merchant token；供应商两侧都非空且不相等时拒绝配对。
+3. 金额使用 Decimal 分；普通住宿要求差值小于 `0.01`，打车允许精确金额或价税换算后的 `0.50` slack。
+4. 住宿日期差最多 3 天；打车日期用于评分，不作为缺失日期时的硬拒绝条件。
+5. 建立二分图的连通分量，在每个分量内先最大化配对数量，再最大化总分；输入按 `DocumentId` 排序，保证结果确定性。
+
+默认评分公式为：
+
+```text
+score = providerExact * 100
+  + sourceMessageUidExact * 60
+  + sharedMerchantTokenRatio * 40
+  + amountScore
+  + dateScore
+```
+
+其中 `amountScore` 为精确金额 30、打车价税关系 10、否则 0；住宿 `dateScore=max(0, 20 - days*4)`，其他交通 `dateScore=max(0, 10-min(days,10))`。默认 `AutoAcceptScore=180`、`ManualReviewScore=100`，且必须满足 `AutoAcceptScore > ManualReviewScore`。分数达到自动阈值才可自动接受；处于两个阈值之间进入人工复核，低于人工阈值为 `UNPAIRED_ARTIFACT`。
+
+冲突规则固定为：同一 family/provider group 内的多个候选先求最优 assignment；如果存在多个“配对数量相同且总分相同”的最优 assignment，则整个连通分量不自动配对，生成一个 `PAIRING_AMBIGUOUS` 复核项。一个 `DocumentId` 在同一运行中最多参与一个 pairing；重复输入或已存在相同 pairing key 的候选转为 `Duplicate`，不产生第二个归档副作用。
+
+跨邮件配对默认允许但不默认自动接受：只有供应商相同、金额精确、日期在允许窗口内且 merchant token 足够匹配、总分达到 `AutoAcceptScore` 时，跨 `SourceMessageUid` 的配对才可自动接受；否则必须人工复核。用户可通过配置关闭跨邮件配对，关闭后 source UID 不同直接进入 `PAIRING_CROSS_MESSAGE_DISABLED`。
+
+#### 链接恢复
+
+```csharp
+public sealed record UrlRecoveryOptions(
+  int MaxAttempts,
+  TimeSpan RequestTimeout,
+  long MaxDownloadBytes,
+  IReadOnlySet<string> AllowedDomains,
+  bool AllowBrowserFallback);
+
+public sealed record UrlRecoveryResult(
+  DocumentCandidate Candidate,
+  bool Recovered,
+  string LocalPath = "",
+  string ContentHash = "",
+  CandidateFailure? Failure = null);
+
+public interface IUrlRecoveryService
+{
+  Task<UrlRecoveryResult> RecoverAsync(
+    DocumentCandidate candidate,
+    UrlRecoveryOptions options,
+    CancellationToken cancellationToken);
+}
+```
+
+URL 恢复通过冻结的 provider registry 选择实现，禁止在 candidate 中携带 CLR 类型名或动态脚本：
+
+```csharp
+public sealed record UrlRecoveryProviderContext(
+  string ProviderId,
+  int Priority,
+  IReadOnlySet<string> AllowedDomains,
+  bool SupportsDirectHttp,
+  bool SupportsBrowserFallback);
+
+public interface IUrlRecoveryProvider
+{
+  string ProviderId { get; }
+  int Priority { get; }
+  bool CanHandle(Uri url);
+
+  Task<UrlRecoveryDownload> DownloadAsync(
+    Uri url,
+    UrlRecoveryProviderContext context,
+    CancellationToken cancellationToken);
+}
+
+public interface IUrlRecoveryProviderRegistry
+{
+  IReadOnlyList<IUrlRecoveryProvider> GetOrderedProviders();
+  string RegistryFingerprint { get; }
+}
+
+public sealed record UrlRecoveryDownload(
+  Uri FinalUri,
+  IReadOnlyList<string> RedirectedHostHashes,
+  string ContentType,
+  long ContentLength,
+  string TemporaryPath,
+  string ContentHash,
+  string ProviderId);
+
+public interface IUrlRecoveryDownloadLease : IAsyncDisposable
+{
+  string TemporaryPath { get; }
+  long BytesWritten { get; }
+  string ContentHash { get; }
+
+  Task<UrlRecoveryDownload> CommitAsync(
+    CancellationToken cancellationToken);
+
+  ValueTask AbandonAsync();
+}
+```
+
+首版 registry 只注册 `direct-http` 和 `playwright-browser` 两类 provider。provider 按 `Priority DESC, ProviderId ASC` 选择；同一 URL 多 provider 命中时选择第一项，但必须把候选 provider 列表和 registry fingerprint 写入脱敏 trace。`AllowedDomains` 使用规范化 host 后缀匹配，禁止把 `example.com.evil.test` 视为 `example.com`；每次重定向都重新执行协议、host、端口和私有网段检查。只允许 `https`，除非内置 provider 明确声明受控的 `http` 本地测试模式。
+
+首版 URL provider 注册表固定为：
+
+| ProviderId | Priority | 匹配范围 | 默认能力 | 失败码 |
+| --- | ---: | --- | --- | --- |
+| `direct-http` | 200 | 所有通过 host allowlist 的 HTTPS URL | 流式下载、重定向校验、MIME/魔数校验 | `URL_HTTP_FAILED`, `URL_REDIRECT_BLOCKED`, `URL_CONTENT_INVALID` |
+| `playwright-browser` | 100 | `direct-http` 返回认证/JS challenge 且候选允许 browser fallback | 受限 browser context、下载事件、同一套文件校验 | `URL_BROWSER_FAILED`, `URL_BROWSER_TIMEOUT`, `URL_DOWNLOAD_BLOCKED` |
+
+`direct-http` 永远先尝试；只有失败码属于 `URL_AUTH_REQUIRED`、`URL_JS_CHALLENGE` 或显式 provider policy 允许时才进入 `playwright-browser`。401/403 不能无限触发 browser fallback，单 candidate 最多一次 browser fallback；未允许的域名、私网地址、非 HTTPS、超大小和魔数失败不得 fallback。`IUrlRecoveryProviderRegistry.RegistryFingerprint` 由稳定的 provider ID、priority、能力版本和校验策略版本计算，不包含用户 secret 或运行时 cookie。
+
+首版 HTTP policy 固定为：解析 DNS 后拒绝 loopback、link-local、RFC1918/RFC6598 私网、IPv4-mapped private IPv6、IPv6 loopback/link-local 和未定义地址；每次重定向重新解析并校验所有地址。只允许 `https`、端口 `443`，本地测试 double 才允许 `http:80` 且不能进入生产 registry。`Content-Length` 缺失时允许流式读取，但必须以 `MaxDownloadBytes + 1` 的硬上限读取，超过上限立即终止并返回 `URL_CONTENT_TOO_LARGE`。
+
+响应校验顺序固定为：最终 URI/地址 -> Content-Length -> 流式字节上限 -> Content-Type -> 文件魔数 -> 扩展名 -> SHA-256。Content-Type 与魔数不一致时以魔数为准：若魔数属于允许格式而 Content-Type 是通用 `application/octet-stream`，允许继续；若 Content-Type 声称 PDF/OFD/XML 但魔数不匹配，返回 `URL_CONTENT_INVALID`，不得 fallback。`Content-Disposition` 文件名只接受 RFC 5987/quoted token，先 Unicode NFC，再替换路径分隔符、控制字符和非法 Windows 字符，压缩空白并限制 120 个 UTF-16 code units；非法或缺失文件名使用 `DocumentId` 前 8 位加已验证扩展名。
+
+下载必须通过 `IUrlRecoveryDownloadLease : IAsyncDisposable` 管理临时文件：先限制响应头 `Content-Length`，再以流式读取执行硬字节上限，写入应用 staging 目录并计算 SHA-256；随后依次验证最终 URI、响应 MIME、文件魔数、扩展名、大小和内容哈希，验证成功后由 `CommitAsync` 原子转交 candidate processing。任何失败都调用 `AbandonAsync`/`DisposeAsync` 删除临时文件并返回稳定的 `URL_*` candidate failure。`TemporaryPath` 不进入持久化、日志或 RPC，只在 lease 生命周期内有效；lease 只能 commit 一次，重复 commit 返回已提交摘要，不能生成第二个 candidate。
+
+`playwright-browser` 使用单个受限 browser context lease：禁止下载到默认 Downloads、禁止页面导航到非允许域名、禁止执行用户脚本、禁止访问本地文件和非必要权限；下载事件必须在 context 关闭前完成 hash/魔数校验。浏览器 context、page、response stream 和临时文件都必须在成功、失败、取消和超时路径释放。provider registry 在应用启动后冻结，变更 registry fingerprint 必须生成新的 `ConfigurationFingerprint`。
+
+非 URL candidate 直接返回 `Recovered=true`；URL 恢复成功必须验证域名、重定向链、响应大小、文件魔数和内容哈希。恢复失败返回 `CandidateFailure`，由 `RecoverUrlsNode` 转换为唯一结果端口中的 `CandidateProcessResult`。认证失败、限流和网络超时分别映射为稳定 reason code，不在服务内部无限重试。
+
+#### 归档
+
+```csharp
+public sealed record ArchiveOptions(
+  string OutputRoot,
+  bool OverwriteExisting,
+  bool PreserveOriginal,
+  string NamingPolicyVersion);
+
+public interface IArchiveService
+{
+  Task<ArchiveBatch> ArchiveAsync(
+    PairingBatch pairing,
+    ArchiveOptions options,
+    CancellationToken cancellationToken);
+}
+
+public sealed record ArchivePreparation(
+  string PreparationId,
+  IReadOnlyList<ArchivedArtifact> Artifacts,
+  string PreparationHash,
+  string TemporaryRoot);
+
+public interface IArchiveCommitCoordinator
+{
+  Task<ArchivePreparation> PrepareAsync(
+    PairingBatch pairing,
+    ArchiveOptions options,
+    CancellationToken cancellationToken);
+
+  Task MarkPreparedAsync(
+    ArchivePreparation preparation,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+
+  Task MovePreparedFilesAsync(
+    ArchivePreparation preparation,
+    CancellationToken cancellationToken);
+
+  Task MarkCommittedAsync(
+    ArchivePreparation preparation,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+
+  Task RecoverAsync(
+    string runId,
+    CancellationToken cancellationToken);
+}
+```
+
+归档使用 `DocumentId + NamingPolicyVersion` 作为幂等键；命名策略只接受已归一化领域字段，生成相对路径后再由路径安全组件解析到 `OutputRoot`。同哈希文件视为已归档，内容不同的同名文件按明确冲突策略生成新名称或返回 `ARCHIVE_NAME_CONFLICT`。单个归档失败只更新对应 `CandidateProcessResult`，数据库状态和审计事件必须在同一应用事务中提交。
+
+`NamingPolicyVersion=2026-09-23-v1` 的具体规则与当前 Python 保持一致：
+
+- 普通票据：`{Date}_{DisplayType}_{Amount}_{Seller}{Extension}`；`DisplayType` 对行程单追加“行程单”，folio 固定为“住宿水单”；
+- 火车票：`{DepartureDate}-{DepartureCity}-{DestinationCity}-火车票{Extension}`；缺失城市使用“未知”；
+- 不满足最低归档字段时进入 `待人工复核/NeedsReview_{OriginalFileName}`；无法识别类型进入 `待人工复核/Unrecognized_{OriginalFileName}`；
+- 目录优先使用 `InvoiceDocumentType` 注册表的 `ArchiveFolder`，然后应用已通过校验的公司/供应商路由规则；不能由模型直接指定绝对目录；
+- 非法字符 `\\ / : * ? " < > |`、CR/LF 替换为 `_`，连续空白压缩为一个空格，去除首尾空格、点和下划线；
+- 单个 path segment 最大 120 个 UTF-16 code units，完整相对路径最大 240 个 UTF-16 code units；截断必须保留扩展名和 `DocumentId` 前 8 位；
+- 同内容哈希视为 `Duplicate`；同名不同内容按 `_01`、`_02` 递增后缀处理，不能使用不可审计的随机 UUID；达到 99 后返回 `ARCHIVE_NAME_CONFLICT` 并进入人工复核。
+
+归档采用 `Prepared -> Committed` 两阶段补偿：移动前先写 `Prepared` 记录和临时文件哈希，文件原子替换并 fsync 后再提交 `Committed`。归档成功但数据库提交失败时，启动恢复根据哈希把文件绑定回 `Prepared` 记录并重试数据库提交；数据库成功但移动失败时，记录保持 `Prepared`，不标记为已归档，由恢复任务重试移动。文件和数据库都无法证明一致时进入 `ARCHIVE_RECOVERY_FAILED`，保留文件并人工复核，禁止静默删除。
+
+归档操作的幂等键固定为 `RunId + DocumentId + ProcessingRevision + Role + ContentHash`；`PreparationId` 是该键的稳定 SHA-256 前缀，不是随机重试 ID。`PrepareAsync` 重复调用返回同一 preparation；`MarkPreparedAsync`、文件移动和 `MarkCommittedAsync` 对同一 preparation 重复调用必须返回已有状态，不重复复制或追加审计事件。目标文件存在且 hash 相同返回 `AlreadyExisted=true/Committed`；目标文件存在但 hash 不同按 `_01` 至 `_99` 选择下一个确定性名称，超过 99 返回 `ARCHIVE_NAME_CONFLICT`。
+
+`ArchiveCommitCoordinator` 的数据库状态机固定为 `Absent -> Prepared -> Committed`，失败分支只能为 `Prepared/RecoveryRequired`，禁止直接写 `Committed`。文件移动使用临时文件同目录原子 rename，成功后立即 fsync 文件和目录；SQLite 事务 B 只提交已验证最终 hash。进程在任意步骤终止后，启动恢复只处理 `RecoveryRequired`/`Prepared`，并按决策矩阵重新验证，不依赖进程内 `_archived_ids` 或 `_archive_keys`。
+
+崩溃恢复决策矩阵固定为：
+
+| DB Prepared | Temporary file | Final file | 恢复动作 |
+| --- | --- | --- | --- |
+| 存在 | 存在 | 不存在 | 校验临时 hash，继续移动并提交 |
+| 存在 | 不存在 | 存在且 hash 相同 | 直接补交 `Committed` |
+| 存在 | 存在 | 存在且 hash 相同 | 删除临时副本，补交 `Committed` |
+| 存在 | 任意 | 存在且 hash 不同 | 保留两者，生成 `ARCHIVE_RECOVERY_FAILED` |
+| 存在 | 不存在 | 不存在 | 保留 Prepared，重新准备或人工复核 |
+| 不存在 | 任意 | 存在 | 不自动认领，记录孤立文件诊断 |
+
+`ARCHIVE_RECOVERY_FAILED` 的 details 固定为 `PreparationId`、`RunId`、`DocumentId`、`ProcessingRevision`、`RelativePath`、`ExpectedHash`、`TemporaryHash`、`FinalHash`、`ObservedStates` 和 `Resolution=manual_review`；路径必须是相对路径，hash 只允许完整 SHA-256，不能包含异常文本或绝对路径。
+
+#### 报表
+
+```csharp
+public sealed record ReportRequest(
+  string RunId,
+  string OutputRoot,
+  string ReportName,
+  IReadOnlyList<CandidateProcessResult> Results,
+  IReadOnlyList<ArchivedArtifact> Artifacts,
+  string TemplateVersion);
+
+public sealed record ReportExportResult(
+  string ReportPath,
+  string ContentHash,
+  int InvoiceRowCount,
+  int ManualReviewRowCount,
+  string TemplateVersion);
+
+public sealed record ReportOpenToken(
+  string Token,
+  string RunId,
+  string RelativePath,
+  DateTimeOffset ExpiresAtUtc,
+  string ContentHash);
+
+public sealed record ReportExportFailureDetails(
+  string Field,
+  string Code,
+  string SafeValue,
+  bool Retryable);
+
+public interface IReportExporter
+{
+  Task<ReportExportResult> ExportAsync(
+    ReportRequest request,
+    CancellationToken cancellationToken);
+}
+```
+
+报表必须由统一的候选终态结果生成，至少包含汇总页、发票明细页和人工复核页；失败候选不能被静默过滤。输出路径只能由 `OutputRoot + ReportName` 经过路径安全校验得到，重复导出使用内容哈希和幂等键处理。
+
+`TemplateVersion=2026-09-23-v1` 的工作簿 schema 固定为以下三个工作表，名称和列顺序不可变：
+
+| 工作表 | 列顺序 |
+| --- | --- |
+| `运行汇总` | `RunId`、`Status`、`DateFrom`、`DateToExclusive`、`ScannedMessageCount`、`CandidateCount`、`ResolvedCount`、`DuplicateCount`、`RetainedCount`、`ManualReviewCount`、`UnresolvedCount`、`CancelledCount`、`ReportGeneratedAtUtc` |
+| `发票明细` | `Sequence`、`DocumentId`、`Status`、`InvoiceDate`、`InvoiceCode`、`InvoiceNumber`、`Purchaser`、`Seller`、`DocumentType`、`Category`、`Amount`、`TaxAmount`、`TotalAmount`、`Confidence`、`PairingState`、`ArchivePath`、`ReasonCode` |
+| `人工复核` | `ReviewId`、`DocumentId`、`Status`、`ReasonCode`、`SourceFileName`、`SourceKind`、`EditableFields`、`CreatedAtUtc`、`ResolvedAtUtc`、`ResolvedBy`、`Comment` |
+
+字段映射固定为：`RunSummary` 直接映射 `运行汇总`；每个 `CandidateProcessResult` 一行映射 `发票明细`，没有 `InvoiceDocument` 的失败结果仍必须输出一行，发票字段为空；`ManualReviewItem` 映射 `人工复核`，`EditableFields` 使用按字母排序后以 `,` 连接的白名单字段名。`ArchivePath` 只能是相对路径，`ReasonCode` 使用稳定错误码，不能填异常文本。
+
+格式固定为：
+
+- 首行冻结、加粗、深色底白字；自动筛选覆盖完整表头；
+- `DateFrom`、`DateToExclusive`、`InvoiceDate` 使用 `yyyy-mm-dd`；UTC 时间使用 `yyyy-mm-ddThh:mm:ssZ`；
+- `Amount`、`TaxAmount`、`TotalAmount` 使用 Excel numeric cell 和 `0.00` 格式；空值保持空 cell，不写“未知”；
+- `Confidence` 使用 numeric cell 和 `0.000` 格式；状态、类型、reason code 使用文本；
+- 所有 worksheet 默认字体为 Calibri 11，表头行高 24，数据行高 20，启用自动换行但不允许内容改变列宽；
+- 固定列宽：`运行汇总` 18/16/14/14/22/16/16/16/16/18/16/14/24；`发票明细` 10/66/16/14/18/22/24/28/16/18/14/14/14/12/16/48/28；`人工复核` 18/66/18/28/28/16/32/24/24/20/48；
+- `ManualReview`、`Unresolved` 和 `Cancelled` 行使用浅色状态填充，但颜色不是业务判断依据；
+- workbook properties 写入 `TemplateVersion`、`RunId` 和生成时间；不写入 API Key、OCR 原文、邮件正文或完整 URL。
+
+`report.open` 只返回一次性 `ReportOpenToken`：token 随机生成、只保存短 hash，默认有效期 60 秒、成功消费一次后立即失效，最多允许同一 `runId` 并发 3 个未消费 token。token 只绑定已提交的相对报告路径和 content hash，过期、重复消费、hash 不一致或 run 不存在分别返回 `REPORT_TOKEN_EXPIRED`、`REPORT_TOKEN_ALREADY_USED`、`REPORT_HASH_MISMATCH` 和 `RUN_NOT_FOUND`。报表生成失败统一返回 `REPORT_EXPORT_FAILED`，`error.details` 只能是 `ReportExportFailureDetails[]`，`Field` 只允许 `OutputRoot`、`ReportName`、`Workbook`、`TemplateVersion`、`Persistence`，不得放异常文本或绝对路径。
+
+旧 Python 报表的 `分类汇总`、`成功明细`、`异常记录` 不直接作为新 workbook schema；迁移测试必须把同一候选输入同时投影到旧 workbook matrix 和新三 sheet matrix，核对候选数量、状态、金额、reason code 和人工复核数量。旧绝对 `output_path` 只作为本地测试输入，目标 `ReportExportResult.ReportPath` 和 `report.open` 永远只保存相对路径、content hash 和一次性 token。
+
+旧 `export_run_summary` 的新命令映射固定为：用户点击导出 -> `report.export` -> 使用已提交 `RunSummary`/candidate results 生成 ClosedXML workbook -> 保存相对报告路径和 hash -> 返回 `ReportExportRpcResult` -> 用户需要打开时再调用 `report.open`。旧 `get_results`、`export_run_summary`、`open_folder`、`view_invoice` 不注册到新 dispatcher；迁移 fixture 中的绝对路径只用于验证被拒绝。
+
+报表 golden fixture 使用 JSON 而不是比较二进制 xlsx：
+
+```json
+{
+  "templateVersion": "2026-09-23-v1",
+  "runId": "run-1",
+  "results": [
+    {
+      "sequence": 1,
+      "documentId": "document-1",
+      "status": "Resolved",
+      "invoice": {
+        "invoiceDate": "2026-09-22",
+        "invoiceNumber": "12345678",
+        "purchaser": "Example Co",
+        "seller": "Example Seller",
+        "documentType": "Catering",
+        "amount": "100.00",
+        "taxAmount": "6.00",
+        "totalAmount": "106.00",
+        "confidence": "0.950"
+      },
+      "archivePath": "餐饮/20260922_餐饮_106.00_Example Seller.pdf",
+      "reasonCode": ""
+    },
+    {
+      "sequence": 2,
+      "documentId": "document-2",
+      "status": "ManualReview",
+      "invoice": null,
+      "archivePath": "",
+      "reasonCode": "PAIRING_AMBIGUOUS"
+    }
+  ],
+  "reviews": [
+    {
+      "reviewId": "review-1",
+      "documentId": "document-2",
+      "status": "Open",
+      "reasonCode": "PAIRING_AMBIGUOUS",
+      "editableFields": ["Amount", "InvoiceDate", "Seller"]
+    }
+  ]
+}
+```
+
+golden 测试将 fixture 映射为每张表的二维 cell matrix，并断言 sheet 名称、列顺序、行数、字段值、numeric/date 类型、number format、冻结行、筛选范围、列宽和 template version；不比较 ClosedXML 生成的 zip/XML 文件字节序。另设一条导出回读测试，用 ClosedXML 重新打开 workbook，验证没有公式错误、损坏工作表或超出输出根目录的路径。
+
+#### 人工复核
+
+```csharp
+public enum ManualReviewDecision
+{
+  Accept,
+  Reject,
+  CorrectAndAccept,
+  RetryExtraction
+}
+
+public enum ManualReviewState
+{
+  Open,
+  Resolved,
+  Rejected
+}
+
+public sealed record ManualReviewItem(
+  string ReviewId,
+  string RunId,
+  DocumentIdentity Identity,
+  CandidateProcessResult CurrentResult,
+  string ReasonCode,
+  int Revision,
+  DateTimeOffset CreatedAtUtc,
+  DateTimeOffset? ResolvedAtUtc);
+
+public sealed record ManualReviewUpdate(
+  string ReviewId,
+  int ExpectedRevision,
+  ManualReviewDecision Decision,
+  InvoiceDocument? CorrectedInvoice = null,
+  string Comment = "");
+
+public interface IManualReviewService
+{
+  Task<IReadOnlyList<ManualReviewItem>> ListAsync(
+    string runId,
+    ManualReviewState? state,
+    int offset,
+    int limit,
+    CancellationToken cancellationToken);
+
+  Task<ManualReviewItem?> GetAsync(
+    string reviewId,
+    CancellationToken cancellationToken);
+
+  Task<CandidateProcessResult> SubmitAsync(
+    ManualReviewUpdate update,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+}
+```
+
+人工复核提交必须校验 revision，防止两个页面覆盖彼此修改；`CorrectAndAccept` 产生新的领域 revision 并保留原始 AI 结果和修正审计；`RetryExtraction` 只能重新排队允许重试的 candidate；`Reject` 进入 `Unresolved` 或业务规定的非目标状态。人工复核不会直接写文件，重新归档和报表由后续应用命令触发。
+
+人工复核闭环固定为：
+
+1. `review.submit` 在一个 transaction 内锁定 `ManualReviewItems.CurrentRevision`，校验 `ExpectedRevision`、字段白名单和当前 candidate 状态；冲突返回 `REVIEW_REVISION_CONFLICT`，不覆盖已有修正。
+2. `Accept` 保留原解析结果，生成新的 accepted processing revision，写入人工决定和审计事件；若原结果已有 `Prepared` 归档，则进入归档补偿队列。
+3. `CorrectAndAccept` 只允许修正 `InvoiceDate`、`Purchaser`、`Seller`、`Amount`、`TaxAmount`、`TotalAmount`、`InvoiceCode`、`InvoiceNumber`、`DocumentType`、`Category`、路线字段和明细；禁止修改 `DocumentId`、来源身份、文件哈希、模型 trace 和原始附件。
+4. `Reject` 的最终候选状态固定为 `Unresolved`，reason code 为 `MANUAL_REJECTED`；如果用户选择明确的非目标公司结果，则状态为 `Retained`，文档类型为 `NonTargetCompanyInvoice`，不能使用模糊的“删除”。
+5. `RetryExtraction` 只允许原失败为 `Retryable=true` 且尚未超过最大次数的 candidate；它创建新的 `ProcessingRevision`，回到 `ExtractDocumentsNode`，不重复扫描邮箱或创建新 `DocumentId`。
+6. 接受或修正后由 `ReviewResolutionCoordinator` 依次触发：领域校验 -> 重新配对 -> 归档/归档补偿 -> 报表增量或重生成 -> 审计事件；任一步失败都保留已提交 revision，并创建可恢复的后续任务，不回滚人工决定。
+7. 修正字段使用领域校验：金额必须是有限 Decimal，日期必须是有效 `DateOnly`，金额/税额/价税合计关系必须通过 `InvoiceAcceptanceService`，文档类型必须在注册白名单中。审核人使用当前 Windows 用户的不可变审计标识和显示名快照，不接受前端自报身份。
+
+### 运行基础设施接口
+
+这些接口位于 `InvoiceFlowAI.Application` 的抽象边界，具体实现由 `InvoiceFlowAI.Infrastructure.Persistence`、`InvoiceFlowAI.App.Rpc` 或运行编排层提供。它们不暴露 EF Core、Avalonia.Controls.WebView、MailKit 或 ZeroPipeline 类型。
+
+#### 应用事务抽象
+
+应用层使用显式事务对象，不使用 EF Core 的 `DbContext`、`IDbContextTransaction` 或隐式 ambient transaction：
+
+```csharp
+public enum TransactionPurpose
+{
+  RunCreate,
+  RunTransition,
+  CandidateCommit,
+  CheckpointCommit,
+  ArchivePrepare,
+  ArchiveCommit,
+  ReviewSubmit,
+  EventAppend,
+  Migration
+}
+
+public interface IUnitOfWorkFactory
+{
+  Task<IUnitOfWork> BeginAsync(
+    TransactionPurpose purpose,
+    CancellationToken cancellationToken);
+}
+
+public interface IUnitOfWork : IAsyncDisposable
+{
+  string TransactionId { get; }
+  TransactionPurpose Purpose { get; }
+  bool IsCompleted { get; }
+
+  Task CommitAsync(CancellationToken cancellationToken);
+  Task RollbackAsync(CancellationToken cancellationToken);
+}
+```
+
+规则固定为：
+
+- 只有 `IUnitOfWorkFactory` 可以创建事务；同一 UoW 内由一个 scoped `InvoiceFlowDbContext` 执行所有仓储写入；
+- 变更仓储和 `IAuditStore` 的写方法必须显式接收同一个 `IUnitOfWork`，禁止各自开启独立事务；
+- UoW 只能由创建它的应用协调器提交或回滚，提交/回滚后不可再次使用；未完成的 UoW 在 `DisposeAsync` 时回滚；
+- 不允许跨线程并发使用同一个 UoW 或 `DbContext`，不允许嵌套 UoW；需要新事务时必须先结束外层事务；
+- `CommitAsync` 内部按 SQLite `BEGIN IMMEDIATE`、有界 busy timeout 和一次性提交执行；锁冲突、磁盘满和约束错误映射为稳定持久化错误；
+- 只读查询不强制开启 UoW，但必须使用独立短生命周期 DbContext；
+- 事务边界不跨越网络请求、OCR、DeepSeek、Playwright 或文件长时间处理。外部副作用先完成准备，再通过短事务写状态和审计。
+
+`IAuditStore`、`IRunStateStore`、人工复核提交和 checkpoint 提交使用同一 UoW 时，业务记录和审计记录要么共同提交，要么共同回滚。应用服务负责创建 UoW、调用各接口、处理异常并在一个位置决定 commit/rollback。
+
+#### UoW 内的仓储组合
+
+仓储是 Application 层的持久化抽象；写方法必须使用调用方创建的 `IUnitOfWork`，读方法使用短生命周期查询上下文：
+
+```csharp
+public interface IRunRepository
+{
+  Task InsertAsync(RunInput request, string configurationFingerprint, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task<RunSnapshot?> GetAsync(string runId, CancellationToken cancellationToken);
+  Task UpdateTransitionAsync(RunTransition transition, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task UpdateCheckpointAsync(RunCheckpoint checkpoint, int expectedRevision, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task CompleteAsync(string runId, RunSummary summary, IUnitOfWork transaction, CancellationToken cancellationToken);
+}
+
+public sealed record DocumentProcessingRecord(
+  string DocumentId,
+  int ProcessingRevision,
+  string RunId,
+  long Sequence,
+  string Stage,
+  CandidateStatus Status,
+  string ReasonCode,
+  bool Retryable,
+  int Attempt,
+  string ResultJson,
+  string TraceJson);
+
+public interface IDocumentRepository
+{
+  Task UpsertSourceAsync(DocumentSource source, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task<DocumentSource?> GetSourceAsync(string documentId, CancellationToken cancellationToken);
+  Task<DocumentProcessingRecord?> GetProcessingAsync(string documentId, int processingRevision, CancellationToken cancellationToken);
+  Task UpsertProcessingAsync(DocumentProcessingRecord record, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task<IReadOnlyList<DocumentProcessingRecord>> ListRunResultsAsync(string runId, CancellationToken cancellationToken);
+}
+
+public interface IInvoiceRepository
+{
+  Task UpsertInvoiceAsync(InvoiceDocument invoice, int processingRevision, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task ReplaceItemsAsync(string invoiceId, IReadOnlyList<InvoiceItem> items, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task<InvoiceDocument?> GetAsync(string documentId, int processingRevision, CancellationToken cancellationToken);
+  Task<bool> ExistsByDuplicateKeyAsync(string duplicateKey, CancellationToken cancellationToken);
+}
+
+public interface IManualReviewRepository
+{
+  Task InsertAsync(ManualReviewItem item, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task<ManualReviewItem?> GetAsync(string reviewId, CancellationToken cancellationToken);
+  Task<IReadOnlyList<ManualReviewItem>> ListAsync(string runId, ManualReviewState? state, int offset, int limit, CancellationToken cancellationToken);
+  Task UpdateResolutionAsync(ManualReviewUpdate update, ManualReviewItem resolved, IUnitOfWork transaction, CancellationToken cancellationToken);
+}
+
+public interface IArchiveRepository
+{
+  Task InsertPreparedAsync(ArchivePreparation preparation, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task MarkCommittedAsync(string preparationId, IReadOnlyList<ArchivedArtifact> artifacts, IUnitOfWork transaction, CancellationToken cancellationToken);
+  Task<IReadOnlyList<ArchivePreparation>> ListPreparedAsync(string runId, CancellationToken cancellationToken);
+  Task<bool> ExistsCommittedAsync(string documentId, int processingRevision, string role, string contentHash, CancellationToken cancellationToken);
+}
+```
+
+`IRunStateStore`、`IRunRepository` 等上层接口可以由同一个 Infrastructure adapter 委托实现，但不能形成第二套状态语义。`IDocumentRepository` 负责来源和 processing revision，`IInvoiceRepository` 只负责归一化发票及明细，`IManualReviewRepository` 负责 revision 乐观并发，`IArchiveRepository` 只负责 `Prepared/Committed` 数据状态；文件系统移动由 `IArchiveCommitCoordinator` 负责。仓储不得写 Serilog，不得直接发布 Avalonia WebView 事件。
+
+#### 运行状态与 checkpoint
+
+```csharp
+public sealed record RunSnapshot(
+  string RunId,
+  RunTerminalStatus? TerminalStatus,
+  string Stage,
+  string TerminalReasonCode,
+  long LastEventSequence,
+  IReadOnlyDictionary<string, RunCheckpoint> Checkpoints,
+  RunSummary? Summary,
+  int Version);
+
+public sealed record RunCheckpoint(
+  string RunId,
+  string NodeId,
+  string Stage,
+  long LastCommittedSequence,
+  string InputCursorJson,
+  int OutputCount,
+  string State,
+  int CheckpointRevision,
+  DateTimeOffset UpdatedAtUtc);
+
+public sealed record RunTransition(
+  string RunId,
+  string ExpectedState,
+  string NewState,
+  string Stage,
+  string ReasonCode = "",
+  int ExpectedVersion = 0);
+
+public interface IRunStateStore
+{
+  Task CreateAsync(
+    RunInput request,
+    string configurationFingerprint,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+
+  Task<RunSnapshot?> GetAsync(
+    string runId,
+    CancellationToken cancellationToken);
+
+  Task<IReadOnlyList<RunSnapshot>> ListRecoverableAsync(
+    CancellationToken cancellationToken);
+
+  Task<RunSnapshot> TransitionAsync(
+    RunTransition transition,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+
+  Task SaveCheckpointAsync(
+    RunCheckpoint checkpoint,
+    int expectedCheckpointRevision,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+
+  Task CompleteAsync(
+    string runId,
+    RunTerminalStatus status,
+    RunSummary summary,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+}
+```
+
+`IRunStateStore` 是唯一允许改变运行状态和 checkpoint 的接口。`TransitionAsync` 必须使用 optimistic concurrency；状态版本不匹配返回 `RUN_STATE_CONFLICT`，不能覆盖另一个线程或重连页面的状态。`CompleteAsync` 是一次性终态屏障，已终态运行重复提交只能返回已有快照。checkpoint 只保存已提交 packet 的 sequence，不能保存 API Key、OCR 原文、图片或完整邮件正文。
+
+#### 审计存储
+
+```csharp
+public sealed record AuditEvent(
+  string AuditEventId,
+  string RunId,
+  long EventSequence,
+  string EventType,
+  string Stage,
+  string NodeId,
+  string? DocumentId,
+  int? ProcessingRevision,
+  string ReasonCode,
+  string PayloadJson,
+  string PayloadHash,
+  DateTimeOffset OccurredAtUtc);
+
+public interface IAuditStore
+{
+  Task AppendAsync(
+    AuditEvent auditEvent,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+
+  Task AppendBatchAsync(
+    IReadOnlyList<AuditEvent> auditEvents,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+
+  Task<IReadOnlyList<AuditEvent>> ReadRunAsync(
+    string runId,
+    long afterSequence,
+    int limit,
+    CancellationToken cancellationToken);
+}
+```
+
+`IAuditStore` 只允许 append 和只读查询，不提供 update/delete。`AppendAsync`/`AppendBatchAsync` 必须加入调用方当前的应用 transaction；实现不能自行开启一个独立提交，否则业务状态成功而审计失败时会产生不可接受的不一致。审计 payload 只允许稳定 schema 和脱敏字段，原始正文、图片、秘密和完整 URL 必须在进入 store 前被拒绝。
+
+审计 payload 的首版白名单为：`run.created`、`run.stage_changed`、`run.progress_committed`、`run.candidate_result`、`run.failed`、`run.cancelled`、`run.completed`、`settings.changed`、`account.changed`、`ruleset.saved`、`ruleset.rollback`、`review.created`、`review.resolved`、`archive.prepared`、`archive.committed`、`archive.recovery_failed`、`provider.rule_conflict` 和 `parser.conflict`。每种 event type 必须有固定 DTO schema，未知 event type 拒绝写入并返回 `AUDIT_EVENT_TYPE_INVALID`。
+
+审计事件使用按 run 的 hash chain：`PayloadHash = SHA256(CanonicalJson(Payload))`，并在 payload envelope 中保存 `PreviousPayloadHash`；首个事件使用 64 个零字符。链断裂、sequence 重复、前一 hash 不匹配返回 `AUDIT_CHAIN_INVALID`，阻止当前事务提交。审计数据长期 append-only，默认保留 7 年；`RunEvents` 只保留 30 天或每个 run 最近 10,000 条，以先达到者为 compact 触发条件。compact 只能删除已终态 run 的中间进度事件，保留首个 snapshot、最后一个 terminal event 和 event sequence gap marker；compact 失败返回 `EVENT_RETENTION_FAILED`，不删除任何事件。SQLite 文件超过 2 GiB 或剩余磁盘低于 2 GiB 时停止 compact 和新 run，并返回 `PERSISTENCE_DISK_FULL`。
+
+#### 重试协调
+
+```csharp
+public sealed record RetryContext(
+  string RunId,
+  string Stage,
+  int Attempt,
+  int MaxAttempts,
+  DateTimeOffset NowUtc);
+
+public sealed record RetryDecision(
+  bool Retryable,
+  TimeSpan Delay,
+  string ReasonCode,
+  int NextAttempt,
+  bool EscalateToRunFailure = false);
+
+public interface IRetryCoordinator
+{
+  RetryDecision Decide(
+    CandidateFailure failure,
+    RetryContext context);
+
+  Task EnqueueAsync(
+    DocumentCandidate candidate,
+    RetryDecision decision,
+    CancellationToken cancellationToken);
+
+  Task<IReadOnlyList<DocumentCandidate>> DequeueReadyAsync(
+    string runId,
+    int limit,
+    CancellationToken cancellationToken);
+}
+```
+
+`IRetryCoordinator` 只负责错误分类、退避、尝试次数和重新投递，不执行 parser、AI、邮箱或归档操作。取消、认证失败、非法 JSON、请求体过大和数据库错误不可盲目重试；超时、连接断开和限流按错误码与阶段策略决定。重新投递保留原 `DocumentId`、原始 `Sequence` 和 processing revision 关联，不能生成新 candidate 身份。
+
+#### 进度发布
+
+```csharp
+public sealed record ProgressEvent(
+  string RunId,
+  long EventSequence,
+  string EventType,
+  string Stage,
+  string PayloadJson,
+  DateTimeOffset EmittedAtUtc);
+
+public interface IProgressPublisher
+{
+  Task<ProgressEvent> PublishStageChangedAsync(
+    string runId,
+    string previousStage,
+    string stage,
+    CancellationToken cancellationToken);
+
+  Task<ProgressEvent> PublishProgressAsync(
+    string runId,
+    string stage,
+    int completed,
+    int total,
+    CancellationToken cancellationToken);
+
+  Task<ProgressEvent> PublishDocumentResultAsync(
+    string runId,
+    CandidateProcessResult result,
+    CancellationToken cancellationToken);
+
+  Task<ProgressEvent> PublishTerminalAsync(
+    string runId,
+    RunSummary summary,
+    CancellationToken cancellationToken);
+}
+```
+
+`IProgressPublisher` 不修改业务状态，也不决定终态；它只将已提交状态映射为脱敏事件。发布失败不能回滚已提交业务事务，但事件必须写入 `RunEvents` 以便重放；事件序号由后端单调分配，不能由前端提供。
+
+#### RPC 分发
+
+```csharp
+public sealed record RpcRequestEnvelope(
+  string Protocol,
+  string Id,
+  string Method,
+  string ParamsJson);
+
+public sealed record RpcConnectionContext(
+  string ConnectionId,
+  string ClientVersion,
+  string NegotiatedProtocol);
+
+public sealed record RpcResponseEnvelope(
+  string Protocol,
+  string Id,
+  bool Ok,
+  string? ResultJson,
+  RpcError? Error);
+
+public sealed record RpcError(
+  string Code,
+  string Scope,
+  bool Retryable,
+  string UserMessage,
+  bool DetailsAvailable,
+  string? DetailsJson = null);
+
+public interface IRpcDispatcher
+{
+  Task<RpcResponseEnvelope> DispatchAsync(
+    RpcRequestEnvelope request,
+    RpcConnectionContext connection,
+    CancellationToken cancellationToken);
+}
+```
+
+`IRpcDispatcher` 只负责协议版本协商、JSON/schema 校验、请求幂等键、方法路由、错误映射和调用权限边界；它不直接访问数据库或执行业务节点。`bridge.hello` 是连接初始化的唯一例外。长任务方法只返回 accepted/run ID，进度和终态通过 `IProgressPublisher` 发送；请求重复时按 `ConnectionId + request.Id` 返回已缓存响应，不重复创建运行或提交人工修改。
+
+#### 事件回放
+
+```csharp
+public sealed record StoredRunEvent(
+  string RunId,
+  long EventSequence,
+  string EventType,
+  string PayloadJson,
+  DateTimeOffset EmittedAtUtc);
+
+public sealed record EventReplayResult(
+  RunSnapshot Snapshot,
+  IReadOnlyList<StoredRunEvent> Events,
+  bool RequiresFullRefresh,
+  long LatestSequence);
+
+public interface IEventReplayStore
+{
+  Task AppendAsync(
+    StoredRunEvent runEvent,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+
+  Task<EventReplayResult> ReadSinceAsync(
+    string runId,
+    long afterSequence,
+    int limit,
+    CancellationToken cancellationToken);
+
+  Task CompactAsync(
+    string runId,
+    long throughSequence,
+    CancellationToken cancellationToken);
+}
+```
+
+`IEventReplayStore` 对应独立的 `RunEvents` 表，不等同于 `AuditEvents`：进度事件可以按保留策略压缩，审计事件必须长期 append-only 保存。`RunEvents` 使用 `(RunId, EventSequence)` 唯一约束；`ReadSinceAsync` 超出保留窗口时返回 `RequiresFullRefresh=true`，前端必须先使用最新 `RunSnapshot`，不能拼接不完整事件流。append 与 `Runs.LastEventSequence` 更新在同一事务内完成。
+
+#### 旧内存运行状态迁移
+
+Python 的进程内 `RunStateStore`、进度 snapshot 和轮询状态不是持久化来源；迁移到 .NET 后不尝试反序列化旧内存状态。新运行从 `Created` 开始，所有状态转换、candidate processing、checkpoint 和 `RunEvents` 在 SQLite 中提交。若启动时发现旧 Python 进程遗留状态文件或无法映射为 `RunSnapshot`，标记为诊断信息并创建新的空运行，不伪造已完成结果。
+
+每个 ZeroPipeline packet 的提交顺序固定为：业务结果 + `AuditEvents` + `RunCheckpoints` + `RunEvents` + `Runs.LastEventSequence` 同一 UoW 提交；提交成功后才向 Avalonia WebView 推送事件。页面断线时事件仍写入 `RunEvents`，重连通过 `ReadSinceAsync` 补发；超过保留窗口则先返回完整 snapshot，再从当前 sequence 开始接收新事件。旧 `get_progress` 轮询结果只作为迁移测试输入，不能写入 `RunEvents`。
+
+旧生命周期状态映射固定为：旧 `running`/`processing` -> 新 `Running`；旧 `completed` 且无错误候选 -> `Completed`；旧 `completed` 且存在未解决、超时或 quota 候选 -> `PartialSuccess`；旧 `completed` 且存在人工复核候选 -> `NeedsManualReview`；旧 `failed` -> `Failed`；旧 `stop_requested=true` 且没有运行级失败 -> `Cancelled`。无法从旧 snapshot 判断的状态不得猜测为 `Completed`，统一标记 `RUN_STATE_MIGRATION_UNRESOLVED` 并要求新运行。
+
+终态决策顺序固定为 `Failed > Cancelled > NeedsManualReview > PartialSuccess > Completed`。候选级 `Unresolved`、`Timeout`、`QuotaExhausted` 和候选级 `AuthFailed` 不得抛运行级异常，统一计入 `PartialSuccess`；只有凭据不可用、数据库/审计提交失败、报表生成失败、不可恢复节点故障和图校验失败进入 `Failed`。取消信号已被接受且没有先发生运行级失败时进入 `Cancelled`。非关键 finalizer 失败只追加到 `FinalizerFailures`，不得覆盖已决定的终态；只有审计、数据库和必需报表提交失败才可升级为 `Failed`。
+
+### 核心领域 DTO
+
+以下类型位于 `InvoiceFlowAI.Domain`，是 parser、候选流水线、配对、归档、审计和持久化之间的唯一业务数据契约。它们使用不可变 `record`，不引用 MailKit、PdfPig、PDFiumCore、SkiaSharp、Avalonia.Controls.WebView、EF Core 或 ZeroPipeline 类型；JSON/RPC 和数据库分别使用 Contracts/Infrastructure 的映射 DTO，不能反向污染领域模型。
+
+#### 来源身份与候选
+
+```csharp
+public enum DocumentSourceKind
+{
+  Attachment,
+  Url,
+  LocalFile,
+  EmailBody,
+  Generated
+}
+
+public sealed record DocumentIdentity(
+  string DocumentId,
+  string SourceMessageUid = "",
+  string SourceFileName = "",
+  string SourceLocator = "",
+  DocumentSourceKind SourceKind = DocumentSourceKind.Attachment,
+  string ProviderGroupKey = "");
+
+public sealed record DocumentSource(
+  DocumentIdentity Identity,
+  string LocalPath = "",
+  string SourceUrl = "",
+  string MimeType = "",
+  string ContentHash = "",
+  string AttachmentPartId = "",
+  string Mailbox = "",
+  string Subject = "",
+  string Sender = "");
+
+public sealed record MailboxMessage(
+  string AccountId,
+  string Mailbox,
+  string MessageUid,
+  string MessageId,
+  DateTimeOffset ReceivedAt,
+  string Subject,
+  string Sender,
+  IReadOnlyList<MailAttachment> Attachments,
+  IReadOnlyDictionary<string, string>? Headers = null);
+
+public sealed record MailAttachment(
+  string PartId,
+  string FileName,
+  string MimeType,
+  long Size,
+  string LocalPath = "",
+  string ContentHash = "");
+
+public sealed record DocumentCandidate(
+  DocumentIdentity Identity,
+  int Sequence,
+  DocumentSource Source,
+  string Channel = "",
+  string SourceFileName = "",
+  string CompatibilityHistoryKey = "",
+  string ProviderFamily = "",
+  bool IsParallelSafe = true,
+  IReadOnlyDictionary<string, string>? Hints = null);
+```
+
+`DocumentId` 必须在 candidate 收集阶段生成并在整次运行内保持不变：本地附件优先使用内容 SHA-256，URL 优先使用规范化 URL 的 SHA-256，无法计算时使用包含邮件 UID、附件 part、文件名和 sequence 的稳定降级键。`CompatibilityHistoryKey` 只用于避免重复处理和兼容历史判断，不作为发票号码。`SourceLocator` 保存受控的本地相对定位信息或脱敏 URL 标识，不把原始授权 URL 放进领域事件。
+
+`Sequence` 从 candidate 收集阶段开始分配，按邮箱扫描顺序单调递增；重试、URL 恢复和节点重投递不能改变它。`IsParallelSafe=false` 用于 URL 浏览器恢复、供应商上下文或其他不能并发共享状态的 candidate；应用层并发调度器必须尊重该标记。
+
+#### 发票与明细
+
+```csharp
+public enum InvoiceDocumentType
+{
+  Other,
+  Catering,
+  TrainTicket,
+  Taxi,
+  AccommodationInvoice,
+  AccommodationStatement,
+  AccommodationConfirmation,
+  FlightTicket,
+  Itinerary,
+  TravelService,
+  Toll,
+  FixedInvoice,
+  NonTargetCompanyInvoice,
+  PersonalNonReimbursementInvoice
+}
+
+[Flags]
+public enum InvoiceFlags
+{
+  None = 0,
+  Itinerary = 1,
+  Folio = 2,
+  CreditNote = 4,
+  Cancellation = 8,
+  LowConfidence = 16,
+  RequiresManualReview = 32
+}
+
+public sealed record InvoiceRoute(
+  DateOnly? DepartureDate = null,
+  string DepartureCity = "",
+  string DestinationCity = "");
+
+public sealed record InvoiceItem(
+  string Name = "",
+  string Specification = "",
+  string Unit = "",
+  decimal? Quantity = null,
+  decimal? UnitPrice = null,
+  decimal? Amount = null,
+  decimal? TaxRate = null,
+  decimal? TaxAmount = null);
+
+public sealed record InvoiceDocument(
+  DocumentIdentity Identity,
+  bool IsInvoice = true,
+  DateOnly? InvoiceDate = null,
+  string Purchaser = "",
+  string Seller = "",
+  decimal? Amount = null,
+  decimal? TaxAmount = null,
+  decimal? TotalAmount = null,
+  string InvoiceCode = "",
+  string InvoiceNumber = "",
+  InvoiceDocumentType DocumentType = InvoiceDocumentType.Other,
+  string Category = "其他",
+  InvoiceRoute? Route = null,
+  InvoiceFlags Flags = InvoiceFlags.None,
+  IReadOnlyList<InvoiceItem>? Items = null,
+  decimal Confidence = 0m,
+  string ParserName = "",
+  string ExtractionRevision = "");
+```
+
+领域不保存模型原始字段名 `Date`、`Type`、`Departure_Date` 等；这些名称只允许出现在 DeepSeek/旧 Python 兼容映射层。`InvoiceNormalizer` 负责：日期按业务时区转为 `DateOnly`；金额使用 `decimal`，禁止 `double`；括号负数和红字票保留负号；`TotalAmount` 优先使用价税合计并校验 `Amount + TaxAmount`；空、未知和非法值统一为 `null` 或空字符串；文档类型必须归一化到 `InvoiceDocumentType`。
+
+`InvoiceDocument` 的 `Identity` 必须与输入 candidate 一致。解析器不得根据模型输出重新生成 `DocumentId`。`Confidence` 是 0 到 1 的本地归一化值，不直接等同于 OCR 或 DeepSeek 的原始置信度；无法比较时使用 0 并设置 `LowConfidence`。`Items` 为空表示未提取明细，不代表发票没有明细；需要人工复核的原因必须通过 `CandidateFailure` 或 `InvoiceFlags.RequiresManualReview` 明确表达。
+
+#### 解析、配对与归档结果
+
+```csharp
+public sealed record InvoiceParseResult(
+  bool Succeeded,
+  InvoiceDocument? Invoice,
+  string DocumentId,
+  string SourceFileName,
+  string ParserName,
+  CandidateFailure? Failure = null,
+  bool Retryable = false);
+
+public sealed record PairingKey(
+  string InvoiceNumber = "",
+  string SourceMessageUid = "",
+  string Seller = "",
+  DateOnly? BusinessDate = null,
+  decimal? Amount = null);
+
+public sealed record PairedArtifacts(
+  DocumentIdentity InvoiceIdentity,
+  IReadOnlyList<DocumentIdentity> CompanionIdentities,
+  PairingKey Key,
+  decimal Score,
+  bool RequiresManualReview,
+  string ReasonCode = "");
+
+public sealed record PairingBatch(
+  IReadOnlyList<PairedArtifacts> Pairs,
+  IReadOnlyList<CandidateProcessResult> Results);
+
+public sealed record ArchivedArtifact(
+  DocumentIdentity Identity,
+  string Role,
+  string RelativePath,
+  string FileName,
+  string ContentHash,
+  bool AlreadyExisted = false);
+
+public sealed record ArchiveBatch(
+  IReadOnlyList<ArchivedArtifact> Artifacts,
+  IReadOnlyList<CandidateProcessResult> Results);
+
+public sealed record RunSummary(
+  string RunId,
+  RunTerminalStatus Status,
+  string ReasonCode,
+  CandidateStatusCounts Counts,
+  int ScannedMessageCount,
+  int CandidateCount,
+  string? ReportPath,
+  bool AuditCommitted,
+  TimeSpan Duration,
+  RunFailure? PrimaryFailure = null,
+  IReadOnlyList<RunFailure>? FinalizerFailures = null);
+
+public sealed record CandidateStatusCounts(
+  int Resolved,
+  int Duplicate,
+  int Retained,
+  int ManualReview,
+  int Unresolved,
+  int Cancelled,
+  int QuotaExhausted,
+  int AuthFailed,
+  int Timeout);
+```
+
+`InvoiceParseResult` 是 parser 到应用层的局部结果；`CandidateProcessResult` 是贯穿恢复、提取、配对和归档的最终候选结果，二者不能混用。配对只能消费已完成解析的 `InvoiceDocument` 和显式的 companion identity；归档只接受 `RelativePath`，绝不接受由模型或邮件内容直接拼接的绝对路径。`RunSummary` 只在所有输入端收到 EOF、所有候选达到终态且报表/审计策略完成后生成。
+
+上述 DTO 的不变量统一由构造函数或 `DomainValidation` 校验：ID 和 sequence 非空且合法，金额为有限 decimal，日期为有效 `DateOnly`，置信度在 `[0,1]`，负数金额只有在红字/贷项标记或明确业务规则允许时才接受，结果中的 candidate identity 与 invoice identity 必须相同。跨层映射失败必须返回稳定 `DOMAIN_CONTRACT_INVALID`，不能静默丢字段。
+
+### InvoiceAcceptanceService
+
+`InvoiceAcceptanceService` 是 parser、DeepSeek adapter、人工复核和归档之间唯一的字段准入门。它不负责解析文件、不调用网络、不写数据库，只对已归一化的 `InvoiceDocument` 做确定性校验：
+
+```csharp
+public sealed record InvoiceAcceptancePolicy(
+  decimal AmountTolerance = 0.01m,
+  decimal TaxTotalTolerance = 0.01m,
+  decimal MinimumConfidence = 0.60m,
+  bool RequireSeller = true,
+  bool RequirePurchaserForNonExemptTypes = true,
+  bool AllowNegativeAmountOnlyWithCreditFlag = true);
+
+public sealed record InvoiceAcceptanceRequest(
+  DocumentCandidate Candidate,
+  InvoiceDocument Document,
+  InvoiceAcceptancePolicy Policy,
+  string CompanyName,
+  bool IsVisionFallback,
+  string SourceParser);
+
+public enum AcceptanceDisposition
+{
+  Accepted,
+  ManualReview,
+  Rejected
+}
+
+public sealed record InvoiceAcceptanceFailure(
+  string ReasonCode,
+  FailureCategory Category,
+  bool Retryable,
+  string SafeMessage,
+  string Field = "");
+
+public sealed record InvoiceAcceptanceResult(
+  AcceptanceDisposition Disposition,
+  InvoiceDocument? Document,
+  IReadOnlyList<InvoiceAcceptanceFailure> Failures,
+  IReadOnlyList<string> Warnings,
+  string ReasonCode);
+
+public interface IInvoiceAcceptanceService
+{
+  InvoiceAcceptanceResult Evaluate(
+    InvoiceAcceptanceRequest request);
+}
+```
+
+首版字段准入矩阵固定如下：
+
+| 文档类型 | 日期字段 | Seller | Amount | InvoiceNumber | Purchaser | 税额 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `Catering`、`AccommodationInvoice`、`Other` | `InvoiceDate` 必填 | 必填 | 必须 `> 0` | 必填；`Other` 缺失时人工复核 | `target` 接受，`unknown` 人工复核，`non_target` 转 `Retained/NonTargetCompanyInvoice` | 可缺失，但 `TotalAmount` 存在时必须等于 `Amount + TaxAmount` |
+| `TrainTicket`、`Taxi`、`FlightTicket`、`Itinerary`、`TravelService` | 交通票优先 `Route.DepartureDate`，否则 `InvoiceDate` 必填 | 可缺失 | 必须 `> 0` | 可缺失 | 豁免购买方检查 | 通常可缺失，缺失时写 warning；存在则必须通过合计校验 |
+| `AccommodationStatement`、`AccommodationStatement` 的 folio 特例、`AccommodationConfirmation` | `InvoiceDate` 必填 | 必填 | 必须 `> 0` | 可缺失 | 豁免购买方检查 | 可缺失，`TotalAmount` 缺失时以 `Amount` 为总额候选并进入本地校验 |
+| `Toll`、`FixedInvoice` | `InvoiceDate` 必填 | 可缺失 | 必须 `> 0` | 按来源要求；缺失进入人工复核 | 豁免购买方检查 | 可缺失；存在时校验总额 |
+| `NonTargetCompanyInvoice`、`PersonalNonReimbursementInvoice` | 日期必填 | 可缺失 | 必须 `> 0` | 可缺失 | 不执行目标公司准入 | 可缺失 |
+
+`AccommodationStatement` 在领域枚举中的规范名称为 `AccommodationStatement`；上表中的重复文字表示 folio 特例，而不是新增枚举。`TravelService`、`Toll`、`FixedInvoice`、`AccommodationConfirmation` 和 `PersonalNonReimbursementInvoice` 均必须通过该 enum 白名单接受，不能靠字符串绕过枚举。
+
+税额和零金额规则固定为：
+
+- `TaxAmount` 缺失不自动失败；若 `TotalAmount` 存在，按 `TotalAmount == Amount + (TaxAmount ?? 0)` 校验，超出 `TaxTotalTolerance` 返回 `TAX_TOTAL_MISMATCH`；
+- `TaxAmount` 存在但无法解析为有限 Decimal，返回 `INVOICE_AMOUNT_INVALID`；
+- 普通正向票据 `Amount == 0` 返回 `INVOICE_AMOUNT_ZERO` 并为 `Rejected`；
+- `CreditNote`/`Cancellation` 允许非零负金额；零金额红字票仍为 `ManualReview/INVOICE_AMOUNT_ZERO`，不能自动接受；
+- unknown purchaser 对豁免购买方类型自动接受，对非豁免类型进入 `ManualReview/PURCHASER_UNKNOWN`；`NonTargetCompanyInvoice` 和 `PersonalNonReimbursementInvoice` 由明确分类结果直接 `Retained`，不重新执行 purchaser mismatch 检查；
+- 任何未知文档类型、身份不一致、日期非法或金额非法都不能通过用户自定义规则覆盖。
+
+校验顺序固定为：
+
+1. `Identity` 必须与 candidate 完全一致，`IsInvoice` 不能为 false；
+2. 日期必须是有效 `DateOnly`，火车票优先使用 `Route.DepartureDate`；
+3. 金额必须是有限 Decimal；负数只有在 `CreditNote`/`Cancellation` 标记存在时允许；
+4. `TaxAmount`、`TotalAmount` 存在时检查 `Amount + TaxAmount`，误差不得超过 `TaxTotalTolerance`；
+5. `Seller`、`InvoiceNumber`、`DocumentType` 按票据类型检查，类型必须存在于注册白名单；
+6. 非豁免类型执行公司购买方关系：`target` 接受，`non_target` 转为 `NonTargetCompanyInvoice/Retained`，`unknown` 进入人工复核；
+7. `Confidence < MinimumConfidence`、模型结果与确定性字段冲突、视觉 fallback 无法解释字段来源时进入人工复核，不直接接受。
+
+失败映射固定为：`INVOICE_DATE_INVALID`、`INVOICE_AMOUNT_INVALID`、`TAX_TOTAL_MISMATCH`、`INVOICE_SELLER_MISSING`、`INVOICE_NUMBER_MISSING`、`DOCUMENT_TYPE_UNKNOWN`、`PURCHASER_NOT_TARGET`、`PURCHASER_UNKNOWN`、`DOCUMENT_NOT_INVOICE`、`ACCEPTANCE_LOW_CONFIDENCE` 和 `IDENTITY_MISMATCH`。字段格式、金额和身份错误为 `Rejected`/不可重试；低置信度、模型冲突和未知购买方为 `ManualReview`；临时依赖错误不由本服务产生，而由上游 adapter 返回 retryable candidate failure。`InvoiceAcceptanceResult` 被映射为唯一的 `CandidateProcessResult`，不抛候选级异常。
+
+## 6. 文档处理与 OFD 解析
+
+文档层参考当前仓库与 `E:/GitHub/qingpiao/src/QingPiao/Parsers` 的实现，采用“统一入口 + 格式专用 parser + 领域归一化”的结构。QingPiao 的 `Invoice`、`InvoiceItem`、`ParseResult` 作为 C# 迁移的直接行为参考；当前 Python 的 `DocumentIdentity`、`InvoiceRecord`、金额/日期归一化和文档类型标记作为领域层约束参考。
+
+### 统一接口
+
+```csharp
+public interface IInvoiceParser
+{
+    bool CanParse(DocumentSource source);
+
+    Task<IReadOnlyList<InvoiceParseResult>> ParseAsync(
+        DocumentSource source,
+        ParserContext context,
+        CancellationToken cancellationToken);
+}
+```
+
+`ParserContext` 是应用层创建的本次解析只读上下文，不是领域实体，也不进入 JSON/RPC 或数据库：
+
+```csharp
+public sealed record ParserContext(
+    string RunId,
+    string StagingDirectory,
+    bool AllowOcrFallback,
+    bool AllowVisionFallback,
+  RuleSet RuleSet,
+    string ConfigurationFingerprint);
+```
+
+  ### 公司、供应商和自定义规则
+
+  `CustomRules` 不作为任意 C#、正则脚本或模板字符串执行，而是在请求准入阶段解析为版本化、可审计的规则 AST：
+
+  ```csharp
+  public sealed record RuleSet(
+    string RuleSetId,
+    int Version,
+    IReadOnlyList<InvoiceRule> Rules,
+    string SourceFingerprint);
+
+  public sealed record InvoiceRule(
+    string RuleId,
+    int Priority,
+    InvoiceRuleCondition When,
+    InvoiceRuleAction Then,
+    bool Enabled = true);
+
+  public sealed record InvoiceRuleCondition(
+    string? ProviderFamily = null,
+    InvoiceDocumentType? DocumentType = null,
+    string? SellerContains = null,
+    string? PurchaserRelation = null,
+    string? SubjectContains = null,
+    string? InvoiceNumberPrefix = null);
+
+  public sealed record InvoiceRuleAction(
+    string? ArchiveFolder = null,
+    string? Category = null,
+    bool? RequireManualReview = null,
+    bool? AllowCrossMessagePairing = null);
+
+  public interface IRuleSetParser
+  {
+    RuleSet Parse(string customRules, string ruleSetId, CancellationToken cancellationToken);
+  }
+  ```
+
+  用户规则使用 SQLite 保存不可变版本；文件系统不作为规则事实来源。当前版本通过 `IsCurrent`/当前指针确定，历史版本永不覆盖或删除。规则仓储属于 `InvoiceFlowAI.Application` 契约，EF Core 实现在 `InvoiceFlowAI.Infrastructure.Persistence`：
+
+  ```csharp
+  public sealed record RuleSetDraft(
+    string RuleSetId,
+    string SchemaVersion,
+    string SourceJson,
+    string CreatedBy);
+
+  public sealed record RuleSetSnapshot(
+    string RuleSetId,
+    string SchemaVersion,
+    int Version,
+    int? ParentVersion,
+    int? RollbackFromVersion,
+    int? RollbackTargetVersion,
+    string SourceJson,
+    RuleSet RuleSet,
+    string SourceFingerprint,
+    string AstFingerprint,
+    bool IsCurrent,
+    string CreatedBy,
+    DateTimeOffset CreatedAtUtc);
+
+  public enum RunTerminalStatus
+  {
+    Completed,
+    PartialSuccess,
+    NeedsManualReview,
+    Cancelled,
+    Failed
+  }
+
+  public sealed record RunTerminalDecision(
+    RunTerminalStatus Status,
+    string ReasonCode,
+    IReadOnlyDictionary<string, int> CandidateStatusCounts,
+    IReadOnlyList<string> FinalizerFailures);
+
+  public sealed record RuleSetSummary(
+    string RuleSetId,
+    int Version,
+    string SchemaVersion,
+    string SourceFingerprint,
+    bool IsCurrent,
+    bool IsRollback,
+    DateTimeOffset CreatedAtUtc);
+
+  public interface IRuleSetStore
+  {
+    Task<RuleSetSnapshot?> GetCurrentAsync(
+      string ruleSetId,
+      CancellationToken cancellationToken);
+
+    Task<RuleSetSnapshot?> GetAsync(
+      string ruleSetId,
+      int version,
+      CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<RuleSetSummary>> ListVersionsAsync(
+      string ruleSetId,
+      CancellationToken cancellationToken);
+
+    Task<RuleSetSnapshot> SaveAsync(
+      RuleSetDraft draft,
+      int expectedCurrentVersion,
+      IUnitOfWork transaction,
+      CancellationToken cancellationToken);
+
+    Task<RuleSetSnapshot> RollbackAsync(
+      string ruleSetId,
+      int targetVersion,
+      int expectedCurrentVersion,
+      IUnitOfWork transaction,
+      CancellationToken cancellationToken);
+  }
+  ```
+
+  `SaveAsync` 和 `RollbackAsync` 必须在同一 UoW 内完成“锁定当前版本 -> 校验 expected version -> 解析/规范化 -> 插入新版本 -> 更新当前指针 -> 写入审计事件”。并发版本不一致返回 `RULESET_REVISION_CONFLICT`；解析、schema、字段、目录或优先级冲突返回 `RULESET_INVALID`/`RULESET_CONFLICT`，不得写入半成品。回滚不是删除或重用旧 revision，而是复制目标版本的规范化 AST 创建新版本，并填充 `RollbackFromVersion` 和 `RollbackTargetVersion`。运行、重试和人工复核只读取开始时保存的规则快照，不追随当前版本。
+
+  用户规则 JSON schema 首版为 `schemaVersion == "1.0"`。根对象只允许 `schemaVersion`、`ruleSetId` 和 `rules`；规则只允许 `ruleId`、`priority`、`enabled`、`when` 和 `then`。`when` 只允许 `providerFamily`、`documentType`、`sellerContains`、`purchaserRelation`、`subjectContains` 和 `invoiceNumberPrefix`；`then` 只允许 `archiveFolder`、`category`、`requireManualReview` 和 `allowCrossMessagePairing`。未声明字段、空 `ruleId`、重复 `ruleId`、非整数 priority、空规则数组、未知 enum、未知目录和 action 全为空均拒绝。
+
+  <!-- ruleset-json-fixture -->
+  ```json
+  {
+    "schemaVersion": "1.0",
+    "ruleSetId": "default",
+    "rules": [
+      {
+        "ruleId": "archive-flight",
+        "priority": 100,
+        "enabled": true,
+        "when": {
+          "documentType": "FlightInvoice",
+          "sellerContains": "航空"
+        },
+        "then": {
+          "archiveFolder": "交通/机票",
+          "category": "交通费",
+          "requireManualReview": false,
+          "allowCrossMessagePairing": true
+        }
+      }
+    ]
+  }
+  ```
+
+  规则升级链是显式、幂等、无副作用的纯函数：原始 JSON -> schema migration -> strict validation -> normalized AST -> fingerprints。首版只注册 `1.0 -> 1.0` 的 identity migration；未来 schema 升级必须提供 `IRuleSetSchemaMigration`，禁止运行时猜测字段含义。迁移失败、降级尝试或目标版本未知均返回 `RULESET_SCHEMA_UNSUPPORTED`，不改变当前版本。`SourceFingerprint` 对规范化 JSON 计算，`AstFingerprint` 对规范化 `RuleSet` 计算；两者都使用 canonical JSON 和 SHA-256。
+
+  规则优先级和冲突判定固定为：内置安全与准入规则优先于用户规则；用户规则按 `priority DESC, ruleId ASC` 稳定排序；同一优先级同时匹配且 action 结果不一致时返回 `RULESET_CONFLICT`，不能依赖 JSON 顺序选胜者。priority 相同但 action 完全相同的规则只保留第一个规范化规则，并写入诊断 warning，不改变业务结果；规范化后的 AST 参与 `AstFingerprint`。
+
+  `ConfigurationFingerprint` 的 canonical JSON 具体包含以下结构：
+
+  ```json
+  {
+    "applicationCompatibilityVersion": "2026-09-23-v1",
+    "recipeFingerprint": "sha256-lowercase-hex",
+    "settings": { "accountId": "account-1", "mailbox": "INBOX", "allowVisionFallback": true },
+    "ruleSet": { "ruleSetId": "default", "version": 3, "sourceFingerprint": "sha256-lowercase-hex", "astFingerprint": "sha256-lowercase-hex" },
+    "modelManifestVersion": "2026-09-23-v1",
+    "ocrManifestVersion": "2026-09-23-v1",
+    "pipelineOptions": { "aiRequestConcurrency": 2, "maxRetryAttempts": 2 }
+  }
+  ```
+
+  canonical JSON 规则固定为：对象属性按 ordinal 字典序排序；规则数组按 `priority DESC, ruleId ASC` 排序；连接数组按 `fromNodeId, fromPort, toNodeId, toPort` 排序；字符串先 trim 并按字段定义执行 Unicode NFC、大小写和路径规范化；缺省值在 schema 层补齐后再序列化；`DateOnly` 使用 `yyyy-MM-dd`；Decimal 使用 invariant culture 的固定规范表示；数组和集合不得因哈希表遍历顺序变化；空可选字段按 schema 统一省略或统一写入 null，首版统一省略未设置字段。时间戳、机器名、运行 ID、绝对路径、临时目录、秘密值、解密后的 API Key 和授权码永不进入 canonical JSON。
+
+  `RuleSetFingerprint` 参与 `ConfigurationFingerprint`，但 `ConfigurationFingerprint` 不反向写入规则内容，避免循环。规则保存、回滚、Recipe 变更、非秘密设置变更、模型/OCR manifest 变更都会生成新的完整 `ConfigurationFingerprint`；同一规范化输入必须得到同一结果。
+
+  规则优先级固定为：安全/路径和 `InvoiceAcceptanceService` 准入 > 文档类型内置规则 > 供应商规则 > 公司规则 > 用户自定义路由规则。用户规则只能改变允许的归档目录、分类、人工复核标记和跨邮件配对开关，不能修改 `DocumentId`、发票金额/日期、来源身份，不能绕过非目标公司检查、最低字段检查、路径安全或模型响应 schema。规则 AST 解析失败、未知字段、未知目录返回 `RULESET_INVALID`；同优先级 action 冲突返回 `RULESET_CONFLICT`；两者都不能部分应用。
+
+  公司规则使用当前 Python 的三态关系：`target`、`non_target`、`unknown`。目标公司名称规范化后做大小写不敏感包含匹配；空值、`未知购买方` 等占位值为 `unknown`。文档类型的 `ExemptFromPurchaserCheck=true` 时不因 purchaser mismatch 拒绝；其他类型的 `non_target` 进入 `NonTargetCompanyInvoice` 或用户明确配置的保留策略，`unknown` 默认人工复核。
+
+  供应商规则通过注册表加载，注册表只接受内置程序集或经过签名/哈希校验的程序集，不从邮件或用户规则动态加载代码：
+
+  ```csharp
+  public sealed record ProviderRuleMatch(
+    string ProviderId,
+    string ProviderFamily,
+    int Priority,
+    string EvidenceCode,
+    string? SpecialParserId = null,
+    string EvidenceFingerprint = "");
+
+  public interface IInvoiceProviderRule
+  {
+    string ProviderId { get; }
+    int Priority { get; }
+
+    bool CanHandle(DocumentSource source, InvoiceDocument? document);
+
+    Task<ProviderRuleMatch?> EvaluateAsync(
+      DocumentSource source,
+      InvoiceDocument? document,
+      CancellationToken cancellationToken);
+  }
+
+  public interface IProviderRuleRegistry
+  {
+    IReadOnlyList<IInvoiceProviderRule> GetOrderedRules();
+  }
+  ```
+
+  首版内置 provider rule 注册表固定为：
+
+  | ProviderId | ProviderFamily | Priority | EvidenceCode | SpecialParserId |
+  | --- | --- | ---: | --- | --- |
+  | `baiwang-email` | `baiwang_invoice` | 300 | `BAIWANG_HOST_OR_MESSAGE_MARKER` | `provider-special-layout` |
+  | `chinatax-direct` | `chinatax_direct_invoice` | 250 | `DIRECT_URL_CHINATAX_HOST_PATH` | `provider-special-layout` |
+  | `bwjf-signed` | `bwjf_signed_invoice` | 250 | `DIRECT_URL_BWJF_HOST_PATH` | `provider-special-layout` |
+  | `fpyun-direct` | `fpyun_direct_invoice` | 250 | `DIRECT_URL_FPYUN_HOST_PATH` | `provider-special-layout` |
+  | `nuonuo-scan` | `nuonuo_scan_invoice` | 250 | `DIRECT_URL_NUONUO_HOST_PATH` | `provider-special-layout` |
+  | `pdd-direct` | `pdd_direct_invoice` | 250 | `DIRECT_URL_PDD_HOST_PATH` | `provider-special-layout` |
+  | `jdcloud-direct` | `jdcloud_direct_invoice` | 250 | `DIRECT_URL_JDCLOUD_HOST_PATH` | `provider-special-layout` |
+  | `kpbyd-direct` | `kpbyd_direct_invoice` | 250 | `DIRECT_URL_KPBYD_HOST_PATH` | `provider-special-layout` |
+
+  这些 ID 与当前 Python provider 的 family 标识一一对应；首版不注册未在代码或样本中出现的供应商。供应商规则按 `Priority` 降序、`ProviderId` 升序确定性执行；多个规则匹配但给出不同 provider family 时进入 `PROVIDER_RULE_CONFLICT` 人工复核。供应商规则可以提供预期字段、配对 family 和归档目录建议，但不能直接写数据库、归档文件或覆盖人工修正。`SpecialParserId` 非空时，dispatcher 只能在该 provider rule 已成功匹配后尝试对应 parser；parser 返回 `CanParse=false` 时不得静默改用另一个 provider-special parser。
+
+  `PROVIDER_RULE_CONFLICT` 的 field-level details 固定为以下 DTO，不包含原始 URL、邮件正文或完整模型响应：
+
+  ```csharp
+  public sealed record ProviderRuleConflictCandidate(
+    string ProviderId,
+    string ProviderFamily,
+    int Priority,
+    string EvidenceCode,
+    string EvidenceFingerprint,
+    string? SpecialParserId);
+
+  public sealed record ProviderRuleConflictDetails(
+    string Field,
+    string DocumentId,
+    IReadOnlyList<ProviderRuleConflictCandidate> Candidates,
+    string Resolution,
+    bool RequiresManualReview);
+  ```
+
+  `Field` 固定为 `providerFamily`；`Candidates` 按 `Priority DESC, ProviderId ASC` 排序；`Resolution` 固定为 `manual_review`；`RequiresManualReview=true`。每个 evidence fingerprint 是脱敏证据集合的短 SHA-256，输入只允许 host hash、path template ID、sender domain hash、subject marker ID 和 source kind。RPC `error.details` 使用 `{ "field": "providerFamily", "candidates": [...], "resolution": "manual_review", "requiresManualReview": true }`，不得把 `ProviderRuleConflictDetails` 序列化成自由格式字符串。
+
+  特殊票据 parser 使用同样的显式注册机制：
+
+  ```csharp
+  public interface IDocumentSpecialCaseParser
+  {
+    string ParserId { get; }
+    int Priority { get; }
+
+    bool CanParse(DocumentSource source, ParserContext context);
+
+    Task<InvoiceParseResult?> TryParseAsync(
+      DocumentSource source,
+      ParserContext context,
+      CancellationToken cancellationToken);
+  }
+
+  public interface IDocumentSpecialCaseParserRegistry
+  {
+    IReadOnlyList<IDocumentSpecialCaseParser> GetOrderedParsers();
+  }
+  ```
+
+  注册顺序固定为：格式确定性 parser -> 特殊票据 parser（火车票、Folio、国外发票、供应商专用布局）-> 通用 OCR/DeepSeek fallback。`CanParse=false` 返回 null；`CanParse=true` 但解析失败必须返回稳定的 `InvoiceParseResult`，不能静默降级成普通票据。相同 priority 的多个 parser 同时匹配时返回 `SPECIAL_PARSER_CONFLICT`，交由人工复核。注册表在应用启动时冻结并记录版本指纹，运行中不能改变。
+
+  首版特殊 parser registry 的稳定条目为：
+
+  | ParserId | Priority | 匹配条件 | 失败语义 |
+  | --- | ---: | --- | --- |
+  | `railway-ticket` | 400 | PDF 文本/版式包含铁路票据特征 | `RAILWAY_PARSER_FAILED` |
+  | `accommodation-folio` | 390 | 供应商或 PDF 文本命中 folio 特征 | `FOLIO_PARSER_FAILED` |
+  | `foreign-invoice` | 380 | 非中文金额/日期布局和供应商证据同时命中 | `FOREIGN_INVOICE_PARSER_FAILED` |
+  | `provider-special-layout` | 300 | `IProviderRuleRegistry` 返回明确 parser ID | `SPECIAL_PARSER_FAILED` |
+
+  `xml-invoice`、`ofd-invoice` 和 `pdf-text` 是格式确定性 parser，不参与特殊 parser priority；通用 `ocr-text` 和 `vision-fallback` 不是 registry parser，而是 dispatcher 的 fallback route。每个 registry entry 必须拥有 source kind、MIME/魔数约束、fixture ID 和版本字符串；同一输入命中多个同 priority 条目时必须返回冲突，不通过注册顺序隐式选胜者。registry fingerprint 参与 `ConfigurationFingerprint`，运行开始后冻结。
+
+  `SPECIAL_PARSER_CONFLICT` 的 field-level details 固定为 `{ field: "parserId", documentId, candidates, resolution: "manual_review", requiresManualReview: true }`；`candidates` 按 `Priority DESC, ParserId ASC` 排序，只包含 parser ID、版本、priority 和 fixture ID，不包含原始文档内容。该错误不可重试，候选状态为 `ManualReview`，不得继续进入通用 OCR/DeepSeek fallback。
+
+实现由 `InvoiceParserDispatcher` 按文件扩展名、MIME、文件魔数和文档来源选择：
+
+```text
+InvoiceParserDispatcher
+  -> XmlInvoiceParser
+  -> OfdInvoiceParser
+  -> PdfInvoiceParser
+  -> ManualReviewResult
+```
+
+#### 邮件正文票据解析迁移契约
+
+Python 的 `email_body_receipts.py` 是独立的确定性输入路径，不等同于普通 OCR：首版 .NET 必须保留 canonical receipt marker `EMAIL_BODY_RECEIPT_CANONICAL`，并在附件解析前执行正文 parser。正文 parser 只消费 subject、sender、body text 和 email date，不能访问网络、secret 或直接写数据库。
+
+```csharp
+public sealed record EmailBodyReceiptRequest(
+  string Subject,
+  string Sender,
+  string BodyText,
+  string? EmailDate,
+  string SourceMessageUid);
+
+public sealed record EmailBodyReceipt(
+  string Marker,
+  string ProviderId,
+  string SourceMessageUid,
+  InvoiceParseResult Result,
+  string EvidenceFingerprint);
+
+public interface IEmailBodyReceiptParser
+{
+  string ProviderId { get; }
+  int Priority { get; }
+  bool CanParse(EmailBodyReceiptRequest request);
+  EmailBodyReceipt? TryParse(EmailBodyReceiptRequest request);
+}
+
+public interface IEmailBodyReceiptParserRegistry
+{
+  IReadOnlyList<IEmailBodyReceiptParser> GetOrderedParsers();
+  string RegistryFingerprint { get; }
+}
+```
+
+首版正文 parser 顺序固定为：`baiwang-email-body` priority 400、`fpyun-email-body` priority 390、`51fapiao-email-body` priority 380、`icloud-receipt` priority 370。正文少于 40 个非空字符、缺少 provider marker、发票号码、日期或金额时返回 null，继续附件路径；命中多个 parser 时返回 `EMAIL_BODY_PARSER_CONFLICT`，进入人工复核，不按 JSON/注册顺序静默选择。成功结果必须经过 `InvoiceNormalizer` 和 `InvoiceAcceptanceService`，`EmailBodyReceipt.Result` 的 `DocumentIdentity` 使用原始 candidate identity，不能重新生成 ID。
+
+正文字段规则固定为：金额规范化为两位 Decimal 字符串；日期内部先用 `yyyyMMdd`，再由领域 normalizer 转换为 `DateOnly`；缺购买方统一为 `未知购买方`；seller 规则按供应商 parser 固定；类型规则保留住宿、餐饮和其他三类初始分类，之后映射到 `InvoiceDocumentType`；邮件日期只在 51 发票正文没有日期时作为 fallback。`EvidenceFingerprint` 只对 provider ID、marker ID、字段是否存在和 source kind 做 canonical hash，不包含正文。
+
+正文 receipt 成功后仍必须生成统一 `DocumentCandidate`/`InvoiceParseResult`，并在后续阶段走同样的 acceptance、查重、配对、归档、审计和报表链路；不能生成旁路成功结果。正文 parser 的失败、冲突和成功 route 必须写入 `ExtractionTrace.InputKind=EmailBodyReceipt`。
+
+`InvoiceParseResult` 已在本节前的领域 DTO 中定义，同时保留 QingPiao 风格的成功/人工处理结果和当前 Python 的稳定诊断信息。`InvoiceDocument` 包含发票主数据、`InvoiceItem` 明细、`DocumentIdentity`、来源身份、归一化金额/日期、文档类型和置信度；审计元数据由应用层事件单独保存。解析器不能直接写数据库、归档文件或 Avalonia WebView 事件。
+
+### XML 实现
+
+`XmlInvoiceParser` 对应 QingPiao 的 `XmlInvoiceParser.Parse`，但改为异步接口和安全 XML 读取器：
+
+- 先识别数电票 `Header`/`EInvoiceData` 结构；
+- 再识别传统 `InvoiceInfo`、`BuyerInfo`、`SellerInfo` 结构；
+- 解析发票号码、日期、购买方、销售方、金额和税额；
+- 日期统一进入当前 Python 的本地业务日期归一化逻辑；
+- 金额进入 Decimal 归一化和税额/价税合计校验；
+- 发票号码缺失返回 `XML_INVOICE_NUMBER_NOT_FOUND`，不抛出批次级异常；
+- XML DTD、外部实体、深度和文本长度受限。
+
+XML 是最确定的路径，成功后不再调用 OCR 或 DeepSeek，除非本地校验发现关键字段冲突且策略明确允许复核。
+
+### OFD 实现
+
+`OfdInvoiceParser` 对应 QingPiao 的 `OfdInvoiceParser.ParseAll`，保留以下顺序：
+
+1. `Doc_0/Attachs/original_invoice.xml`：纸电票专用 XML；
+2. `Doc_0/Tags/Tag.xml` 或 `Doc_0/Tags/CustomTag.xml`：数电票标签；
+3. `Doc_0/Pages/Page_*/Content.xml`：建立 `TextObject ID -> TextCode` 映射并解析 `ObjectRef`；
+4. 结构化 XML 无法得到有效发票号码时，返回 `OFD_INVOICE_XML_NOT_FOUND`；若 `ParserContext.AllowOcrFallback=true`，必须进入页面渲染和 OCR，最多渲染前两页，再按统一 Track A/Track B 规则处理；若关闭 fallback，则直接生成 `ManualReview/OFD_INVOICE_XML_NOT_FOUND`。
+
+OFD fallback 策略固定为：
+
+- `original_invoice.xml`、Tag 或 Content XML 完整解析并通过 `InvoiceAcceptanceService` 时，禁止 OCR 和 DeepSeek；
+- XML 缺失、XML 无有效发票号码、页面文本无法建立有效字段时，允许最多两页 PDFium/SkiaSharp 渲染，先 SimdPaddleOCR Track A，再 DeepSeek Track B；
+- XML 字段存在互相冲突时，优先保留冲突证据并进入 `ManualReview/OFD_XML_FIELD_CONFLICT`；只有冲突字段可由同一页面 OCR 确定性解决，且 `AllowVisionFallback=true` 时才允许 DeepSeek，模型不能直接覆盖未解决的 XML 冲突；
+- ZIP/XML 损坏、外部实体、路径越界、页数/文件大小超限、模型加载失败或渲染资源不可用，直接人工复核或运行级失败，不能通过 DeepSeek 绕过安全/资源错误；
+- OCR/DeepSeek 结果必须再次通过 `InvoiceAcceptanceService`，失败进入人工复核，不再无限回退；
+- fallback 使用与 candidate 相同的 `ProcessingRevision` 临时目录和 manifest 约束，页面超过两页不上传、不持久化、不静默截断。
+
+OFD parser 只负责 ZIP/XML 结构和发票字段，不负责页面渲染。多页遍历不能只固定 `Page_0`；需要遍历所有 `Page_*`，并对同一 Object ID 的文本定义稳定合并规则。`original_invoice.xml` 与 Tag/Content 两条路径分别测试。
+
+### PDF 实现
+
+`PdfInvoiceParser` 合并 QingPiao 的 `PdfInvoiceParser` 与当前 Python `invoice_extractor.py`/`pdf_converter.py` 的行为，但拆成多个内部策略：
+
+- `PdfTextExtractor`：使用 PdfPig alpha 版本读取每页文本；
+- `PdfInvoiceSegmenter`：按发票标题和页面边界切分多页、多张发票；
+- `PdfFieldParser`：复用清理文本、号码、日期、公司、金额和明细的确定性规则；
+- `IPdfPageRenderer`：使用 PDFiumCore 渲染扫描页；
+- `IOcrFallback`：使用 SkiaSharp 转换像素，再交给 SimdPaddleOCR；
+- `IInvoiceFieldExtractor`：先根据本地 OCR 文本提取，失败时调用 DeepSeek Flash 多模态提取；
+- `InvoiceNormalizer`：映射为不可变的 `InvoiceDocument`/`InvoiceRecord` 领域对象。
+
+PDF 的处理顺序为：
+
+```text
+PdfPig 文本提取
+  -> 文本清理与多发票切分
+  -> 确定性字段解析与本地校验
+  -> 成功：输出结构化结果
+  -> 文本为空/质量不足：PDFium 渲染
+  -> SimdPaddleOCR
+  -> DeepSeek Flash 文本或多模态提取
+  -> 本地校验，不通过则人工复核
+```
+
+当前 Python 中的火车票、行程单、国外发票和供应商特例不能被硬编码到通用 PDF parser；应实现为独立的 `IDocumentSpecialCaseParser`，在 `PdfInvoiceParser` 的确定性路径之后、通用 AI fallback 之前运行。其确定性字段修正必须优先于模型输出。
+
+### IInvoiceFieldExtractor 的 DeepSeek adapter
+
+`IInvoiceFieldExtractor` 不是一个简单的“传图并返回字符串”接口，而是承接当前 Python `InvoiceExtractor.extract_info_via_llm` 的两轨路由：
+
+```csharp
+public interface IInvoiceFieldExtractor
+{
+  Task<FieldExtractionResult> ExtractAsync(
+    FieldExtractionRequest request,
+    CancellationToken cancellationToken);
+}
+
+public sealed record FieldExtractionRequest(
+  DocumentIdentity Identity,
+  string OcrText,
+  IReadOnlyList<OcrLine> OcrLines,
+  IReadOnlyList<RenderedPage> Pages,
+  RuleSet RuleSet,
+  bool AllowVisionFallback);
+
+public sealed record FieldExtractionResult(
+  InvoiceDocument? Document,
+  ExtractionRoute Route,
+  string ReasonCode,
+  bool RequiresManualReview,
+  ExtractionTrace Trace);
+```
+
+`InvoiceFlowAI.Application` 只依赖 `IInvoiceFieldExtractor`；`IChatClient`、`OpenAIClient`、HTTP handler 和 DeepSeek JSON 都只能存在于 `InvoiceFlowAI.Infrastructure.Ai`。基础设施层使用以下受控 adapter 边界：
+
+```csharp
+public sealed record DeepSeekAdapterOptions(
+  Uri Endpoint,
+  string Model,
+  decimal Temperature,
+  int MaxOutputTokens,
+  TimeSpan RequestTimeout,
+  int MaxAttempts,
+  int MaxRequestBytes,
+  int MaxImageBytes,
+  int MaxImagePixels,
+  string ImageDetail);
+
+public sealed record DeepSeekExtractionRequest(
+  string PromptVersion,
+  string SystemInstruction,
+  string UserText,
+  IReadOnlyList<DeepSeekImagePart> Images,
+  string ConfigurationFingerprint);
+
+public sealed record DeepSeekImagePart(
+  string MimeType,
+  string Base64Data,
+  int Width,
+  int Height);
+
+public sealed record DeepSeekExtractionResponse(
+  JsonElement Json,
+  string Model,
+  int? PromptTokens,
+  int? CompletionTokens,
+  string ResponseFingerprint);
+
+public interface IDeepSeekAdapter
+{
+  Task<DeepSeekExtractionResponse> CompleteStructuredAsync(
+    DeepSeekExtractionRequest request,
+    CancellationToken cancellationToken);
+}
+```
+
+adapter 构造时固定 `Endpoint=https://api.deepseek.com`、`Model=deepseek-flash` 的默认值，并从 `ISecretStore` 读取 `deepseek.api-key`；API Key 不进入 request DTO、日志、`ConfigurationFingerprint` 或 ZeroPipeline context。每次请求在发送前验证图片 MIME、宽高、单图大小和总请求大小，超过限制直接返回 `AI_REQUEST_TOO_LARGE`，不能依赖远端拒绝。`IDeepSeekAdapter` 只返回结构化 JSON 和脱敏 usage/fingerprint，响应文本不能绕过 `InvoiceResponseSchema` 和 `InvoiceNormalizer`。
+
+重试只允许连接失败、超时和明确的 429；使用 `Retry-After` 或指数退避并受 `MaxAttempts` 限制。401/403、无效 API Key、模型不存在、请求体过大、图片格式不支持和 schema 不兼容不重试。adapter 维护单个运行共享的认证失败门闩：首次确定的 401/403 立即阻止新的请求并向 `RunCoordinator` 发布一次 `AI_AUTHENTICATION_FAILED`，已经完成的 candidate 保留结果，未完成 candidate 由统一运行失败规则收束，不能为每个 candidate 重复尝试相同 Key。
+
+Track A/Track B 共用同一个 adapter，但 adapter 不决定业务路由；路由由 `IInvoiceFieldExtractor` 决定。fake `IChatClient` 测试必须覆盖文本 content、`image_url` content block、响应 fence 清理、嵌套 JSON 拒绝、超时、429、401/403、总请求大小和取消。真实 DeepSeek 兼容端点测试只验证脱敏的请求结构和 response schema，不记录或保存 API Key/票据内容。
+
+`ExtractionRoute` 和 `ExtractionTrace` 是不包含原文和图像的诊断 DTO：
+
+```csharp
+public enum ExtractionRoute
+{
+  LocalFastPath,
+  OcrText,
+  VisionFallback
+}
+
+public sealed record ExtractionTrace(
+  ExtractionRoute Route,
+  string TrackAStatus,
+  string TrackBStatus,
+  string ReasonCode,
+  long DurationMs,
+  string ModelName,
+  string InputKind,
+  string ResponseFingerprint = "");
+```
+
+#### 请求构造
+
+将当前 Python 的提示词规则迁移为版本化 `InvoiceExtractionPrompt`，固定要求输出单个 JSON 对象，不允许 Markdown 包裹。字段契约包含：
+
+```json
+{
+  "is_invoice": true,
+  "Date": "YYYYMMDD",
+  "Purchaser": "",
+  "Seller": "",
+  "Amount": "0.00",
+  "InvoiceCode": "",
+  "InvoiceNumber": "",
+  "Type": "",
+  "category": "",
+  "Departure_Date": "",
+  "Departure_City": "",
+  "Destination_City": ""
+}
+```
+
+提示词必须保留当前行为规则：销售方名称净化、金额优先取价税合计/小写金额、红字票保留负号、火车票城市无法确认时填“未知”、Folio 的 DD/MM/YY 日期解释，以及 `Type` 必须落在领域分类白名单中。`CustomRules` 作为独立的用户规则段追加，不能覆盖系统字段约束。
+
+#### Track A：OCR 文本路径
+
+1. `SimdPaddleOCR` 生成 OCR 文本、文本框和置信度；
+2. 将 OCR 文本、按位置排序的 `OcrLine` 和文档上下文拼入 `user` 文本消息；
+3. 使用 `IChatClient`、模型 `deepseek-flash`、温度 `0.1` 请求结构化结果；
+4. 清理响应中的 ```json 包裹和外围说明，解析 JSON；
+5. 缺少 Date/Seller/Amount/Type/Purchaser 等字段时补充领域默认值，再由本地校验决定是否人工复核；
+6. 通过 `InvoiceNormalizer` 归一化金额、日期、类型、身份和 flags。
+
+Track A 只使用 OCR 文本，不上传原始图片；这保留当前 Python “本地 OCR 后文本提取”的隐私和成本优势。
+
+#### Track B：多模态 fallback
+
+当 OCR 失败、OCR 文本过短、必填字段缺失、模型 JSON 无法解析或本地校验不通过时，才进入 Track B：
+
+1. 使用 PDFiumCore + SkiaSharp 生成最多两页 PNG；
+2. 图片按 `data:image/png;base64,...` 生成 `DataContent`/`image_url` content block；
+3. 将同一版本的系统提示词作为 `user` 消息中的第一个文本块，图片块紧随其后；
+4. 单次请求包含所有待识别页面，限制请求体和图片大小，避免超过 DeepSeek 48 MiB/32 MiB 限制；
+5. 使用同一 JSON 清洗、字段默认值、类型白名单和本地校验；
+6. 将路由标记为 `VisionFallback`，保留 Track A 失败的稳定原因码。
+
+Track B 的图片只作为当前请求的内联数据发送，不生成公网 URL，不把 Base64 写入日志、SQLite、审计事件或 ZeroPipeline Recipe。
+
+#### JSON 与错误处理
+
+adapter 使用严格的 JSON 文档解析，不依赖正则截取嵌套对象。兼容模型偶尔返回 Markdown fence 的情况，但 fence 去除后仍必须得到唯一 JSON 对象。响应失败分类为：
+
+- `AI_TIMEOUT`、`AI_CONNECTION_FAILED`：可重试；
+- `AI_RATE_LIMITED`、`AI_QUOTA_EXHAUSTED`：按退避策略重试或终止；
+- `AI_INVALID_JSON`、`AI_SCHEMA_INVALID`：Track A 可转 Track B，Track B 则进入人工复核；
+- `AI_AUTHENTICATION_FAILED`、`AI_UNSUPPORTED_IMAGE`、`AI_REQUEST_TOO_LARGE`：不可盲目重试；
+- `EXTRACTOR_ALL_ROUTES_FAILED`：所有路径失败后的最终结果。
+
+adapter 不记录响应正文。只记录路由、耗时、模型名、输入类型、响应状态和响应指纹；响应指纹使用短 SHA-256，便于诊断而不泄露票据内容。
+
+#### 确定性修正与 trace
+
+模型结果进入领域对象前，先执行当前 Python 已验证的确定性修正，例如火车票行程日期覆盖模型漂移、特殊供应商票据字段修正和文档类型归一化。每次提取生成 `ExtractionTrace`：
+
+```text
+Route: LocalFastPath | OcrText | VisionFallback
+TrackAStatus: NotStarted | Success | Failed
+TrackBStatus: NotStarted | Success | Failed
+ReasonCode
+DurationMs
+ModelName
+```
+
+trace 只存状态和脱敏元数据，不存 OCR 原文、图片、提示词或 API Key。
+
+### 归一化与编排边界
+
+三类 parser 只返回 `InvoiceParseResult`。`InvoiceNormalizer` 负责金额、日期、文档类型、身份和 flags 的统一表示；`InvoiceAcceptanceService` 负责关键字段校验、税额计算、查重键准备和人工复核原因；ZeroPipeline 节点负责批量调度、背压、重试、审计和结果汇总。
+
+这样既保留 QingPiao 的 parser 分层，也吸收当前 Python 的候选身份、低置信度 fallback、供应商特例和真值审计约束。
+
+## 7. OCR 与 AI 提取
+
+OCR 与 AI 链路如下：
+
+```text
+PDF/OFD 页面图像
+  -> SimdPaddleOCR 本地 OCR
+  -> OCR 文本、坐标和置信度
+  -> DeepSeek Flash 结构化提取
+  -> 本地字段归一化和校验
+  -> 发票领域对象
+  -> 必要时使用 DeepSeek Flash 多模态复核
+```
+
+### 本地 OCR
+
+使用以下组件：
+
+- `Sdcb.SimdPaddleOCR` `1.4.2`；
+- 首版锁定 `Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny` `1.4.2`，模型文件随发布包提供；
+- 使用 `SkiaSharp` `4.154.0-preview.1.26454.9` 负责图像解码和像素转换。
+
+OCR 输出和 PDF 渲染输出只在应用/基础设施内存中短暂存在，不能作为领域实体持久化：
+
+```csharp
+public sealed record DocumentImage(
+  DocumentIdentity Identity,
+  int PageNumber,
+  int Width,
+  int Height,
+  int Dpi,
+  string MimeType,
+  ReadOnlyMemory<byte> EncodedBytes,
+  string ContentHash,
+  string TemporaryPath = "");
+
+public sealed record BoundingBox(int Left, int Top, int Width, int Height);
+
+public sealed record OcrLine(
+  string Text,
+  BoundingBox Bounds,
+  decimal Confidence,
+  int PageNumber,
+  int Ordinal);
+
+public sealed record OcrDocument(
+  DocumentIdentity Identity,
+  IReadOnlyList<OcrLine> Lines,
+  decimal Confidence,
+  string EngineName,
+  int PageCount);
+
+public sealed record RenderedPage(
+  int PageNumber,
+  int Width,
+  int Height,
+  string MimeType,
+  ReadOnlyMemory<byte> EncodedBytes,
+  long ByteLength);
+
+public sealed record PdfRenderOptions(
+  int Dpi = 200,
+  int MaxPages = 2,
+  int MaxWidth = 4096,
+  int MaxHeight = 8192,
+  string OutputMimeType = "image/png");
+
+public interface IPdfPageRenderer
+{
+  Task<IReadOnlyList<RenderedPage>> RenderAsync(
+    DocumentSource source,
+    PdfRenderOptions options,
+    CancellationToken cancellationToken);
+}
+
+public interface IImagePreprocessor
+{
+  Task<DocumentImage> PrepareAsync(
+    DocumentIdentity identity,
+    RenderedPage page,
+    CancellationToken cancellationToken);
+}
+
+public interface IDocumentImageLease : IAsyncDisposable
+{
+  DocumentImage Image { get; }
+}
+```
+
+`OcrLine.Confidence` 和 `OcrDocument.Confidence` 限定在 `[0,1]`；`Ordinal` 记录同页原始识别顺序，字段提取前按页码、Y 坐标、X 坐标和 ordinal 稳定排序。`RenderedPage.EncodedBytes` 只允许存在于受控的 transient buffer，不能进入 `PipelineContext` 的持久化快照、日志、审计或 Recipe。
+
+PDF 文字提取成功时不渲染图像。进入 OCR/视觉 fallback 后，`IPdfPageRenderer` 最多渲染前两页，默认 200 DPI，长边超过限制时等比例缩放；输出固定为 PNG，像素由 SkiaSharp 解码为连续的 non-premultiplied RGB/RGBA8 buffer，校验 stride、宽高和 content hash。首版不做不可逆二值化，只执行 EXIF/方向归一化、尺寸限制、颜色空间转换和 NFKC OCR 文本归一化。
+
+`PaddleOcrAll` 在应用生命周期内只加载一次并复用。模型 manifest 固定模型包版本、文件相对路径、SHA-256 和引擎配置；启动时先校验 manifest，模型缺失或 hash 不匹配返回运行级 `OCR_MODEL_LOAD_FAILED`，禁止运行时静默下载未知模型。OCR 在受限的后台 worker 中运行，通过 `OcrPageConcurrency=2`、`OcrLineWorkerCount=2`、页面尺寸和 `MaxInFlightCandidates` 限制内存峰值。
+
+模型 manifest 的格式固定为：
+
+```json
+{
+  "schemaVersion": 1,
+  "engine": "Sdcb.SimdPaddleOCR",
+  "engineVersion": "1.4.2",
+  "modelId": "ChineseV6Tiny",
+  "modelPackageVersion": "1.4.2",
+  "runtime": "win-x64",
+  "files": [
+    {
+      "relativePath": "models/paddle/chinese-v6-tiny/model.pdmodel",
+      "length": 0,
+      "sha256": "<generated-at-build>"
+    },
+    {
+      "relativePath": "models/paddle/chinese-v6-tiny/model.pdiparams",
+      "length": 0,
+      "sha256": "<generated-at-build>"
+    }
+  ],
+  "preprocess": {
+    "colorFormat": "RGBA8",
+    "premultipliedAlpha": false,
+    "defaultDpi": 200,
+    "maxWidth": 4096,
+    "maxHeight": 8192,
+    "normalizeUnicode": "NFKC"
+  },
+  "manifestSha256": "<generated-last>"
+}
+```
+
+实际发布时不允许保留 `<generated-at-build>` 或 `0`：构建脚本从 NuGet/模型资产缓存复制经过版本锁定的模型文件，按字节流计算大小和 SHA-256，使用规范化 JSON 计算 `manifestSha256`，再将 manifest 和模型一起复制到发布目录。CI 必须在干净 `win-x64` 构建中重新计算并比对 manifest，禁止从工作机已有模型目录“借用”文件。当前仓库没有这些模型二进制文件，因此真实哈希只能在模型资产下载并纳入 release 输入后生成；设计阶段不伪造哈希值。
+
+发布验收必须验证：模型 package/version 与 `Microsoft.NET.Sdk` lock 文件一致；每个 manifest 文件存在、长度相等、SHA-256 相等；manifest 自身哈希稳定；`PaddleOcrAll` 加载的是 manifest 指定目录；任一缺失、替换、截断或版本不匹配都返回 `OCR_MODEL_LOAD_FAILED`，且不会联网下载替代模型。
+
+`DocumentImage` 的生命周期由 `DocumentImageLease` 管理：渲染阶段在 `%LocalAppData%/InvoiceFlowAI/runs/{runId}/temp/{documentId}/{processingRevision}/pages/` 创建临时目录，文件使用随机临时名写入、flush 后原子改名；OCR、Track A 和必要的 Track B 完成且相关审计/处理结果提交后释放内存并删除临时文件。进程崩溃时启动恢复依据 checkpoint 和 processing 状态清理已完成 revision 的临时目录；未完成 revision 保留到恢复或诊断结束，不能把临时绝对路径写入领域 DTO、RPC 或日志。
+
+首个版本使用普通的自包含 `win-x64` JIT/ReadyToRun 发布，暂不采用 Native AOT。损坏图像、像素格式不支持、渲染超时和单页读取失败转为候选级 `OCR_IMAGE_INVALID`/`PDF_RENDER_FAILED`；模型加载、原生库加载和统一内存分配失败属于运行级故障。
+
+```csharp
+public interface IInvoiceOcr
+{
+    Task<OcrDocument> RecognizeAsync(
+        DocumentImage image,
+        CancellationToken cancellationToken);
+}
+```
+
+### 通过 Microsoft.Extensions.AI 接入 DeepSeek Flash
+
+DeepSeek Flash 是新设计中唯一的远程 AI 服务。通过 `Microsoft.Extensions.AI` 和 `Microsoft.Extensions.AI.OpenAI`，使用 DeepSeek 的 OpenAI 兼容端点接入。
+
+```csharp
+IChatClient chatClient = new OpenAIClient(
+    new ApiKeyCredential(apiKey),
+    new OpenAIClientOptions
+    {
+        Endpoint = new Uri("https://api.deepseek.com")
+    })
+    .GetChatClient(modelName)
+    .AsIChatClient();
+```
+
+应用层只依赖内部接口，`IChatClient` 由基础设施层持有：
+
+具体的 `IInvoiceFieldExtractor` 请求/结果模型、Track A/Track B 路由和响应处理规则见第 6 节。文本请求包含 OCR 文本和坐标；多模态请求使用 DeepSeek OpenAI 兼容 Chat Completions 格式：图片必须位于 `user` 消息的 content block 数组中，图片块使用 `image_url`。PDF 页面默认渲染为 PNG，并编码为 `data:image/png;base64,...`；其他图像保留经过验证的实际 MIME 类型，不上传临时公网 URL。两条路径共用类型化响应校验和本地业务校验。
+
+DeepSeek 视觉配置固定为：
+
+- 模型：`deepseek-flash`；
+- 端点：`https://api.deepseek.com`；
+- 支持图像格式：JPEG、PNG、GIF、WebP；
+- `image_url.detail` 可配置为 `low`、`high`、`original` 或 `auto`，发票识别默认使用 `original`；
+- 图片只放在 `user` 消息中，不能放在 `system` 或 `assistant` 消息中；
+- Base64 内联请求体上限为 48 MiB，单张 Base64/URL 图片最大 32 MiB；
+- 单边最大 8192 像素；单请求最多 600 张图片，并受总大小限制约束。
+
+`Microsoft.Extensions.AI.OpenAI 10.10.0` 的 `DataContent` 到 DeepSeek `image_url` content block 的序列化结果必须通过集成测试验证。如果该版本不能生成 DeepSeek 所需的 block 结构，则在 `IInvoiceFieldExtractor` 内部增加受控的 OpenAI-compatible HTTP content adapter；业务层仍只依赖 `IInvoiceFieldExtractor`，不直接依赖 DeepSeek JSON。
+
+模型名称、端点、温度、token 上限、图片细节级别、超时时间和重试策略均配置化，但默认模型必须是 `deepseek-flash`。
+
+系统先尝试基于 OCR 文本的提取。如果 OCR 置信度过低、必填字段缺失或本地校验失败，则将原始页面图像发送给 DeepSeek Flash 进行多模态复核。新方案不包含 GLM 的配置、包引用、错误码或运行时路径。
+
+远程 AI 错误必须转换为稳定错误，包括超时、认证失败、限流、额度耗尽、请求体超过 48 MiB、图片格式不支持、响应无效和多模态序列化不兼容。单元测试使用假的 `IChatClient`，不需要真实 API Key；另设 DeepSeek 兼容端点集成测试验证最终 JSON content block。
+
+#### GLM 到 DeepSeek 的迁移边界
+
+旧 Python 的 `glm-ocr`、`glm-4-flash`、`glm-4.5v`、智谱 endpoint、1302/1305/1312 限流和旧 `api_key` 设置不映射为新的运行配置。迁移时：
+
+1. 旧 GLM API Key 不迁移，标记 `LEGACY_SECRET_REQUIRES_REENTRY`，用户通过 `secret.set(name="deepseek.api-key")` 重新配置；
+2. 旧模型名和智谱 endpoint 只保留在迁移诊断，不进入 `ConfigurationFingerprint`；
+3. 旧 1302/1305/1312 错误分别映射为 `AI_RATE_LIMITED`、`AI_QUOTA_EXHAUSTED` 或 `AI_REQUEST_FAILED`，最终以 DeepSeek adapter 的稳定错误码和 retry policy 为准；
+4. 旧 GLM 文案、字段名和前端输入控件不得出现在发布 UI；
+5. 迁移验收使用同一 OCR/票据样本，比较规范化 `InvoiceDocument`、人工复核原因和候选终态，不要求模型原始响应或 token 数相同。
+
+如果 DeepSeek adapter 不支持旧 GLM 的某个视觉输入能力，必须进入 `ManualReview/AI_UNSUPPORTED_IMAGE`，不能偷偷回退到 GLM 或保留第二个远程模型 provider。
+
+## 8. 存储与安全
+
+使用 EF Core SQLite 保存运行索引、发票历史、审计事件和人工复核状态。应用数据保存到 `%LocalAppData%/InvoiceFlowAI`；用户选择的发票和报表保存到指定输出目录。
+
+`InvoiceFlowDbContext` 位于 `InvoiceFlowAI.Infrastructure.Persistence`，领域层只依赖仓储或查询接口，不引用 EF Core 实体和 `DbContext`。数据库模型至少包含：
+
+数据库使用 UTF-8 SQLite，所有 UTC 时间存为 ISO-8601 text，金额存为 decimal scaled integer 或 invariant text，不能使用 binary floating point。领域模型和 EF entity 分离；下面的表结构是首版 schema 契约，列名可以在实现中采用 PascalCase，但迁移必须保持语义一致。
+
+| 表 | 主键和字段 | 外键、索引和约束 |
+| --- | --- | --- |
+| `UserSettings` | `SettingsId TEXT`、`Revision INTEGER`、`CurrentAccountId TEXT`、`DefaultMailbox TEXT`、`MailboxFiltersJson TEXT`、`PipelineOptionsJson TEXT`、`AllowVisionFallback INTEGER`、`RuleSetId TEXT`、`RuleSetVersion INTEGER`、`ConfigurationFingerprint TEXT`、`UpdatedAtUtc TEXT` | 单例主键 `SettingsId='default'`；`Revision` 用于 settings 乐观并发；`CurrentAccountId` 外键到 `MailboxAccounts`；`RuleSetId/RuleSetVersion` 外键到 `RuleSets`；不保存秘密。 |
+| `Runs` | `RunId TEXT`、`State TEXT`、`Stage TEXT`、`TerminalReasonCode TEXT`、`DateFrom TEXT`、`DateToExclusive TEXT`、`AccountId TEXT`、`AccountRevision INTEGER`、`Mailbox TEXT`、`OutputRoot TEXT`、`SettingsRevision INTEGER`、`RuleSetId TEXT`、`RuleSetVersion INTEGER`、`ConfigurationFingerprint TEXT`、`RecipeVersion TEXT`、`StartedAtUtc TEXT`、`EndedAtUtc TEXT`、`CancellationRequestedAtUtc TEXT`、`LastEventSequence INTEGER`、`SummaryJson TEXT`、`PrimaryFailureJson TEXT`、`CreatedAtUtc TEXT` | `RunId` 主键；`ConfigurationFingerprint`、`State`、`Stage` 有普通索引；`(AccountId, AccountRevision)`、`(RuleSetId, RuleSetVersion)` 保存运行快照；非终态运行建立 partial unique index，保证首版最多一个活动运行。 |
+| `Documents` | `DocumentId TEXT`、`SourceKind TEXT`、`SourceMessageUid TEXT`、`SourceFileName TEXT`、`SourceLocator TEXT`、`ProviderGroupKey TEXT`、`ContentHash TEXT`、`MimeType TEXT`、`CreatedAtUtc TEXT` | `DocumentId` 主键；`ContentHash` 可为空但非空时唯一；`(SourceKind, SourceLocator)` 非空时唯一；禁止保存原始授权 URL。 |
+| `DocumentProcessing` | `DocumentId TEXT`、`ProcessingRevision INTEGER`、`RunId TEXT`、`Sequence INTEGER`、`Stage TEXT`、`Status TEXT`、`ReasonCode TEXT`、`Retryable INTEGER`、`Attempt INTEGER`、`MaxAttempts INTEGER`、`ArtifactPath TEXT`、`ResultJson TEXT`、`TraceJson TEXT`、`StartedAtUtc TEXT`、`CompletedAtUtc TEXT`、`UpdatedAtUtc TEXT` | 复合主键 `(DocumentId, ProcessingRevision)`，即幂等键；`RunId` 外键；`(RunId, Sequence)` 唯一；`(RunId, DocumentId)` 当前 revision 索引；结果 JSON 禁止原文、图片和凭据。 |
+| `Invoices` | `InvoiceId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`InvoiceDate TEXT`、`Purchaser TEXT`、`Seller TEXT`、`Amount TEXT`、`TaxAmount TEXT`、`TotalAmount TEXT`、`InvoiceCode TEXT`、`InvoiceNumber TEXT`、`DocumentType TEXT`、`Category TEXT`、`Flags INTEGER`、`Confidence TEXT`、`DuplicateKey TEXT`、`ArchiveState TEXT`、`Revision INTEGER` | `(DocumentId, ProcessingRevision)` 外键；`InvoiceId` 主键；`DuplicateKey` 非空时普通索引；`(InvoiceNumber, Seller, InvoiceDate, TotalAmount)` 查询索引；不以发票号码单独做唯一约束。 |
+| `InvoiceItems` | `InvoiceItemId TEXT`、`InvoiceId TEXT`、`Ordinal INTEGER`、`Name TEXT`、`Specification TEXT`、`Unit TEXT`、`Quantity TEXT`、`UnitPrice TEXT`、`Amount TEXT`、`TaxRate TEXT`、`TaxAmount TEXT` | `InvoiceId` 外键；主键 `InvoiceItemId`；`(InvoiceId, Ordinal)` 唯一；删除发票时级联删除明细。 |
+| `Pairings` | `PairingId TEXT`、`RunId TEXT`、`InvoiceDocumentId TEXT`、`InvoiceProcessingRevision INTEGER`、`CompanionDocumentIdsJson TEXT`、`CompanionProcessingRevisionsJson TEXT`、`Score TEXT`、`State TEXT`、`ReasonCode TEXT`、`CreatedAtUtc TEXT`、`UpdatedAtUtc TEXT` | `RunId` 和 invoice processing 复合外键；`(RunId, InvoiceDocumentId, InvoiceProcessingRevision)` 唯一；companion revision 映射必须完整，不能只保存 document ID。 |
+| `ArchivedArtifacts` | `ArtifactId TEXT`、`RunId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`Role TEXT`、`RelativePath TEXT`、`FileName TEXT`、`ContentHash TEXT`、`State TEXT`、`AlreadyExisted INTEGER`、`CreatedAtUtc TEXT`、`CommittedAtUtc TEXT` | processing 复合外键；`ArtifactId` 主键；`(RunId, DocumentId, ProcessingRevision, Role, ContentHash)` 唯一；`RelativePath` 只保存相对输出路径。 |
+| `RunCheckpoints` | `RunId TEXT`、`NodeId TEXT`、`Stage TEXT`、`LastCommittedSequence INTEGER`、`InputCursorJson TEXT`、`OutputCount INTEGER`、`State TEXT`、`CheckpointRevision INTEGER`、`UpdatedAtUtc TEXT` | 复合主键 `(RunId, NodeId)`；`RunId` 外键；`(RunId, Stage, LastCommittedSequence)` 索引；cursor JSON 不得包含秘密或原始正文。 |
+| `MailboxCursors` | `AccountId TEXT`、`Mailbox TEXT`、`UidValidity INTEGER`、`LastCompletedUid INTEGER`、`CursorRevision INTEGER`、`UpdatedAtUtc TEXT` | 复合主键 `(AccountId, Mailbox)`；`UidValidity` 变化时必须重置 `LastCompletedUid`。 |
+| `MailboxAccounts` | `AccountId TEXT`、`EmailAddress TEXT`、`ImapHost TEXT`、`ImapPort INTEGER`、`UseTls INTEGER`、`CredentialName TEXT`、`DisplayName TEXT`、`Revision INTEGER`、`CreatedAtUtc TEXT`、`UpdatedAtUtc TEXT` | `AccountId` 主键；`Revision` 用于乐观并发；`CredentialName` 只能引用受控 secret 名称；不保存授权码。 |
+| `AuditEvents` | `AuditEventId TEXT`、`RunId TEXT`、`EventSequence INTEGER`、`EventType TEXT`、`Stage TEXT`、`NodeId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`ReasonCode TEXT`、`PayloadJson TEXT`、`PayloadHash TEXT`、`OccurredAtUtc TEXT` | `AuditEventId` 主键；`RunId` 外键；`(RunId, EventSequence)` 唯一；`(DocumentId, ProcessingRevision, EventType)` 索引；append-only，不允许 update/delete。 |
+| `RunEvents` | `RunId TEXT`、`EventSequence INTEGER`、`EventType TEXT`、`PayloadJson TEXT`、`EmittedAtUtc TEXT`、`ExpiresAtUtc TEXT` | 复合主键 `(RunId, EventSequence)`；`RunId` 外键；`(RunId, ExpiresAtUtc)` 索引；允许按保留策略 compact，但不得改变既有 sequence。 |
+| `RuleSets` | `RuleSetId TEXT`、`Version INTEGER`、`SchemaVersion TEXT`、`ParentVersion INTEGER`、`RollbackFromVersion INTEGER`、`RollbackTargetVersion INTEGER`、`SourceJson TEXT`、`NormalizedAstJson TEXT`、`SourceFingerprint TEXT`、`AstFingerprint TEXT`、`IsCurrent INTEGER`、`CreatedBy TEXT`、`CreatedAtUtc TEXT` | 复合主键 `(RuleSetId, Version)`；`RuleSetId` 当前版本 partial unique index；`SourceFingerprint`、`AstFingerprint` 索引；历史行 append-only，不允许 update/delete；`SourceJson`/AST 禁止秘密、原始邮件、图片和动态代码。 |
+| `ManualReviewItems` | `ReviewId TEXT`、`RunId TEXT`、`DocumentId TEXT`、`ProcessingRevision INTEGER`、`ReasonCode TEXT`、`State TEXT`、`CurrentRevision INTEGER`、`CurrentResultJson TEXT`、`CreatedAtUtc TEXT`、`ResolvedAtUtc TEXT`、`ResolvedBy TEXT` | processing 复合外键；`ReviewId` 主键；同一 processing revision 只能有一个 open review 的 partial unique index；`CurrentRevision` 用于 optimistic concurrency。 |
+
+`Runs`、`Documents` 和 `DocumentProcessing` 使用不同层次的身份：`DocumentId` 表示跨运行稳定来源身份，`ProcessingRevision` 表示一次处理尝试/结果版本，`RunId` 表示本次运行。所有写入文档处理结果的入口必须使用 `(DocumentId, ProcessingRevision)` 做 upsert；重复投递只能返回已提交结果，不能新增第二份发票、归档或审计结果。新的运行创建新的 revision，人工修正也创建新的 revision 并保留原 revision。
+
+数据库关系要求：删除运行不级联删除全局 `Documents` 或历史审计；首版只允许删除用户明确选择的运行索引和非审计临时数据。删除 `DocumentProcessing` 前必须不存在发票、配对、归档或人工复核引用。所有外键启用 `PRAGMA foreign_keys=ON`，所有 ID 和 enum 值由 `DomainValidation` 在入库前校验。
+
+### 事务、审计与外部文件一致性
+
+数据库写入使用显式事务，单个 candidate 的以下变更必须在同一 SQLite transaction 内提交：`DocumentProcessing` 终态、`Invoices`/`InvoiceItems`、`ManualReviewItems`、`ArchivedArtifacts` 的数据库状态和对应 `AuditEvents`。`AuditEvents` 是同一事务中的 append-only outbox，不是 Serilog 日志；事务回滚时业务数据和审计事件一起回滚。
+
+文件系统移动不能参加 SQLite transaction，因此归档采用两阶段状态：
+
+1. 事务 A 写入 `ArchivedArtifacts(State=Prepared)` 和审计事件，并保存临时文件哈希；
+2. 在受控输出目录内完成原子 rename/replace 并 fsync；
+3. 事务 B 校验最终文件哈希，将状态改为 `Committed` 并追加审计事件；
+4. 崩溃恢复根据 `Prepared` 记录、临时文件和最终文件哈希决定继续提交、清理临时文件或生成 `ARCHIVE_RECOVERY_FAILED`。
+
+报表文件同样先写临时文件，完成哈希和原子替换后，才在事务中保存 `ReportPath` 和 `ReportHash`。任何数据库提交成功但外部文件未完成的记录都必须可由启动恢复扫描，不得标记为已归档。
+
+### Checkpoint、重启恢复和迁移
+
+每个 ZeroPipeline 节点只在其输入 packet 已成功处理、输出 packet 已写入持久化边界且相关 `AuditEvents` 已提交后更新 `RunCheckpoints.LastCommittedSequence`。checkpoint 更新与该 packet 的业务结果使用同一 transaction；未提交的 packet 在恢复时允许重新执行，依靠 `(DocumentId, ProcessingRevision)` 幂等键消除重复副作用。
+
+应用启动时按以下顺序恢复：
+
+1. 获取单实例迁移/恢复锁，运行 `PRAGMA foreign_keys=ON`、WAL 配置和 `PRAGMA integrity_check`；
+2. 检查所有非终态 `Runs` 和 `RunCheckpoints`，将上次进程中断的节点标记为 `Recovering`；
+3. 验证 checkpoint 的 run、node、sequence、cursor 和配置指纹；
+4. 校验 `Prepared` 归档与临时文件/最终文件哈希；
+5. 从最后一个已提交 sequence 重新投递未提交输入，恢复游标和节点执行；
+6. 如果 checkpoint、文件哈希或配置指纹无法验证，运行终止为 `RUN_RECOVERY_FAILED`，保留数据库和现场，不静默丢弃数据。
+
+使用 EF Core migrations 管理结构。发布包只包含已审查的 migration，启动时在独占迁移锁内按顺序执行；禁止 `EnsureCreated`、自动删除数据库、降级 migration 或运行时生成未知 schema。EF 的 `__EFMigrationsHistory` 是唯一迁移版本来源，发布版本同时记录应用 schema compatibility range。
+
+首版 migration assembly 固定为 `InvoiceFlowAI.Infrastructure`，migration history 使用 EF 默认表 `__EFMigrationsHistory`，首个 migration ID 固定为 `20260923_InitialSchema`，包含本规格表格中的全部表、外键、partial unique index、`RuleSets` 当前版本约束和 `MailboxAccounts` revision 约束。首版不拆出运行时 seed migration；内置 Recipe、parser/provider registry 通过只读发布资源加载。默认 RuleSet 是例外：首次启动完成 migration 后，`RuleSetBootstrapper` 在独占恢复锁和同一 UoW 内将发布 fixture 导入 `RuleSets(ruleSetId="default", version=1)`，若该版本已存在则只校验 fingerprint，不重复插入或覆盖。
+
+`UserSettings` 的初始行在同一个 bootstrap UoW 中创建：`SettingsId="default"`、`Revision=1`、`DefaultMailbox="INBOX"`、`RuleSetId="default"`、`RuleSetVersion=1`。因此 `UserSettings` 的 RuleSet 外键始终有效；bootstrap 失败返回 `RULESET_BOOTSTRAP_FAILED`，阻止进入 `Ready`，不能静默使用内存默认规则。后续用户规则保存/回滚只追加新 RuleSet version，并在同一事务中更新 `UserSettings.RuleSetVersion` 指针。
+
+`20260923_InitialSchema` 的验收必须验证：
+
+- `PRAGMA foreign_keys=ON`、WAL、busy timeout 和 text/date/decimal 转换配置在 migration 后生效；
+- `(RuleSetId, Version)`、当前 RuleSet partial unique index、`MailboxAccounts.Revision`、`(AccountId, Mailbox)` cursor 主键和所有 processing 复合外键存在；
+- `AuditEvents` append-only 约束、`RunEvents` sequence 主键、open review partial unique index 和非终态 run partial unique index 存在；
+- migration 在空数据库可重复启动但不会重复执行，第二次启动只读取 `__EFMigrationsHistory`；
+- migration 中途注入 `SQLITE_BUSY`、`SQLITE_FULL` 或 schema mismatch 时事务回滚、保留备份并阻止新 run；
+- 从备份恢复后重新执行 migration 不产生重复规则版本、账户 revision、审计事件或 run event。
+
+实现禁止通过 `dotnet ef database update` 在发布机外生成未审查 migration；CI 必须运行 `dotnet ef migrations script --idempotent` 与空库/已有库 smoke test，并比较生成脚本的 migration ID 集合。`DbContext.Database.MigrateAsync` 只能由启动恢复阶段调用，业务服务和测试 fixture 不得自行迁移数据库。
+
+由于当前仓库尚未创建 .NET solution，`20260923_InitialSchema` 的实际 `Migration`/`ModelSnapshot` C# 文件、生成的 idempotent SQL 和 EF lock 文件属于 scaffold 阶段产物；本规格中的表格、索引和验收清单是其唯一实现依据。不得在设计阶段伪造 migration hash、`__EFMigrationsHistory` 内容或数据库文件。
+
+迁移前将 SQLite 主文件、`-wal` 和 `-shm` 在 checkpoint/关闭连接后复制到带版本的备份目录，并记录备份哈希。迁移失败时回滚当前事务、保留失败诊断、阻止新运行并返回 `DB_MIGRATION_FAILED`；只有用户明确确认且备份校验成功时才允许恢复上一版本。数据库损坏或 `integrity_check` 失败时返回 `DB_CORRUPTED`，先复制只读诊断副本，再尝试最近的完整备份；不能自动新建空数据库替代原库。
+
+检测到 `SQLITE_FULL`、日志目录或临时目录磁盘不足时，停止新的 packet，回滚当前事务，写入可用的启动/诊断日志并返回 `PERSISTENCE_DISK_FULL`。恢复足够空间后，依据最近 checkpoint 重试；已提交事务不回滚，未提交事务不产生业务结果。SQLite busy timeout、WAL、连接重试和批量大小均配置化，但不能通过无限重试掩盖锁死或磁盘故障。
+
+单次运行使用独立的 `DbContext` 生命周期，禁止跨线程共享 `DbContext`。批处理使用有界批量写入，避免逐条提交造成性能和锁竞争问题。日志写入不参与业务事务，Serilog 失败也不能改变已提交业务状态；审计写入失败则按运行级 `Failed` 处理。
+
+### DeepSeek API Key 的 DPAPI 存储
+
+DeepSeek API Key 使用 Windows DPAPI 保存，参考 `E:/GitHub/Lyntai/src/Lyntai.Secrets.Dpapi` 的 `DpapiSecretProtector` 和 Vault 注册边界。新应用不直接在业务服务中调用 `ProtectedData`，而是通过应用层接口隔离平台加密细节：
+
+```csharp
+public interface ISecretStore
+{
+  Task SaveAsync(string name, string value, CancellationToken cancellationToken);
+  Task<string?> GetAsync(string name, CancellationToken cancellationToken);
+  Task DeleteAsync(string name, CancellationToken cancellationToken);
+}
+```
+
+实现要求：
+
+- 使用 `DataProtectionScope.CurrentUser`，使密文只能由保存它的 Windows 用户在同一台机器上解密；
+- 使用固定的应用级 entropy，例如由 `InvoiceFlowAI` 应用标识派生的 UTF-8 字节，避免同一用户下的其他应用直接复用密文；
+- 密文以 Base64 形式保存到 `%LocalAppData%/InvoiceFlowAI/secrets.json` 或等价的本地键值存储；
+- 文件只保存密文、版本和密钥名称，不保存 API Key 明文；
+- 使用临时文件、替换写入和用户 ACL，避免写入中断造成半个密文文件；
+- `Protect`/`Unprotect` 的平台检查在构造阶段完成，非 Windows 环境立即抛出 `PlatformNotSupportedException`；
+- Base64 无效、密文损坏、用户不匹配、机器不匹配或篡改统一转换为 `CryptographicException`，由设置界面显示“凭据不可用，请重新配置”；
+- 日志、审计记录、崩溃报告、JSON/RPC 事件和 ZeroPipeline Recipe 都不能包含 API Key 或解密后的密文。
+
+默认不使用 `LocalMachine`，因为本应用是单用户桌面应用，不需要让同一台机器上的其他账户读取凭据。若未来提供 Windows 服务模式，必须新增显式配置和单独的安全评审，不能静默改变现有密钥作用域。
+
+邮箱授权码沿用同一 `ISecretStore` 抽象和 DPAPI 保护策略。DeepSeek 与邮箱凭据使用不同的逻辑名称，例如 `deepseek.api-key` 和 `mail.imap.auth-code`，但共享相同的用户绑定和文件权限策略。
+
+旧 Python 设置中的 `api_key` 和 `auth_code` 不做明文迁移：首次启动只读取旧设置文件中的非秘密字段；检测到旧 secret 字段时写入一次性迁移诊断 `LEGACY_SECRET_REQUIRES_REENTRY`，不复制到数据库、Avalonia WebView sessionStorage 或日志。用户必须通过 `secret.set` 重新输入，成功后旧字段所在设置文件使用原子重写删除；删除失败阻止旧文件继续被读取并返回 `LEGACY_SECRET_CLEANUP_FAILED`。旧 `email` 映射为新 `MailboxAccountDraft.EmailAddress`，新建账户由后端生成 `AccountId`，旧 `save_path/company/date` 映射为 `UserSettings` 非秘密字段。
+
+`LegacySettingsImporter` 是一次性启动组件，不是 `ISecretStore` 的 fallback provider：它读取旧设置文件的非秘密字段，检测 secret 字段存在性但不得调用旧 DPAPI 解密函数；成功导入后写入 `LegacyImportState(importVersion, sourceFingerprint, importedAtUtc, secretReentryRequired)`，重复启动只读取该状态，不再次读取旧文件。旧文件清理必须在新设置和账户事务提交、secret re-entry 完成后执行；清理失败保持 `LEGACY_SECRET_CLEANUP_FAILED`，禁止回退读取旧文件。此规则明确“无旧格式运行时兼容”与“一次性迁移导入”不矛盾。
+
+URL 证据只保存脱敏域名、稳定哈希和阶段元数据。原始邮件和发票图片默认保存在本地，只有在用户配置的 AI 策略允许时才上传给 DeepSeek。
+
+## 9. 外部集成
+
+- IMAP：使用 MailKit 适配器，支持供应商设置和受限邮箱扫描；
+- 链接恢复：使用 `Microsoft.Playwright` `1.62.0` 和供应商专用下载适配器；
+- 报表：使用 `ClosedXML` `0.105.1` 生成发票汇总、明细和人工复核工作簿；
+- PDF：使用 `PdfPig` `0.1.17-alpha-202609192350-df33d` 进行文本提取和页面判断，使用 `PDFiumCore` `155.0.8057` 将扫描页面渲染为 OCR 图像；
+- OFD：本文档规定的专用 ZIP/XML 发票解析器；
+- 凭据：Windows DPAPI `CurrentUser` 保护器，参考 `Lyntai.Secrets.Dpapi`；
+- 持久化：EF Core 10 + `Microsoft.EntityFrameworkCore.Sqlite`；
+- 日志：Serilog 结构化日志，通过 `Microsoft.Extensions.Logging` 注入；
+- AI：由 `Microsoft.Extensions.AI.OpenAI` 提供 `IChatClient`，接入 DeepSeek 的 OpenAI 兼容端点。
+
+### Windows 11 x64 发布工程
+
+首版采用 Avalonia 12、`net10.0-windows`、`win-x64`、self-contained、unpackaged 应用。应用本身不使用 MSIX；安装、升级和卸载由同一 ProductCode 的 WiX MSI 完成。发布产物分为签名安装器和可诊断的安装目录 manifest，不允许从开发机全局路径加载 native DLL、浏览器或 OCR 模型。
+
+发布目录固定为：
+
+```text
+InvoiceFlowAI/
+  InvoiceFlowAI.exe
+  InvoiceFlowAI.App.dll
+  runtimes/win-x64/native/pdfium/pdfium.dll
+  runtimes/win-x64/native/skia/libSkiaSharp.dll
+  webview/WindowsBackend/             # Avalonia.Controls.WebView 12.1.0 的 Windows backend
+  models/paddle/chinese-v6-tiny/
+    model-manifest.json
+    *.pdmodel
+    *.pdiparams
+  browsers/playwright/chromium/
+    browser-manifest.json
+    chrome.exe
+    ...
+  web/index.html
+  licenses/THIRD-PARTY-NOTICES.txt
+  release-manifest.json
+```
+
+`release-manifest.json` 固定应用版本、Git revision、RID、每个 native 文件的 SHA-256、Avalonia.Controls.WebView backend 版本/哈希、OCR 模型版本/哈希、Playwright Chromium revision 和许可证清单版本。启动诊断只记录 manifest 校验结果，不记录密钥或发票内容。
+
+manifest schema 固定为：
+
+```json
+{
+  "schemaVersion": 1,
+  "applicationVersion": "2026.09.23.0",
+  "gitRevision": "<ci-generated>",
+  "runtimeIdentifier": "win-x64",
+  "configuration": "Release",
+  "signed": true,
+  "webView": { "packageVersion": "12.1.0", "backendVersion": "<asset-generated>" },
+  "playwright": { "packageVersion": "1.62.0", "chromiumRevision": "<asset-generated>" },
+  "assets": [
+    { "relativePath": "InvoiceFlowAI.exe", "length": 0, "sha256": "<generated-at-publish>" },
+    { "relativePath": "web/index.html", "length": 0, "sha256": "<generated-at-publish>" },
+    { "relativePath": "runtimes/win-x64/native/pdfium/pdfium.dll", "length": 0, "sha256": "<generated-at-publish>" }
+  ],
+  "modelManifestPath": "models/paddle/chinese-v6-tiny/model-manifest.json",
+  "browserManifestPath": "browsers/playwright/chromium/browser-manifest.json",
+  "licenseManifestPath": "licenses/THIRD-PARTY-NOTICES.txt",
+  "manifestSha256": "<generated-last>"
+}
+```
+
+`release-manifest.json` 是发布流水线最后生成的文件，不提交带占位符的生产 manifest。构建顺序固定为：publish -> 复制 Avalonia WebView backend/native/model/browser/license 资产 -> 计算每个文件长度和 SHA-256 -> 生成 model/browser manifest -> 生成 release manifest -> 对 manifest 自身计算 hash -> 签名 exe/DLL/MSI -> 重新验证签名和全部 hash。`<generated-at-publish>`、`<asset-generated>` 和 `0` 只能出现在 schema/example fixture，不能出现在 `publish/` 或 MSI 输入目录。
+
+发布资产验证器必须检查相对路径规范化、文件存在、长度、SHA-256、PE x64 架构、签名状态、manifest schema、Avalonia.Controls.WebView backend 版本、Chromium revision、OCR model manifest 和许可证清单。验证失败阻止 WiX 构建；安装后启动再次验证，但只报告脱敏的 asset path/hash 前缀。当前仓库缺少真实 native/runtime/model/browser 二进制，因此只能先提交 manifest schema 和 fixture，真实 hash 必须由 CI 首次下载并锁定资产后生成。
+
+资源加载规则：
+
+- PDFium 使用显式绝对发布目录加载，调用前验证 DLL 哈希和架构；禁止依赖 PATH 或系统安装的 PDFium；
+- SkiaSharp native asset 从 `runtimes/win-x64/native/skia` 加载，验证 x64、版本和 `SKBitmap` stride/通道后才交给 OCR；
+- OCR `ChineseV6Tiny` 模型只从 `models/paddle/chinese-v6-tiny` 加载，manifest 或 SHA-256 不匹配时返回 `OCR_MODEL_LOAD_FAILED`；
+- Playwright 不在用户机器上执行 `playwright install`，构建阶段下载并固定 Chromium revision，运行时使用 manifest 中的 `ExecutablePath`；
+- `Avalonia.Controls.WebView` 使用发布 manifest 指定的 Windows backend；backend 缺失、版本不匹配或无法通过安全策略校验时返回 `WEBVIEW_RUNTIME_UNAVAILABLE`，禁止静默切换到其他浏览器 runtime；
+- 所有临时文件、SQLite、日志、secret 和用户输出目录仍位于 `%LocalAppData%/InvoiceFlowAI` 或用户显式选择的输出目录，不写入安装目录。
+
+签名和安装规则：
+
+- `InvoiceFlowAI.exe`、所有自有 DLL、WiX MSI 和 bootstrapper 使用 SHA-256 Authenticode 签名，并使用 RFC 3161 时间戳；
+- 发布证书只在 CI/发布机使用，证书私钥、thumbprint 和签名密码不进入仓库；开发构建允许未签名，但生产 manifest 必须标记签名状态；
+- WiX MSI 使用稳定 ProductCode，升级通过递增 ProductVersion/PackageCode 原地升级，不允许同一版本并行安装；
+- 升级前保留数据库、secrets、日志和用户输出，升级失败自动回滚应用文件但不覆盖用户数据；
+- 卸载移除程序文件、快捷方式和 Fixed Runtime，但默认保留 `%LocalAppData%/InvoiceFlowAI` 数据；提供显式“同时删除用户数据”选项并二次确认；
+- 安装器必须校验 Windows 11 x64、VC++ 运行时依赖、Avalonia self-contained 发布文件、WebView backend 和发布 manifest，失败时不注册半成品安装。
+
+第三方许可证清单至少包含：Avalonia、Avalonia.Controls.WebView Windows backend、ZeroPipeline、MailKit/MimeKit、EF Core、PDFiumCore/PDFium、PdfPig、SkiaSharp、SimdPaddleOCR 及 `ChineseV6Tiny` 模型、Microsoft.Playwright/Chromium、ClosedXML 和所有传递依赖。清单由 lock file、native manifest 和模型 manifest 生成，并随安装器发布。
+
+### PDF 渲染适配边界
+
+`PDFiumCore` 只位于 `InvoiceFlowAI.Infrastructure.Documents`，通过内部 `IPdfPageRenderer` 接口提供页面渲染能力。`SkiaSharp` 负责图片解码、颜色空间/像素格式转换和向 `SimdPaddleOCR` 提供连续像素缓冲。应用层和领域层不直接引用 PDFium 或 SkiaSharp 类型。
+
+渲染器必须：
+
+- 以 `win-x64` 为首个发布目标，验证 PDFium 原生 DLL 与 .NET 10 的加载方式；
+- 明确原生库搜索路径，优先从应用发布目录加载，禁止依赖开发机全局 DLL；
+- 支持配置 DPI、页面范围、像素格式和最大页面尺寸；
+- 将 PDFium 原生资源随自包含发布包一起发布，并在启动诊断中记录版本和加载结果；
+- 对损坏 PDF、超大页面、渲染超时和原生库加载失败返回稳定错误码；
+- 使用内存流或受控临时文件将渲染结果交给 `IInvoiceOcr`，任务完成后清理临时资源；
+- 在发布验收中确认 PDFiumCore 的许可证、原生组件再分发条款和第三方声明。
+
+`SkiaSharp 4.154.0-preview.1.26454.9` 的 Windows x64 native assets 必须随发布包正确加载；需要验证 PDFium 输出到 SkiaSharp 位图的像素格式、stride、颜色通道顺序和资源释放，避免将未释放的 `SKBitmap` 或非连续缓冲传入 OCR。
+
+文本型 PDF 仍先由 PdfPig 处理；只有文本缺失、文本质量不足或页面需要视觉识别时才调用 PDFium 渲染，避免不必要的 CPU 和内存开销。由于当前 PdfPig 版本为 alpha 预览包，必须在依赖锁定文件和发布构建中固定精确版本，并使用代表性中文发票 PDF 样本验证文本提取结果。
+
+### IMAP 适配边界
+
+`MailKit` 只位于 `InvoiceFlowAI.Infrastructure.Mail`，应用层依赖 `IMailboxScanner`，不直接引用 MailKit 类型。适配器负责：
+
+- 使用 IMAPS/TLS 连接 QQ、163 等邮箱；
+- 按日期范围、发件人和主题规则筛选邮件；
+- 递归读取 MIME、附件和受限深度的嵌套 ZIP；
+- 将附件转换为 `DocumentCandidate`，不把 MimeKit 对象泄漏到领域层；
+- 支持 `CancellationToken`、连接超时、断线重连和单封邮件失败隔离；
+- 对邮件 UID、附件哈希和 Message-ID 去重，避免重复下载；
+- 不记录授权码、邮件正文、完整附件 URL 或完整邮件头。
+
+#### 账户、扫描请求和游标
+
+```csharp
+public sealed record MailboxAccount(
+  string AccountId,
+  string EmailAddress,
+  string ImapHost,
+  int ImapPort = 993,
+  bool UseTls = true,
+  string CredentialName = "mail.imap.auth-code",
+  string DisplayName = "");
+
+public sealed record MailboxAccountDraft(
+  string? AccountId,
+  string EmailAddress,
+  string ImapHost,
+  int ImapPort,
+  bool UseTls,
+  string CredentialName,
+  string DisplayName = "");
+
+public sealed record MailboxAccountSnapshot(
+  MailboxAccount Account,
+  int Revision,
+  bool CredentialConfigured,
+  string MaskedEmailAddress,
+  DateTimeOffset UpdatedAtUtc);
+
+public interface IMailboxAccountStore
+{
+  Task<IReadOnlyList<MailboxAccountSnapshot>> ListAsync(
+    CancellationToken cancellationToken);
+
+  Task<MailboxAccountSnapshot?> GetAsync(
+    string accountId,
+    CancellationToken cancellationToken);
+
+  Task<MailboxAccountSnapshot> SaveAsync(
+    MailboxAccountDraft draft,
+    int expectedRevision,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+
+  Task DeleteAsync(
+    string accountId,
+    int expectedRevision,
+    IUnitOfWork transaction,
+    CancellationToken cancellationToken);
+}
+
+public sealed record MailboxFilterRules(
+  IReadOnlySet<string>? AllowedSenderAddresses = null,
+  IReadOnlySet<string>? AllowedSenderDomains = null,
+  IReadOnlySet<string>? BlockedSenderDomains = null,
+  IReadOnlyList<string>? SubjectKeywords = null,
+  bool CaseInsensitive = true);
+
+public sealed record AttachmentFilterOptions(
+  IReadOnlySet<string> AllowedExtensions,
+  long MaxAttachmentBytes = 5 * 1024 * 1024,
+  int MaxZipDepth = 3,
+  int MaxZipMembersPerArchive = 256,
+  long MaxExpandedBytesPerArchive = 50 * 1024 * 1024,
+  long MaxExpandedBytesPerMessage = 100 * 1024 * 1024,
+  bool KeepFilteredOuterArchive = true);
+
+public sealed record MailboxScanCursor(
+  string AccountId,
+  string Mailbox,
+  uint UidValidity,
+  uint LastCompletedUid,
+  DateTimeOffset UpdatedAtUtc);
+
+public sealed record MailboxScanRequest(
+  MailboxAccount Account,
+  DateOnly Since,
+  DateOnly? BeforeExclusive,
+  string Mailbox,
+  string BusinessTimeZoneId,
+  MailboxFilterRules Rules,
+  AttachmentFilterOptions Attachments,
+  MailboxScanCursor? Cursor = null,
+  int HeaderBatchSize = 200,
+  int MessageBatchSize = 25,
+  int MaxAttempts = 2);
+
+public sealed record MailboxScanBatch(
+  MailboxMessageBatch Messages,
+  MailboxScanCursor Cursor,
+  IReadOnlyList<string> UnresolvedUidHashes,
+  bool IsFinalBatch);
+
+public interface IMailboxScanner
+{
+  IAsyncEnumerable<MailboxScanBatch> ScanAsync(
+    MailboxScanRequest request,
+    CancellationToken cancellationToken);
+}
+```
+
+`IMailboxAccountStore` 只保存非秘密账户配置；授权码永远只通过 `CredentialName` 引用 `ISecretStore`。`AccountId` 是本地生成的 opaque ID，不能使用邮箱地址作为主键；保存账户时必须规范化邮箱、host、mailbox 和 TLS 选项，校验 QQ/163 的 host 白名单或用户明确配置的受支持 host。删除账户前必须没有非终态运行引用它；账户 revision 冲突返回 `MAILBOX_ACCOUNT_REVISION_CONFLICT`。账户保存、删除和 secret 引用变更分别写入审计事件，但审计 payload 不含授权码。
+
+`MailboxAccountDraft.AccountId == null` 只允许在 `expectedRevision == 0` 的创建操作中出现，仓储在同一事务内生成新的 opaque `AccountId`；更新操作必须带已有 `AccountId` 和当前 expected revision。创建成功返回 `AccountMutationResult.Account.Revision=1`。账户测试使用请求中的 mailbox，省略时读取 `UserSettings.DefaultMailbox`，但测试不会改变默认 mailbox 或任何 revision。
+
+SQLite 增加 `MailboxAccounts` 表：`AccountId` 主键、`EmailAddress`、`ImapHost`、`ImapPort`、`UseTls`、`CredentialName`、`DisplayName`、`Revision`、`CreatedAtUtc`、`UpdatedAtUtc`；`EmailAddress` 不做全局唯一约束，`CredentialName` 只能匹配受控 secret 名称。`settings.get` 返回账户摘要和 `CredentialConfigured`，不返回授权码；`settings.update` 只能更新已有账户的非秘密字段，首次建账户使用独立的账户保存 command，避免空 `AccountId` 被隐式创建。
+
+默认 `AllowedExtensions` 为 `.pdf`、`.ofd`、`.xml`、`.jpg`、`.jpeg`、`.png` 和 `.zip`，比较时统一转为小写并以文件魔数复核，不能只信任扩展名。单个直接附件或 ZIP 成员超过 5 MiB 时不解包为正常 candidate；在 `KeepFilteredOuterArchive=true` 时保留外层文件并产生 `ATTACHMENT_OVER_SIZE` 或 `ZIP_MEMBER_OVER_SIZE` 的候选结果。ZIP 超过深度、成员数或展开总量限制时停止继续展开，保留外层容器并产生 `ZIP_LIMIT_EXCEEDED`，禁止 Zip Slip、绝对路径、符号链接和重复展开。
+
+日期语义与 Python 保持一致：`Since` 包含，`BeforeExclusive` 不包含；邮件 `Date` 头优先，缺失或非法时使用 IMAP `INTERNALDATE`；先转换到 `BusinessTimeZoneId`，首版固定为 `Asia/Shanghai`，再比较本地日期。`BeforeExclusive` 必须晚于 `Since`。日期过滤不能使用客户端机器的本地时区。
+
+扫描先以 UID 搜索建立稳定范围，再按 `HeaderBatchSize` 读取日期/内部日期，按 `MessageBatchSize` 拉取 RFC822 内容。只有一个 message batch 成功完成并将 `LastCompletedUid` 持久化后，游标才能前进。`UIDVALIDITY` 变化时旧游标失效，必须从新的 mailbox 范围重新扫描，不能继续使用旧 UID。未完成 UID 使用短 SHA-256 诊断指纹记录；重试耗尽后无法建立完整扫描范围时，扫描返回运行级 `MAILBOX_INPUT_UNRESOLVED`，已读取的 candidate 只作为诊断保留。
+
+#### 认证和失败边界
+
+邮箱认证属于运行级边界：
+
+- 凭据缺失、DPAPI 解密失败、IMAP `AUTHENTICATE` 返回 401/登录失败、TLS 证书验证失败或 `SELECT` 目标 mailbox 失败，产生 `MAILBOX_CREDENTIALS_INVALID`、`MAILBOX_TLS_FAILED` 或 `MAILBOX_SELECT_FAILED`，运行终态为 `Failed`，不能按候选级失败继续处理；
+- DNS、连接断开、临时服务器错误和超时可以按 `MaxAttempts` 重试，耗尽后产生 `MAILBOX_CONNECTION_FAILED`，仍属于运行级 `Failed`；
+- 单封邮件 MIME 损坏、单个附件解压失败或单个附件超过限制，不影响其他邮件，转换为该 candidate 的 `CandidateProcessResult`；
+- `CancellationToken` 取消只停止扫描和后续投递，已完成 batch 的游标保持有效，运行按统一取消规则结束。
+
+DeepSeek 认证边界不同：DeepSeek API Key 是整个运行共享的基础设施凭据，HTTP 401/403、API Key 缺失或 `AI_AUTHENTICATION_FAILED` 应立即停止新的 AI 请求并作为运行级 `Failed`；不能把同一失效 Key 重试成多个候选级 `AuthFailed`。DeepSeek 超时、连接失败、限流、非法 JSON 和图片过大仍按 adapter 规则产生候选级结果或可重试结果；只有服务策略明确判定为全局额度/服务不可用时，才升级为运行级失败。邮箱认证和 DeepSeek 认证都不得把原始响应、授权值或完整请求写入日志/RPC。
+
+IMAP 测试使用 MailKit 可替换的传输/协议边界或本地测试服务器，覆盖 TLS 失败、认证失败、分页、重复邮件、嵌套附件、损坏 MIME、断线重连和取消；还必须验证 `UIDVALIDITY` 变化会重置游标、`LastCompletedUid` 只在完整 batch 提交后推进、`Asia/Shanghai` 日期边界的包含/排除规则、发件人/主题筛选、5 MiB 附件限制、ZIP 深度/成员数/展开字节数限制，以及未完成 UID 导致运行级 `MAILBOX_INPUT_UNRESOLVED`。DeepSeek 测试必须验证 401/403 直接升级运行级失败且不会为每个候选重复重试。
+
+## 10. 错误模型
+
+前端使用稳定错误码，而不是直接展示原始异常文本：
+
+```json
+{
+  "runId": "run-1",
+  "stage": "document_extraction",
+  "reasonCode": "OFD_INVOICE_XML_NOT_FOUND",
+  "userMessage": "OFD 文件中未找到可识别的发票数据。",
+  "retryable": false,
+  "documentId": "document-1",
+  "detailsAvailable": true
+}
+```
+
+错误类别包括输入校验、单文件失败、可重试的网络/AI 失败、邮箱认证、AI 认证、邮件正文、配对、规则、归档、人工复核、OCR、持久化、磁盘、Avalonia WebView 和系统错误。邮箱扫描至少使用 `MAILBOX_CREDENTIALS_INVALID`、`MAILBOX_TLS_FAILED`、`MAILBOX_SELECT_FAILED`、`MAILBOX_CONNECTION_FAILED`、`MAILBOX_INPUT_UNRESOLVED`、`ATTACHMENT_OVER_SIZE`、`ZIP_LIMIT_EXCEEDED`；AI 认证使用 `AI_AUTHENTICATION_FAILED`；邮件正文使用 `EMAIL_BODY_PARSER_CONFLICT`、`EMAIL_BODY_RECEIPT_INVALID`、`LEGACY_SECRET_REQUIRES_REENTRY`、`LEGACY_SECRET_CLEANUP_FAILED`；配对/规则使用 `PAIRING_AMBIGUOUS`、`PAIRING_CROSS_MESSAGE_DISABLED`、`RULESET_INVALID`、`PROVIDER_RULE_CONFLICT`、`SPECIAL_PARSER_CONFLICT`；归档/复核/OCR 使用 `ARCHIVE_NAME_CONFLICT`、`ARCHIVE_RECOVERY_FAILED`、`REVIEW_REVISION_CONFLICT`、`OCR_MODEL_LOAD_FAILED`、`OCR_IMAGE_INVALID`、`PDF_RENDER_FAILED`；持久化使用 `PERSISTENCE_DISK_FULL`、`DB_CORRUPTED`、`DB_MIGRATION_FAILED` 和 `RUN_RECOVERY_FAILED`。面向用户的消息安全且可本地化；诊断信息只保留脱敏后的技术细节。
+
+## 11. 测试与验收
+
+### 单元测试
+
+覆盖领域校验、金额和税额计算、规则 AST/优先级、公司/供应商冲突、配对兼容性/评分/多最优解、查重、归档命名/清洗/冲突后缀、路径安全、人工复核字段白名单和 revision、三类 parser 契约、特殊 parser registry、OFD XML 变体、DocumentImage 生命周期、PDF 渲染和 OCR 归一化、模型 manifest hash 校验、DeepSeek 响应校验、DPAPI 密钥存储、Serilog 日志字段和报表映射。
+
+### 集成测试
+
+验证 Avalonia.Controls.WebView RPC 分发、完整本地文件链路、真实 OFD 样本、假的 `IChatClient` 响应、重试/取消、EF Core SQLite 持久化、迁移、IUnitOfWork commit/rollback、业务数据与审计原子性、RunEvents 序号并发、Prepared/Committed 归档恢复、并发写入和 Excel 生成。四类特殊 parser 和四类 email-body parser 还必须用当前 Python 样本和 QingPiao 样本做行为对照：字段等价、人工复核原因稳定、PDF 多发票切分一致、XML/OFD 优先级一致。
+
+上述集成测试必须额外包含以下故障注入场景：事务提交前进程终止、业务结果已提交但 RunEvent 未提交、checkpoint 已提交但下游输出未提交、`Prepared` 临时文件存在而最终文件不存在、最终文件 hash 相同/不同、report.export 重复请求、report.open token 重复消费、旧路径 API 被拒绝、旧 GLM 配置触发 secret re-entry，以及四类 email-body receipt parser 的成功/缺字段/冲突样本。每个场景都必须验证不会产生重复归档、重复审计事件、重复 event sequence 或伪造 `Completed` 终态。
+
+### Windows 端到端测试
+
+在干净的 Windows 11 x64 环境中验证首次启动、Avalonia.Controls.WebView 加载、取消、网络中断和重试、大批量处理、WebView backend 故障后的恢复、自包含启动、OCR 模型随包加载，以及不依赖 Python。
+
+### 性能预算与容量验收
+
+首版性能预算是 Windows 11 x64、Release、无调试器、SSD、本地 SQLite、固定模型和默认并发配置下的验收上限，而不是硬件承诺：
+
+| 场景 | 预算 |
+| --- | ---: |
+| 冷启动到 `Ready`（已有数据库和已校验资产） | p95 <= 5 s |
+| Avalonia.Controls.WebView `index.html` 加载到 `bridge.hello` 完成 | p95 <= 1.5 s |
+| 空邮箱运行到 `Completed/NO_CANDIDATES` | p95 <= 8 s |
+| 单页本地 OCR（不含模型首次加载） | p95 <= 2.5 s |
+| 单候选 Track A 提取（不含网络重试） | p95 <= 6 s |
+| 单候选 Track B 请求端到端 | p95 <= 30 s |
+| SQLite 单 packet 提交（含审计） | p95 <= 250 ms |
+| 32 个 in-flight candidate 稳定运行 10 分钟 | 无未释放 image lease、无 sequence gap、工作集 <= 1.5 GiB |
+
+性能测试必须固定输入样本、机器规格、模型 manifest、DeepSeek fake latency 和并发参数；报告 p50/p95、峰值 working set、GC、SQLite busy/retry、packet backlog 和候选吞吐。超过预算只记录为性能回归，不得通过放大队列、取消 hash 校验、跳过审计或提高并发上限掩盖问题。
+
+验收以行为而非代码翻译相似度为标准：
+
+- 相同邮箱样本得到等价的候选集合；
+- 在 MailKit `4.18.0` 下，相同邮箱样本得到等价的候选集合；
+- 相同 PDF/OFD/XML 样本得到等价的发票字段和人工复核分类；
+- 配对、归档、查重、报表和审计结果正确；
+- 所有失败场景都有稳定且可解释的错误；
+- 在干净的 Windows 11 机器上，只配置必要的 DeepSeek 信息即可运行发布包。
+
+## 12. 风险与待验证事项
+
+- 通过目标端点验证 DeepSeek Flash 的具体模型标识和多模态内容格式；
+- 验证 `Microsoft.Extensions.AI.OpenAI 10.10.0` 的 `DataContent` 或受控 adapter 最终生成 `user.content[].type=image_url`，并正确承载 Base64 data URL；
+- 验证 `deepseek-flash` 的 `detail=original`、图片格式和 48 MiB/32 MiB 限制处理；
+- 验证 `ZeroPipeline.Core 1.2.0` 在 .NET 10 `win-x64` 发布目标中的 DAG 调度、背压、取消和节点失败隔离；
+- 验证 DPAPI 当前用户作用域、应用 entropy、密文损坏和用户/机器迁移失败行为；
+- 验证 Serilog 日志结构、滚动保留、异常事件、取消事件和敏感字段脱敏；
+- 测试 SimdPaddleOCR 对小字体、旋转、低分辨率和扫描发票的识别效果；
+- 验证 PDF/OFD 渲染质量是否满足 OCR 要求；
+- 验证 `PDFiumCore` `155.0.8057` 在自包含 `win-x64` 发布包中的原生 DLL 加载、版本诊断和许可证声明；
+- 验证 `SkiaSharp` `4.154.0-preview.1.26454.9` 的 native assets、像素格式、stride 和 OCR 资源释放；
+- 验证 `PdfPig` `0.1.17-alpha-202609192350-df33d` 的中文发票文本提取、alpha 包还原和发布构建可重复性；
+- 使用 `original_invoice.xml` 和 `Tag.xml`/`CustomTag.xml` 两类样本验证 OFD 解析；
+- 确认 Playwright 供应商流程和打包后的浏览器行为；
+- 测量受限 OCR 并发下的内存占用；
+- 确认中文 Excel 列宽和自包含发布包体积。
+
+这些是实现阶段的验证任务，不构成改变已批准架构的理由。

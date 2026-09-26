@@ -1,0 +1,108 @@
+InvoiceFlowAI — Third-Party Notices (Task 11)
+================================================
+
+This product includes software developed by the parties listed below.
+The full license texts for these projects are reproduced from their
+upstream repositories at the versions pinned in Directory.Packages.props
+and the global.json toolchain manifest. The hashes of every shipped
+asset are recorded in manifests/release.json (verified at install
+time) and manifests/model.json (verified at runtime).
+
+------------------------------------------------------------------------
+.NET Runtime + SDK 10.0.100
+------------------------------------------------------------------------
+  Copyright (c) .NET Foundation and Contributors.
+  Licensed under the MIT License.
+  https://github.com/dotnet/runtime
+
+------------------------------------------------------------------------
+Avalonia 12.1.0 (UI framework)
+------------------------------------------------------------------------
+  Copyright (c) AvaloniaUI OÜ.
+  Licensed under the MIT License.
+  https://github.com/AvaloniaUI/Avalonia
+
+------------------------------------------------------------------------
+Avalonia.Controls.WebView 12.1.0
+------------------------------------------------------------------------
+  Copyright (c) AvaloniaUI OÜ.
+  Licensed under the MIT License.
+  WebView2Loader.dll (Microsoft) shipped unmodified.
+
+------------------------------------------------------------------------
+Microsoft.Extensions.AI + Microsoft.Extensions.AI.OpenAI 10.10.0
+------------------------------------------------------------------------
+  Copyright (c) Microsoft Corporation.
+  Licensed under the MIT License.
+
+------------------------------------------------------------------------
+MailKit 4.18.0
+------------------------------------------------------------------------
+  Copyright (c) 2013-present, Xamarin Inc. and other MailKit authors.
+  Licensed under the MIT License.
+
+------------------------------------------------------------------------
+Sdcb.SimdPaddleOCR 1.4.2
+------------------------------------------------------------------------
+  Copyright (c) Sdcb and contributors.
+  Licensed under the Apache License, Version 2.0.
+
+------------------------------------------------------------------------
+Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny 1.0.0
+------------------------------------------------------------------------
+  Copyright and model attribution as distributed by Sdcb and PaddleOCR.
+  Licensed under the Apache License, Version 2.0.
+  The package embeds PP-OCRv6 Tiny DET/REC, text-orientation CLS, and
+  dictionary assets in Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll.
+  The shipped model assembly SHA-256 is recorded in manifests/model.json.
+
+------------------------------------------------------------------------
+PDFiumCore 155.0.8057
+------------------------------------------------------------------------
+  Copyright (c) 2014-present, PDFium Authors.
+  Licensed under the Apache License, Version 2.0.
+  PDFium binary distributed under the Chromium BSD-style licence;
+  see https://pdfium.googlesource.com/pdfium/
+
+------------------------------------------------------------------------
+PdfPig 0.1.17-alpha-202609192350-df33d
+------------------------------------------------------------------------
+  Copyright (c) 2018-present, UglyToad and PdfPig contributors.
+  Licensed under the Apache License, Version 2.0.
+
+------------------------------------------------------------------------
+SkiaSharp 4.154.0-preview.1.26454.9
+------------------------------------------------------------------------
+  Copyright (c) 2015-present, Xamarin Inc. and the .NET Foundation.
+  Licensed under the MIT License.
+
+------------------------------------------------------------------------
+ClosedXML 0.105.1
+------------------------------------------------------------------------
+  Copyright (c) 2015-present, ClosedXML contributors.
+  Licensed under the MIT License.
+
+------------------------------------------------------------------------
+Microsoft.Playwright 1.62.0 (test-only)
+------------------------------------------------------------------------
+  Copyright (c) Microsoft Corporation.
+  Licensed under the Apache License, Version 2.0.
+
+------------------------------------------------------------------------
+xunit 2.x + xunit.analyzers
+------------------------------------------------------------------------
+  Copyright (c) .NET Foundation and Contributors.
+  Licensed under the Apache License, Version 2.0.
+
+------------------------------------------------------------------------
+WiX Toolset 5.0.2
+------------------------------------------------------------------------
+  Copyright (c) .NET Foundation and Contributors.
+  Licensed under the MS-RL License.
+  WiX is bundled only at build time and is not shipped in the MSI.
+
+------------------------------------------------------------------------
+Serilog 3.x
+------------------------------------------------------------------------
+  Copyright (c) 2013-present, Serilog contributors.
+  Licensed under the Apache License, Version 2.0.

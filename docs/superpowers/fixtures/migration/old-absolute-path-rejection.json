@@ -1,0 +1,21 @@
+{
+  "$comment": "Task 12 step 1 — every absolute-path shape the legacy Python app used to expose. None of these are valid in the .NET JSON-RPC v1 surface; the dispatcher must reject them with RPC_METHOD_UNKNOWN or RPC_INVALID_PARAMS, and the WebView bridge must not surface them to the UI.",
+  "schema_version": 1,
+  "legacy_method_paths": [
+    "/api/run/start",
+    "/api/report/export?absolute=true",
+    "/api/report/open?path=C:\\Reports\\foo.xlsx",
+    "/api/archive/list?root=C:\\Archive",
+    "/api/secret/get?key=provider_api_key",
+    "pywebview.api.run_start",
+    "pywebview.api.report_export_absolute",
+    "pywebview.api.archive_list_root",
+    "pywebview.api.secret_get"
+  ],
+  "expected_response": {
+    "code": "RPC_METHOD_UNKNOWN",
+    "message": "method is not part of invoiceflow.rpc.v1",
+    "secret_leaked": false,
+    "audit_logged": true
+  }
+}

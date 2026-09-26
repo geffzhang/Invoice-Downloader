@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "parserId": "provider-special-layout",
+  "version": "1.0",
+  "fixtureId": "provider-special-layout-basic",
+  "sourceKind": "ofd",
+  "documentId": "document-special-1",
+  "fields": {
+    "invoiceDate": "2026-09-20",
+    "purchaser": "Example Co",
+    "seller": "百望股份",
+    "amount": "100.00",
+    "taxAmount": "13.00",
+    "totalAmount": "113.00",
+    "invoiceNumber": "12345678",
+    "documentType": "Catering"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {
+      "caseId": "uid-dedupe-and-stable-ascending-order",
+      "sinceUid": 2,
+      "inputUids": [5, 3, 5, 8, 3],
+      "expectedUids": [3, 5, 8]
+    }
+  ]
+}

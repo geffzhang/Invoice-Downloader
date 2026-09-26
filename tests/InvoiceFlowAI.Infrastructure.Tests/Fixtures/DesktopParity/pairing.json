@@ -1,0 +1,95 @@
+{
+  "cases": [
+    {
+      "caseId": "ride-provider-mismatch-is-unmatched",
+      "family": "ride",
+      "invoices": [
+        { "id": "ride-invoice-a", "amount": 100.00, "businessDate": "2026-06-01", "provider": "didi", "merchantTokens": [], "sourceMessageUid": "uid-a" }
+      ],
+      "companions": [
+        { "id": "ride-itinerary-b", "amount": 100.00, "businessDate": "2026-06-01", "provider": "gaode", "merchantTokens": [], "sourceMessageUid": "uid-a" }
+      ],
+      "expectedPairs": [],
+      "expectedAmbiguityCount": 0
+    },
+    {
+      "caseId": "ride-three-percent-tax-tolerance",
+      "family": "ride",
+      "invoices": [
+        { "id": "ride-invoice-tax", "amount": 100.00, "businessDate": "2026-06-01", "provider": "didi", "merchantTokens": ["merchant-a"], "sourceMessageUid": "uid-tax" }
+      ],
+      "companions": [
+        { "id": "ride-itinerary-tax", "amount": 103.00, "businessDate": "2026-06-01", "provider": "didi", "merchantTokens": ["merchant-a"], "sourceMessageUid": "uid-tax" }
+      ],
+      "expectedPairs": [["ride-invoice-tax", "ride-itinerary-tax"]],
+      "expectedAmbiguityCount": 0
+    },
+    {
+      "caseId": "hotel-three-day-date-boundary",
+      "family": "hotel",
+      "invoices": [
+        { "id": "hotel-invoice-a", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": [], "sourceMessageUid": "uid-hotel" }
+      ],
+      "companions": [
+        { "id": "hotel-folio-a", "amount": 500.00, "businessDate": "2026-06-04", "provider": "hotel-a", "merchantTokens": [], "sourceMessageUid": "uid-hotel" }
+      ],
+      "expectedPairs": [["hotel-invoice-a", "hotel-folio-a"]],
+      "expectedAmbiguityCount": 0
+    },
+    {
+      "caseId": "ride-global-assignment-is-deterministic-and-single-use",
+      "family": "ride",
+      "invoices": [
+        { "id": "ride-invoice-preferred", "amount": 100.00, "businessDate": "2026-06-01", "provider": "didi", "merchantTokens": [], "sourceMessageUid": "shared-uid" },
+        { "id": "ride-invoice-lower-score", "amount": 100.40, "businessDate": "2026-06-01", "provider": "didi", "merchantTokens": [], "sourceMessageUid": "other-uid" }
+      ],
+      "companions": [
+        { "id": "ride-itinerary-shared", "amount": 103.00, "businessDate": "2026-06-01", "provider": "didi", "merchantTokens": [], "sourceMessageUid": "shared-uid" }
+      ],
+      "expectedPairs": [["ride-invoice-preferred", "ride-itinerary-shared"]],
+      "expectedAmbiguityCount": 0
+    },
+    {
+      "caseId": "equal-score-membership-is-ambiguous",
+      "family": "hotel",
+      "invoices": [
+        { "id": "hotel-invoice-a", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": [], "sourceMessageUid": "uid-same" },
+        { "id": "hotel-invoice-b", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": [], "sourceMessageUid": "uid-same" }
+      ],
+      "companions": [
+        { "id": "hotel-folio-a", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": [], "sourceMessageUid": "uid-same" },
+        { "id": "hotel-folio-b", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": [], "sourceMessageUid": "uid-same" }
+      ],
+      "expectedPairs": [],
+      "expectedAmbiguityCount": 1
+    },
+    {
+      "caseId": "hotel-merchant-token-tie-break",
+      "family": "hotel",
+      "invoices": [
+        { "id": "hotel-invoice-sheraton", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": ["sheraton"], "sourceMessageUid": "shared-uid" },
+        { "id": "hotel-invoice-marriott", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": ["marriott"], "sourceMessageUid": "shared-uid" }
+      ],
+      "companions": [
+        { "id": "hotel-folio-marriott", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": ["marriott"], "sourceMessageUid": "shared-uid" },
+        { "id": "hotel-folio-sheraton", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": ["sheraton"], "sourceMessageUid": "shared-uid" }
+      ],
+      "expectedPairs": [["hotel-invoice-marriott", "hotel-folio-marriott"], ["hotel-invoice-sheraton", "hotel-folio-sheraton"]],
+      "expectedAmbiguityCount": 0
+    },
+    {
+      "caseId": "hotel-source-uid-tie-break",
+      "family": "hotel",
+      "invoices": [
+        { "id": "hotel-invoice-uid-a", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": [], "sourceMessageUid": "uid-a" },
+        { "id": "hotel-invoice-uid-b", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": [], "sourceMessageUid": "uid-b" }
+      ],
+      "companions": [
+        { "id": "hotel-folio-uid-b", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": [], "sourceMessageUid": "uid-b" },
+        { "id": "hotel-folio-uid-a", "amount": 500.00, "businessDate": "2026-06-01", "provider": "hotel-a", "merchantTokens": [], "sourceMessageUid": "uid-a" }
+      ],
+      "expectedPairs": [["hotel-invoice-uid-a", "hotel-folio-uid-a"], ["hotel-invoice-uid-b", "hotel-folio-uid-b"]],
+      "expectedAmbiguityCount": 0
+    }
+  ]
+}
