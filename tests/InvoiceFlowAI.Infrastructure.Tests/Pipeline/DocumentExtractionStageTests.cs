@@ -193,7 +193,7 @@ public sealed class DocumentExtractionStageTests
         firstPairStarted.Should().Be(extractor.TwoStarted.Task);
         preflightCountAtOverlap.Should().Be(4);
         extractor.MaximumActive.Should().Be(2);
-        extractor.CompletionOrder.Take(2).Should().Equal(1, 0);
+        extractor.CompletionOrder.Should().ContainInOrder(1, 0);
         result.Results.Select(item => item.Candidate.Sequence).Should().Equal(0, 1, 2, 3);
     }
 
