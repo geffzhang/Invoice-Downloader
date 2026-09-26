@@ -11,6 +11,7 @@ namespace InvoiceFlowAI.Infrastructure.Mail;
 
 public sealed class MailKitMailboxSession : IMailboxSession
 {
+    private const int MaximumMessageFetchAttempts = 2;
     private static readonly TimeZoneInfo ShanghaiTimeZone = TimeZoneInfo.FindSystemTimeZoneById("China Standard Time");
     private static readonly Regex HtmlTagPattern = new("<[^>]+>", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private readonly ImapClient _client;
@@ -93,18 +94,26 @@ public sealed class MailKitMailboxSession : IMailboxSession
         foreach (var uid in selectedUids)
         {
             summaryByUid.TryGetValue(uid, out var summary);
-            try
+            for (var attempt = 1; attempt <= MaximumMessageFetchAttempts; attempt++)
             {
-                var message = await getMessageAsync(uid, cancellationToken).ConfigureAwait(false);
-                messages.Add(ProjectMessage(uid.Id, message, summary?.InternalDateUtc));
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception)
-            {
-                fetchFailures.Add(new MailboxFetchFailure(uid.Id, "IMAP_MESSAGE_FETCH_FAILED"));
+                try
+                {
+                    var message = await getMessageAsync(uid, cancellationToken).ConfigureAwait(false);
+                    messages.Add(ProjectMessage(uid.Id, message, summary?.InternalDateUtc));
+                    break;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception) when (attempt < MaximumMessageFetchAttempts)
+                {
+                    continue;
+                }
+                catch (Exception)
+                {
+                    fetchFailures.Add(new MailboxFetchFailure(uid.Id, "IMAP_MESSAGE_FETCH_FAILED"));
+                }
             }
         }
 

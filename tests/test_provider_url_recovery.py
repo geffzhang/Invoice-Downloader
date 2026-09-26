@@ -1799,6 +1799,46 @@ class ProviderUrlRecoveryTests(unittest.TestCase):
         self.assertEqual(result["status"], "downloaded")
         self.assertTrue(result["pdf_path"].endswith(".pdf"))
 
+    def test_baiwang_selector_matches_shared_recovery_fixtures(self):
+        fixture_path = (
+            Path(__file__).parent
+            / "InvoiceFlowAI.Infrastructure.Tests"
+            / "Fixtures"
+            / "DesktopParity"
+            / "provider-recovery.json"
+        )
+        fixtures = json.loads(fixture_path.read_text(encoding="utf-8"))["cases"]
+        converter = PDFConverter(staging_dir=tempfile.mkdtemp(), url_policy=public_test_policy())
+
+        for fixture in fixtures:
+            if fixture.get("selector") != "baiwang":
+                continue
+            artifacts = [
+                {
+                    "kind": capture["kind"].lower(),
+                    "source_url": f"https://fixture.invalid/source/{capture['sourceUrlOrdinal']}",
+                    "fields": dict(capture.get("fields", {})),
+                    "wrapper_detected": capture.get("captureReason") == "BAIWANG_WRAPPER_DETECTED",
+                }
+                for capture in fixture["captures"]
+            ]
+
+            selected, reason = converter._select_baiwang_recovery_result(
+                artifacts,
+                fixture["expectedFields"],
+            )
+
+            expected_index = fixture["expectedSelectedIndex"]
+            self.assertEqual(
+                artifacts.index(selected) if selected is not None else -1,
+                expected_index,
+                fixture["caseId"],
+            )
+            if expected_index < 0:
+                self.assertEqual(reason, "pdf_entity_mismatch", fixture["caseId"])
+            else:
+                self.assertEqual(reason, fixture["expectedMatchReason"], fixture["caseId"])
+
     def test_nuonuo_shortlink_recovers_invoice_pdf_without_chromium(self):
         original_requests = pdf_converter.requests
         pdf_converter.requests = FakeRequests

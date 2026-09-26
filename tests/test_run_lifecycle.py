@@ -382,8 +382,6 @@ def _controlled_request(api):
 
 
 def test_truth_audit_timeout_is_bounded_and_late_worker_is_quarantined(tmp_path, monkeypatch):
-    import audit_email_truth
-
     api = InvoiceAppAPI(truth_audit_timeout_seconds=0.02)
     old_root = tmp_path / "old-run"
     new_root = old_root
@@ -400,7 +398,7 @@ def test_truth_audit_timeout_is_bounded_and_late_worker_is_quarantined(tmp_path,
         assert release_audit.wait(2)
         return {"run": "old", "email_domain": email.split("@")[-1]}
 
-    monkeypatch.setattr(audit_email_truth, "collect_truth_table", collect_truth_table)
+    monkeypatch.setattr(api, "_runtime_truth_audit_contract", collect_truth_table)
     monkeypatch.setattr(
         api,
         "_safe_emit_run_state_event",
@@ -454,14 +452,12 @@ def test_truth_audit_timeout_is_bounded_and_late_worker_is_quarantined(tmp_path,
 
 
 def test_truth_audit_deadline_does_not_wait_for_blocked_publication(tmp_path, monkeypatch):
-    import audit_email_truth
-
     api = InvoiceAppAPI(truth_audit_timeout_seconds=0.02)
     shared_root = tmp_path / "shared-run-root"
     api._run_context = _controlled_context(shared_root, "old")
     api._current_run_id = "old"
     monkeypatch.setattr(api, "_refresh_run_context", lambda: api._run_context)
-    monkeypatch.setattr(audit_email_truth, "collect_truth_table", lambda *args: {"run": "old"})
+    monkeypatch.setattr(api, "_runtime_truth_audit_contract", lambda *args: {"run": "old"})
     publication_entered = threading.Event()
     release_publication = threading.Event()
     callbacks = []
@@ -521,14 +517,12 @@ def test_truth_audit_deadline_does_not_wait_for_blocked_publication(tmp_path, mo
 
 
 def test_normal_path_promotion_stall_fails_closed_without_late_visibility(tmp_path, monkeypatch):
-    import audit_email_truth
-
     api = InvoiceAppAPI(truth_audit_timeout_seconds=0.02)
     shared_root = tmp_path / "promotion-stall"
     api._run_context = _controlled_context(shared_root, "old")
     api._current_run_id = "old"
     monkeypatch.setattr(api, "_refresh_run_context", lambda: api._run_context)
-    monkeypatch.setattr(audit_email_truth, "collect_truth_table", lambda *args: {"run": "old"})
+    monkeypatch.setattr(api, "_runtime_truth_audit_contract", lambda *args: {"run": "old"})
     normal_path = (shared_root / "monitoring" / "email_truth_audit.json").resolve()
     promotion_entered = threading.Event()
     release_promotion = threading.Event()
@@ -597,8 +591,6 @@ def test_normal_path_promotion_stall_fails_closed_without_late_visibility(tmp_pa
 
 
 def test_controlled_run_config_and_audit_share_confined_canonical_locator(tmp_path, monkeypatch):
-    import audit_email_truth
-
     api = InvoiceAppAPI(truth_audit_timeout_seconds=0.05)
     run_root = tmp_path / "confined-run"
     external_monitoring = tmp_path / "external-monitoring"
@@ -607,7 +599,7 @@ def test_controlled_run_config_and_audit_share_confined_canonical_locator(tmp_pa
     api._run_context = context
     api._current_run_id = "confined"
     monkeypatch.setattr(api, "_refresh_run_context", lambda: api._run_context)
-    monkeypatch.setattr(audit_email_truth, "collect_truth_table", lambda *args: {"status": "ok", "rows": 1})
+    monkeypatch.setattr(api, "_runtime_truth_audit_contract", lambda *args: {"status": "ok", "rows": 1})
     monkeypatch.setattr(api, "_cleanup_temp_folders", lambda **kwargs: None)
 
     api._begin_run("running")
@@ -645,15 +637,51 @@ def test_controlled_run_config_and_audit_share_confined_canonical_locator(tmp_pa
     assert not list(external_monitoring.rglob("truth_audit_index.json"))
 
 
-def test_timely_valid_truth_audit_keeps_run_completed(tmp_path, monkeypatch):
-    import audit_email_truth
+def test_runtime_truth_audit_does_not_import_preserved_audit_tool(tmp_path, monkeypatch):
+    import app_api
 
+    api = InvoiceAppAPI(truth_audit_timeout_seconds=0.05)
+    api._run_context = _controlled_context(tmp_path / "runtime-audit", "runtime-audit")
+    api._current_run_id = "runtime-audit"
+    api._effective_date_from = "2026-06-01"
+    api._effective_date_to = "2026-06-30"
+    monkeypatch.setattr(api, "_refresh_run_context", lambda: api._run_context)
+    imported_modules = []
+    original_import_module = app_api.importlib.import_module
+
+    def tracked_import_module(name, *args, **kwargs):
+        imported_modules.append(name)
+        return original_import_module(name, *args, **kwargs)
+
+    monkeypatch.setattr(app_api.importlib, "import_module", tracked_import_module)
+    monkeypatch.setattr(api, "_cleanup_temp_folders", lambda **kwargs: None)
+
+    api._begin_run("running")
+    api._start_truth_audit_async("user@example.com", "fixture-auth-code")
+    assert api._truth_audit_job.ready.wait(1)
+
+    assert "audit_email_truth" not in imported_modules
+    report_text = api._truth_audit_job.paths.report_path.read_text(encoding="utf-8")
+    report = json.loads(report_text)
+    assert report == {
+        "status": "skipped",
+        "reason": "STRICT_TRUTH_AUDIT_RUNS_AFTER_BATCH",
+        "email_domain": "example.com",
+        "has_auth_code": True,
+        "date_from": "2026-06-01",
+        "date_to": "2026-06-30",
+    }
+    assert "user@example.com" not in report_text
+    assert "fixture-auth-code" not in report_text
+
+
+def test_timely_valid_truth_audit_keeps_run_completed(tmp_path, monkeypatch):
     api = InvoiceAppAPI(truth_audit_timeout_seconds=0.05)
     run_root = tmp_path / "timely-success"
     api._run_context = _controlled_context(run_root, "timely")
     api._current_run_id = "timely"
     monkeypatch.setattr(api, "_refresh_run_context", lambda: api._run_context)
-    monkeypatch.setattr(audit_email_truth, "collect_truth_table", lambda *args: {"status": "ok", "rows": 2})
+    monkeypatch.setattr(api, "_runtime_truth_audit_contract", lambda *args: {"status": "ok", "rows": 2})
     monkeypatch.setattr(api, "_cleanup_temp_folders", lambda **kwargs: None)
     terminal_events = []
     monkeypatch.setattr(
@@ -680,8 +708,6 @@ def test_timely_valid_truth_audit_keeps_run_completed(tmp_path, monkeypatch):
 
 
 def test_truth_audit_error_fails_with_truthful_sanitized_reason(tmp_path, monkeypatch):
-    import audit_email_truth
-
     api = InvoiceAppAPI(truth_audit_timeout_seconds=0.05)
     run_root = tmp_path / "audit-error"
     api._run_context = _controlled_context(run_root, "audit-error")
@@ -691,7 +717,7 @@ def test_truth_audit_error_fails_with_truthful_sanitized_reason(tmp_path, monkey
     def failed_audit(*args):
         raise RuntimeError("https://secret.example/?api_key=AUDIT-SECRET")
 
-    monkeypatch.setattr(audit_email_truth, "collect_truth_table", failed_audit)
+    monkeypatch.setattr(api, "_runtime_truth_audit_contract", failed_audit)
     monkeypatch.setattr(api, "_cleanup_temp_folders", lambda **kwargs: None)
 
     api._begin_run("running")

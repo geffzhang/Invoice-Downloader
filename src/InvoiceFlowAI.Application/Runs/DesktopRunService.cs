@@ -207,7 +207,10 @@ public sealed class DesktopRunService : IDesktopRunService
             quotaExhausted ? "Provider quota exhausted." : null,
             null,
             null,
-            null);
+            null)
+        {
+            MailboxFetchFailures = projection.MailboxFetchFailures,
+        };
     }
 
     private async Task<ProgressProjection> ReadProgressProjectionAsync(
@@ -252,6 +255,14 @@ public sealed class DesktopRunService : IDesktopRunService
         }
 
         var payloadStats = latestProgress?.Stats;
+        var mailboxFetchFailures = (latestProgress?.MailboxFetchFailures
+                ?? Array.Empty<RunMailboxFetchFailureDiagnostic>())
+            .Where(static failure => failure.Uid > 0
+                && string.Equals(failure.ReasonCode, "IMAP_MESSAGE_FETCH_FAILED", StringComparison.Ordinal))
+            .GroupBy(static failure => failure.Uid)
+            .Select(static group => group.First())
+            .OrderBy(static failure => failure.Uid)
+            .ToArray();
         return new ProgressProjection(
             latestProgress?.Stage ?? state.Stage,
             progressPercent,
@@ -262,7 +273,8 @@ public sealed class DesktopRunService : IDesktopRunService
             logs.ToArray(),
             SafeCode(latestProgress?.LastError) ?? lastError,
             latestProgress?.QuotaExhausted ?? false,
-            latestProgress?.QuotaMessage);
+            latestProgress?.QuotaMessage,
+            mailboxFetchFailures);
     }
 
     private static string? ProjectProgressEvent(
@@ -318,7 +330,8 @@ public sealed class DesktopRunService : IDesktopRunService
         IReadOnlyList<RunLogEntry> Logs,
         string? LastError,
         bool QuotaExhausted,
-        string? QuotaMessage);
+        string? QuotaMessage,
+        IReadOnlyList<RunMailboxFetchFailureDiagnostic> MailboxFetchFailures);
 
     public async Task<RunStopResult> StopAsync(RunStopRequest request, CancellationToken cancellationToken)
     {

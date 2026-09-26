@@ -8,6 +8,9 @@ namespace InvoiceFlowAI.Application.Pipeline;
 
 public sealed class UrlRecoveryStage : IUrlRecoveryStage
 {
+    private const int MaxConcurrentRecoveryGroups = 10;
+    private const int MaxConcurrentProviderGroups = 4;
+
     private readonly IUrlRecoveryClient _recoveryClient;
     private readonly ICandidateIdentityFactory? _identityFactory;
     private readonly ICandidateSourceWriter? _sourceWriter;
@@ -34,13 +37,22 @@ public sealed class UrlRecoveryStage : IUrlRecoveryStage
     public async Task<CandidateBatch> ExecuteAsync(CandidateBatch input, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(input);
+        using var groupConcurrency = new SemaphoreSlim(MaxConcurrentRecoveryGroups);
+        using var providerConcurrency = new SemaphoreSlim(MaxConcurrentProviderGroups);
+        var recoveryTasks = input.Items
+            .Select(item => RecoverAsync(item, groupConcurrency, providerConcurrency, cancellationToken))
+            .ToArray();
+        var recoveryAttempts = await Task.WhenAll(recoveryTasks).ConfigureAwait(false);
+
         var recoveredItems = new List<CandidateWorkItem>(input.Items.Count);
         var terminalResults = input.EffectiveTerminalResults.ToList();
 
-        foreach (var item in input.Items)
+        for (var index = 0; index < input.Items.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (item.SourceUrlGroup is null && item.SourceUrlCandidate is not { } )
+            var item = input.Items[index];
+            var attempt = recoveryAttempts[index];
+            if (attempt is null)
             {
                 recoveredItems.Add(item);
                 continue;
@@ -48,9 +60,13 @@ public sealed class UrlRecoveryStage : IUrlRecoveryStage
 
             try
             {
-                var result = item.SourceUrlGroup is { } sourceGroup
-                    ? await _recoveryClient.RecoverAsync(sourceGroup, cancellationToken).ConfigureAwait(false)
-                    : await _recoveryClient.RecoverAsync(item.SourceUrlCandidate!, cancellationToken).ConfigureAwait(false);
+                if (attempt.Failure is { } failure)
+                {
+                    terminalResults.Add(ToTerminalResult(item.Candidate, failure));
+                    continue;
+                }
+
+                var result = attempt.Result!;
                 var selected = result.SelectedArtifact;
                 if (selected is null)
                 {
@@ -104,6 +120,63 @@ public sealed class UrlRecoveryStage : IUrlRecoveryStage
         return new CandidateBatch(recoveredItems, terminalResults);
     }
 
+    private async Task<UrlRecoveryAttempt?> RecoverAsync(
+        CandidateWorkItem item,
+        SemaphoreSlim groupConcurrency,
+        SemaphoreSlim providerConcurrency,
+        CancellationToken cancellationToken)
+    {
+        var providerFamily = item.SourceUrlGroup?.ProviderFamily ?? item.SourceUrlCandidate?.ProviderFamily;
+        if (item.SourceUrlGroup is null && item.SourceUrlCandidate is null)
+        {
+            return null;
+        }
+
+        var isProviderGroup = !string.IsNullOrWhiteSpace(providerFamily);
+        var providerSlotAcquired = false;
+        var groupSlotAcquired = false;
+        try
+        {
+            if (isProviderGroup)
+            {
+                await providerConcurrency.WaitAsync(cancellationToken).ConfigureAwait(false);
+                providerSlotAcquired = true;
+            }
+
+            await groupConcurrency.WaitAsync(cancellationToken).ConfigureAwait(false);
+            groupSlotAcquired = true;
+
+            var result = item.SourceUrlGroup is { } sourceGroup
+                ? await _recoveryClient.RecoverAsync(sourceGroup, cancellationToken).ConfigureAwait(false)
+                : await _recoveryClient.RecoverAsync(item.SourceUrlCandidate!, cancellationToken).ConfigureAwait(false);
+            return new UrlRecoveryAttempt(result, null);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (UrlRecoveryException exception)
+        {
+            return new UrlRecoveryAttempt(null, exception);
+        }
+        catch (Exception)
+        {
+            return new UrlRecoveryAttempt(null,
+                new UrlRecoveryException("URL_RECOVERY_WORKER_FAILED", "Invoice link could not be recovered.", true, false));
+        }
+        finally
+        {
+            if (groupSlotAcquired)
+            {
+                groupConcurrency.Release();
+            }
+            if (providerSlotAcquired)
+            {
+                providerConcurrency.Release();
+            }
+        }
+    }
+
     private static string WithRecoveredExtension(string fileName, RecoveredArtifactKind kind)
     {
         var extension = kind switch
@@ -129,4 +202,6 @@ public sealed class UrlRecoveryStage : IUrlRecoveryStage
                 exception.Retryable,
                 exception.SafeMessage));
     }
+
+    private sealed record UrlRecoveryAttempt(UrlRecoveryResult? Result, UrlRecoveryException? Failure);
 }

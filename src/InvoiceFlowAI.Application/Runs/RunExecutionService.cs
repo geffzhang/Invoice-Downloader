@@ -39,6 +39,8 @@ public sealed class RunExecutionService : IDesktopRunExecutor
         ArgumentNullException.ThrowIfNull(request);
         IReadOnlyList<CandidateProcessResult> candidateResults = Array.Empty<CandidateProcessResult>();
         IReadOnlyList<RunFailure> finalizerFailures = Array.Empty<RunFailure>();
+        IReadOnlyList<RunMailboxFetchFailureDiagnostic> mailboxFetchFailures =
+            Array.Empty<RunMailboxFetchFailureDiagnostic>();
         RunSummary? pipelineSummary = null;
         var scannedEmailCount = 0;
         RunFailure? runFailure = null;
@@ -84,13 +86,22 @@ public sealed class RunExecutionService : IDesktopRunExecutor
                 for (var cycle = 0; cycle < MaximumPipelineCycles && run.CompletedSummary is null; cycle++)
                 {
                     await run.ExecuteStepAsync(cancellationToken).ConfigureAwait(false);
+                    mailboxFetchFailures = run.MailboxFetchFailures
+                        .OrderBy(static failure => failure.Uid)
+                        .Select(static failure => new RunMailboxFetchFailureDiagnostic(
+                            failure.Uid,
+                            "IMAP_MESSAGE_FETCH_FAILED"))
+                        .ToArray();
                     var completedCycles = cycle + 1;
                     var progress = new RunProgressPayload(
                         "processing",
                         completedCycles,
                         MaximumPipelineCycles,
                         Math.Min(90, 5 + completedCycles * 85 / MaximumPipelineCycles),
-                        new RunProgressStats(run.ScannedEmailCount, 0, 0));
+                        new RunProgressStats(run.ScannedEmailCount, 0, 0))
+                    {
+                        MailboxFetchFailures = mailboxFetchFailures,
+                    };
                     await CommitAndPublishAsync(
                         request.RunId,
                         ++eventSequence,
@@ -155,7 +166,10 @@ public sealed class RunExecutionService : IDesktopRunExecutor
                     new RunProgressStats(scannedEmailCount, processedCandidates, candidateErrors),
                     result.Failure?.ReasonCode,
                     quotaExhausted,
-                    quotaExhausted ? "Provider quota exhausted." : null);
+                    quotaExhausted ? "Provider quota exhausted." : null)
+                {
+                    MailboxFetchFailures = mailboxFetchFailures,
+                };
                 await CommitAndPublishAsync(
                     request.RunId,
                     ++eventSequence,

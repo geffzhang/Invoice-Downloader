@@ -122,6 +122,8 @@ public sealed class PipelineRun : IAsyncDisposable
     public InvoiceFlowAI.Domain.Runs.RunSummary? CompletedSummary => SummaryCapture.Summary;
     public ArchiveBatch? ArchivedBatch => ArchiveCapture.Batch;
     public int ScannedEmailCount => MailboxScanCapture.EmailCount;
+    public IReadOnlyList<InvoiceFlowAI.Application.Mail.MailboxFetchFailure> MailboxFetchFailures =>
+        MailboxScanCapture.FetchFailures;
     public IReadOnlyList<InvoiceFlowAI.Domain.Runs.RunFailure> Failures =>
         FailureCaptures.SelectMany(capture => capture.Failures).ToArray();
 
@@ -312,6 +314,7 @@ public sealed class MailboxScanCaptureNode : PipelineNode
 
     public InputPort<PipelineItem<MailboxScanResult>> Input { get; }
     public int EmailCount { get; private set; }
+    public IReadOnlyList<MailboxFetchFailure> FetchFailures { get; private set; } = Array.Empty<MailboxFetchFailure>();
 
     protected override Task OnExecuteAsync(PipelineContext context, CancellationToken cancellationToken)
     {
@@ -319,6 +322,7 @@ public sealed class MailboxScanCaptureNode : PipelineNode
         if (Input.TryReceive(out var packet) && !packet.IsEndOfStream)
         {
             EmailCount = packet.Payload.Payload.Messages.Count;
+            FetchFailures = packet.Payload.Payload.FetchFailures;
         }
         return Task.CompletedTask;
     }

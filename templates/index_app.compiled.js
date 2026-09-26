@@ -59,6 +59,7 @@ const DEFAULT_PROGRESS = {
   can_stop: false,
   quota_exhausted: false,
   quota_message: "",
+  mailbox_fetch_failures: [],
   build_identity: null
 };
 const APP_BRAND = {
@@ -1494,6 +1495,7 @@ function ProcessingPage({
   }
   const stats = progressState.stats || DEFAULT_PROGRESS.stats;
   const logs = progressState.logs || [];
+  const mailboxFetchFailures = progressState.mailbox_fetch_failures || [];
   const statusTone = progressState.run_state === "failed" ? "error" : progressState.run_state === "completed" ? "success" : progressState.is_running ? "info" : "neutral";
   const statusLabel = progressState.run_state === "failed" ? "处理失败" : progressState.run_state === "completed" ? "处理完成" : progressState.is_running ? "实时连接已建立" : UI_COPY.pages.processing.statusWaiting;
   useEffect(() => {
@@ -1556,7 +1558,12 @@ function ProcessingPage({
     tone: "error"
   }, progressState.last_error) : null, progressState.quota_exhausted && progressState.quota_message ? React.createElement(NoticeBox, {
     tone: "warning"
-  }, progressState.quota_message) : null, progressState.stop_requested && progressState.run_state !== "failed" ? React.createElement(NoticeBox, {
+  }, progressState.quota_message) : null, mailboxFetchFailures.length > 0 ? React.createElement(NoticeBox, {
+    tone: "warning",
+    className: "mailbox-fetch-failures"
+  }, React.createElement("div", null, React.createElement("div", null, "\u90E8\u5206\u90AE\u4EF6\u8BFB\u53D6\u5931\u8D25\uFF0C\u5176\u4ED6\u90AE\u4EF6\u4ECD\u4F1A\u7EE7\u7EED\u5904\u7406\u3002"), React.createElement("ul", null, mailboxFetchFailures.map(failure => React.createElement("li", {
+    key: failure.uid
+  }, "UID ", failure.uid, "\uFF1A", failure.reasonCode))))) : null, progressState.stop_requested && progressState.run_state !== "failed" ? React.createElement(NoticeBox, {
     tone: "warning"
   }, UI_COPY.pages.processing.stopNotice) : null)), React.createElement("div", {
     className: "metrics-grid"

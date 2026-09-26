@@ -762,6 +762,29 @@ public sealed class MailKitMailboxScannerTests
 public sealed class MailKitMailboxSessionPureTests
 {
     [Fact]
+    public async Task Session_retries_a_transient_uid_fetch_once()
+    {
+        var attempts = new List<uint>();
+
+        var result = await MailKitMailboxSession.SearchAndFetchAsync(
+            new MailboxSearchCriteria(null, null),
+            (_, _) => Task.FromResult<IReadOnlyList<UniqueId>>([new UniqueId(8)]),
+            (_, _) => Task.FromResult<IReadOnlyList<MailboxMessageDateSummary>>([]),
+            (uid, _) =>
+            {
+                attempts.Add(uid.Id);
+                return attempts.Count == 1
+                    ? Task.FromException<MimeMessage>(new IOException("temporary fetch failure"))
+                    : Task.FromResult(new MimeMessage { Subject = "recovered" });
+            },
+            CancellationToken.None);
+
+        attempts.Should().Equal(8u, 8u);
+        result.Messages.Should().ContainSingle().Which.Subject.Should().Be("recovered");
+        result.FetchFailures.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Session_preserves_successful_uids_and_reports_one_bounded_fetch_failure()
     {
         var uids = new[] { new UniqueId(1), new UniqueId(2), new UniqueId(3) };
@@ -787,7 +810,7 @@ public sealed class MailKitMailboxSessionPureTests
         result.Messages.Select(message => message.Uid).Should().Equal(1L, 3L);
         result.FetchFailures.Should().ContainSingle().Which.Uid.Should().Be(2);
         result.FetchFailures[0].ReasonCode.Should().Be("IMAP_MESSAGE_FETCH_FAILED");
-        fetchAttempts.Should().Equal(1u, 2u, 3u);
+        fetchAttempts.Should().Equal(1u, 2u, 2u, 3u);
     }
 
     [Fact]

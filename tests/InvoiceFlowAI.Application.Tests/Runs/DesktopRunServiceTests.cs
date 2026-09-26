@@ -135,6 +135,23 @@ public sealed class DesktopRunServiceTests
     }
 
     [Fact]
+    public async Task Progress_replays_mailbox_fetch_failure_diagnostics_from_persisted_event()
+    {
+        var fixture = new ServiceFixture();
+        fixture.Lifecycle.Seed(new RunStateSnapshot("run-fetch-diagnostic", RunLifecycleState.Running,
+            "processing", null, 2, null, DateTimeOffset.UtcNow));
+        fixture.Events.Seed(new StoredRunEventRecord(
+            "run-fetch-diagnostic", 1, "run.progress",
+            "{\"stage\":\"processing\",\"completed\":1,\"total\":4,\"percent\":26,\"mailboxFetchFailures\":[{\"uid\":7,\"reasonCode\":\"IMAP_MESSAGE_FETCH_FAILED\"},{\"uid\":8,\"reasonCode\":\"SECRET_FIXTURE\"}]}",
+            DateTimeOffset.UtcNow, null));
+
+        var progress = await fixture.Service.GetProgressAsync("run-fetch-diagnostic", CancellationToken.None);
+
+        progress.MailboxFetchFailures.Should().ContainSingle().Which.Should()
+            .BeEquivalentTo(new RunMailboxFetchFailureDiagnostic(7, "IMAP_MESSAGE_FETCH_FAILED"));
+    }
+
+    [Fact]
     public async Task Progress_keeps_only_the_latest_hundred_safe_event_logs()
     {
         var fixture = new ServiceFixture();

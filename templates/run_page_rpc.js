@@ -56,6 +56,7 @@
             can_stop: !!value.canStop,
             quota_exhausted: !!value.quotaExhausted,
             quota_message: value.quotaMessage || "",
+            mailbox_fetch_failures: Array.isArray(value.mailboxFetchFailures) ? value.mailboxFetchFailures : [],
             build_identity: value.buildIdentity || null,
             raw_date_range: value.rawDateRange || null,
             imap_query_range: value.imapQueryRange || null,
@@ -124,6 +125,9 @@
                 status_text: payload.stage || current.status_text,
                 is_running: true,
                 run_state: "running",
+                mailbox_fetch_failures: Array.isArray(payload.mailboxFetchFailures)
+                    ? payload.mailboxFetchFailures
+                    : current.mailbox_fetch_failures || [],
             };
         }
         const runState = payload.runState || current.run_state;

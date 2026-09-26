@@ -48,8 +48,8 @@
   <Fragment>
     <ComponentGroup Id="PublishedFiles" Directory="INSTALLFOLDER">
       <Files Include="..\..\publish\win-x64\**">
-        <Exclude Files="manifests\**" />
-        <Exclude Files="licenses\**" />
+        <Exclude Files="..\..\publish\win-x64\manifests\**" />
+        <Exclude Files="..\..\publish\win-x64\licenses\**" />
       </Files>
     </ComponentGroup>
   </Fragment>
