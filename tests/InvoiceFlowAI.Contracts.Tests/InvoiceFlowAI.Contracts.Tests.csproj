@@ -11,7 +11,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
-    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="FluentAssertions" />
   </ItemGroup>
 
@@ -26,9 +29,7 @@
        into its output so tests resolve fixtures relative to the assembly without
        copying the source. CI keeps the fixture repo as the single source of truth. -->
   <ItemGroup>
-    <None Include="..\..\docs\superpowers\fixtures\**\*.json"
-          LinkBase="Fixtures"
-          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\docs\superpowers\fixtures\**\*.json" LinkBase="Fixtures" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

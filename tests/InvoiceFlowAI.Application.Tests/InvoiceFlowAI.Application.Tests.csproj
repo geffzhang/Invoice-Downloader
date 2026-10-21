@@ -11,7 +11,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
-    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="FluentAssertions" />
   </ItemGroup>
 
@@ -22,9 +25,7 @@
 
   <ItemGroup>
     <None Update="Fixtures\CandidateUrlPairing\python-golden.v1.json" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\InvoiceFlowAI.Infrastructure.Tests\Fixtures\DesktopParity\classification.json"
-             Link="Fixtures\DesktopParity\classification.json"
-             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\InvoiceFlowAI.Infrastructure.Tests\Fixtures\DesktopParity\classification.json" Link="Fixtures\DesktopParity\classification.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
