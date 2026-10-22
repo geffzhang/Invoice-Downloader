@@ -1,0 +1,14 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="InvoiceFlowAI.App.Bootstrap.BootstrapErrorWindow"
+        Title="InvoiceFlowAI"
+        Width="560" Height="300"
+        WindowStartupLocation="CenterScreen">
+  <StackPanel Margin="32" Spacing="14">
+    <TextBlock FontSize="22" FontWeight="SemiBold" Text="应用初始化失败" />
+    <TextBlock TextWrapping="Wrap"
+               Text="本地数据未能正常加载。请关闭程序后重新打开;若问题持续,请把日志目录中的最新日志文件提供给维护人员。" />
+    <TextBlock x:Name="LogPathText" TextWrapping="Wrap" Opacity="0.6" FontSize="12" />
+    <Button Content="退出" HorizontalAlignment="Right" Click="OnExitClick" />
+  </StackPanel>
+</Window>

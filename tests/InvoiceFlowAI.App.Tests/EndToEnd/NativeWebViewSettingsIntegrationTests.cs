@@ -129,7 +129,7 @@ internal sealed class NativeWebViewTestContext(
     public void Log(string message) => _diagnostics.Add($"{Stopwatch.GetElapsedTime(StartedAt).TotalMilliseconds:F0}ms {message}");
 }
 
-internal sealed class NativeWebViewIntegrationApplication : Avalonia.Application
+internal sealed partial class NativeWebViewIntegrationApplication : Avalonia.Application
 {
     private ServiceProvider? _serviceProvider;
 

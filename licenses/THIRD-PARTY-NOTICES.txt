@@ -9,40 +9,56 @@ asset are recorded in manifests/release.json (verified at install
 time) and manifests/model.json (verified at runtime).
 
 ------------------------------------------------------------------------
-.NET Runtime + SDK 10.0.100
+.NET Runtime + SDK 10.0.401
 ------------------------------------------------------------------------
   Copyright (c) .NET Foundation and Contributors.
   Licensed under the MIT License.
   https://github.com/dotnet/runtime
 
 ------------------------------------------------------------------------
-Avalonia 12.1.0 (UI framework)
+AtomUI 6.2.8 (Desktop Controls, Icons.AntDesign)
+------------------------------------------------------------------------
+  Copyright (c) AtomUI contributors.
+  Licensed under the GNU Lesser General Public License, version 3.0.
+  Shipped as separate, unmodified DLLs alongside InvoiceFlowAI.exe;
+  the full license text is installed at licenses\LGPL-3.0.txt.
+  https://github.com/AtomUI/AtomUI
+
+------------------------------------------------------------------------
+CommunityToolkit.Mvvm 8.4.2
+------------------------------------------------------------------------
+  Copyright (c) .NET Foundation and Contributors.
+  Licensed under the MIT License.
+  https://github.com/CommunityToolkit/dotnet
+
+------------------------------------------------------------------------
+Avalonia 12.1.4 (UI framework)
 ------------------------------------------------------------------------
   Copyright (c) AvaloniaUI OÜ.
   Licensed under the MIT License.
   https://github.com/AvaloniaUI/Avalonia
 
 ------------------------------------------------------------------------
-Avalonia.Controls.WebView 12.1.0
+Avalonia.Controls.WebView 12.1.1
 ------------------------------------------------------------------------
   Copyright (c) AvaloniaUI OÜ.
   Licensed under the MIT License.
   WebView2Loader.dll (Microsoft) shipped unmodified.
 
 ------------------------------------------------------------------------
-Microsoft.Extensions.AI + Microsoft.Extensions.AI.OpenAI 10.10.0
+Microsoft.Extensions.AI + Microsoft.Extensions.AI.OpenAI 10.11.0
 ------------------------------------------------------------------------
   Copyright (c) Microsoft Corporation.
   Licensed under the MIT License.
 
 ------------------------------------------------------------------------
-MailKit 4.18.0
+MailKit 4.18.1
 ------------------------------------------------------------------------
   Copyright (c) 2013-present, Xamarin Inc. and other MailKit authors.
   Licensed under the MIT License.
 
 ------------------------------------------------------------------------
-Sdcb.SimdPaddleOCR 1.4.2
+Sdcb.SimdPaddleOCR 2.0.0
 ------------------------------------------------------------------------
   Copyright (c) Sdcb and contributors.
   Licensed under the Apache License, Version 2.0.
@@ -57,7 +73,7 @@ Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny 1.0.0
   The shipped model assembly SHA-256 is recorded in manifests/model.json.
 
 ------------------------------------------------------------------------
-PDFiumCore 155.0.8057
+PDFiumCore 157.0.8100
 ------------------------------------------------------------------------
   Copyright (c) 2014-present, PDFium Authors.
   Licensed under the Apache License, Version 2.0.
@@ -83,13 +99,13 @@ ClosedXML 0.105.1
   Licensed under the MIT License.
 
 ------------------------------------------------------------------------
-Microsoft.Playwright 1.62.0 (test-only)
+Microsoft.Playwright 1.63.0 (URL recovery dependency)
 ------------------------------------------------------------------------
   Copyright (c) Microsoft Corporation.
   Licensed under the Apache License, Version 2.0.
 
 ------------------------------------------------------------------------
-xunit 2.x + xunit.analyzers
+xunit.v3 4.0.2
 ------------------------------------------------------------------------
   Copyright (c) .NET Foundation and Contributors.
   Licensed under the Apache License, Version 2.0.
@@ -102,7 +118,7 @@ WiX Toolset 5.0.2
   WiX is bundled only at build time and is not shipped in the MSI.
 
 ------------------------------------------------------------------------
-Serilog 3.x
+Serilog 4.4.0
 ------------------------------------------------------------------------
   Copyright (c) 2013-present, Serilog contributors.
   Licensed under the Apache License, Version 2.0.

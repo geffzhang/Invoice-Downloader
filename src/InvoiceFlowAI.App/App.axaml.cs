@@ -1,8 +1,9 @@
-using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
+using InvoiceFlowAI.App.Bootstrap;
 using InvoiceFlowAI.App.Rpc;
 using InvoiceFlowAI.App.Settings;
 using Microsoft.Extensions.DependencyInjection;
+using Serilog;
 
 namespace InvoiceFlowAI.App;
 
@@ -17,19 +18,27 @@ public partial class App : Avalonia.Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            _serviceProvider = AppServiceProviderFactory.Create();
-            var version = typeof(App).Assembly.GetName().Version?.ToString() ?? "0.0.0";
-            var dispatcher = AppRpcComposition.CreateDispatcher(
-                _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
-                version);
-            var windowAccessor = _serviceProvider.GetRequiredService<AvaloniaMainWindowAccessor>();
-            var runEventPublisher = _serviceProvider.GetRequiredService<WebViewRunEventPublisher>();
-            desktop.MainWindow = new MainWindow(dispatcher, windowAccessor, runEventPublisher);
-            desktop.Exit += (_, _) =>
+            try
             {
-                _serviceProvider?.Dispose();
-                _serviceProvider = null;
-            };
+                _serviceProvider = AppServiceProviderFactory.Create();
+                var version = typeof(App).Assembly.GetName().Version?.ToString() ?? "0.0.0";
+                var dispatcher = AppRpcComposition.CreateDispatcher(
+                    _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+                    version);
+                var windowAccessor = _serviceProvider.GetRequiredService<AvaloniaMainWindowAccessor>();
+                var runEventPublisher = _serviceProvider.GetRequiredService<WebViewRunEventPublisher>();
+                desktop.MainWindow = new MainWindow(dispatcher, windowAccessor, runEventPublisher);
+                desktop.Exit += (_, _) =>
+                {
+                    _serviceProvider?.Dispose();
+                    _serviceProvider = null;
+                };
+            }
+            catch (Exception exception)
+            {
+                Log.Fatal(exception, "桌面服务初始化失败。");
+                desktop.MainWindow = new BootstrapErrorWindow();
+            }
         }
 
         base.OnFrameworkInitializationCompleted();

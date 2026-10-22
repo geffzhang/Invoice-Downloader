@@ -27,6 +27,11 @@
     <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.1.4" />
     <PackageVersion Include="Avalonia.Headless" Version="12.1.4" />
     <PackageVersion Include="Microsoft.Playwright" Version="1.63.0" />
+    <!-- AtomUI 6.2.8 (LGPL-3.0, shipped as separate DLLs) -->
+    <PackageVersion Include="AtomUI.Desktop.Controls" Version="6.2.8" />
+    <PackageVersion Include="AtomUI.Icons.AntDesign" Version="6.2.8" />
+    <!-- MVVM -->
+    <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="10.11.0" />
     <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
     <!-- Reports -->

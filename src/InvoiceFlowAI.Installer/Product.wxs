@@ -73,8 +73,9 @@
   </Fragment>
 
   <!--
-    LicenseFiles: third-party notices required by Avalonia,
-    WiX, and the .NET runtime redistribution.
+    LicenseFiles: third-party notices and the AtomUI LGPL-3.0
+    text required by Avalonia, AtomUI, WiX, and the .NET
+    runtime redistribution.
   -->
   <Fragment>
     <ComponentGroup Id="LicenseFiles" Directory="INSTALLFOLDER.Licenses">
@@ -82,6 +83,9 @@
             Name="THIRD-PARTY-NOTICES.txt"
             Source="licenses\THIRD-PARTY-NOTICES.txt"
             KeyPath="yes" />
+      <File Id="LgplLicense"
+            Name="LGPL-3.0.txt"
+            Source="licenses\LGPL-3.0.txt" />
     </ComponentGroup>
   </Fragment>
 

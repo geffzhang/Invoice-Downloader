@@ -124,7 +124,7 @@ internal sealed class NativeRunWebViewTestContext(
     public IClassicDesktopStyleApplicationLifetime? Lifetime { get; set; }
 }
 
-internal sealed class NativeWebViewRunIntegrationApplication : Avalonia.Application
+internal sealed partial class NativeWebViewRunIntegrationApplication : Avalonia.Application
 {
     private ServiceProvider? _serviceProvider;
 

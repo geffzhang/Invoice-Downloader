@@ -58,6 +58,7 @@ try {
     }
     Copy-Item -LiteralPath $PublishedModelAssembly -Destination (Join-Path $OcrModelDirectory $ModelAssemblyName) -Force
     Copy-Item -LiteralPath (Join-Path $RepoRoot "licenses\THIRD-PARTY-NOTICES.txt") -Destination (Join-Path $LicenseDirectory "THIRD-PARTY-NOTICES.txt") -Force
+    Copy-Item -LiteralPath (Join-Path $RepoRoot "licenses\LGPL-3.0.txt") -Destination (Join-Path $LicenseDirectory "LGPL-3.0.txt") -Force
 
     & (Join-Path $RepoRoot "build\model-manifest.ps1") -ModelsRoot $ModelsDirectory -Output (Join-Path $ManifestDirectory "model.json")
     & (Join-Path $RepoRoot "build\release-manifest.ps1") -PublishRoot $OutputRoot -Output (Join-Path $ManifestDirectory "release.json") -ProductVersion $ProductVersion -RuntimeIdentifier "win-x64"

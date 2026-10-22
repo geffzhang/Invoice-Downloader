@@ -7,6 +7,11 @@
     <AssemblyName>InvoiceFlowAI.App.Tests</AssemblyName>
     <IsPackable>false</IsPackable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- This project contains more than one Avalonia Application (headless + two
+         native WebView end-to-end hosts), so the AtomUI localization bootstrap
+         generator cannot pick a single host. The headless host attaches AtomUI
+         manually; localization overrides are not used in tests. -->
+    <AtomUIDisableLocalizationBuildIntegration>true</AtomUIDisableLocalizationBuildIntegration>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,6 +20,9 @@
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Headless" />
+    <PackageReference Include="AtomUI.Desktop.Controls" />
+    <PackageReference Include="AtomUI.Icons.AntDesign" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
   </ItemGroup>
 
   <ItemGroup>
