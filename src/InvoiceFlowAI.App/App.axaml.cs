@@ -1,7 +1,5 @@
 using Avalonia.Controls.ApplicationLifetimes;
 using InvoiceFlowAI.App.Bootstrap;
-using InvoiceFlowAI.App.Rpc;
-using InvoiceFlowAI.App.Settings;
 using Microsoft.Extensions.DependencyInjection;
 using Serilog;
 
@@ -21,13 +19,7 @@ public partial class App : Avalonia.Application
             try
             {
                 _serviceProvider = AppServiceProviderFactory.Create();
-                var version = typeof(App).Assembly.GetName().Version?.ToString() ?? "0.0.0";
-                var dispatcher = AppRpcComposition.CreateDispatcher(
-                    _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
-                    version);
-                var windowAccessor = _serviceProvider.GetRequiredService<AvaloniaMainWindowAccessor>();
-                var runEventPublisher = _serviceProvider.GetRequiredService<WebViewRunEventPublisher>();
-                desktop.MainWindow = new MainWindow(dispatcher, windowAccessor, runEventPublisher);
+                desktop.MainWindow = _serviceProvider.GetRequiredService<MainWindow>();
                 desktop.Exit += (_, _) =>
                 {
                     _serviceProvider?.Dispose();

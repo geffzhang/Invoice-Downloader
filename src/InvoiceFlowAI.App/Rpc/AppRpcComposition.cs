@@ -26,9 +26,6 @@ public static class AppRpcComposition
         "run.folder.open",
         "run.manual-review.open",
         "run.file.open",
-        "window.minimize",
-        "window.maximize",
-        "window.close",
     ];
 
     public static RpcDispatcher CreateDispatcher(IServiceScopeFactory scopeFactory, string appVersion)
@@ -60,9 +57,6 @@ public static class AppRpcComposition
         dispatcher.RegisterHandler("run.folder.open", new ScopedRpcHandler<RunFolderOpenRpcHandler>(scopeFactory, "run.folder.open"));
         dispatcher.RegisterHandler("run.manual-review.open", new ScopedRpcHandler<ManualReviewFolderOpenRpcHandler>(scopeFactory, "run.manual-review.open"));
         dispatcher.RegisterHandler("run.file.open", new ScopedRpcHandler<RunFileOpenRpcHandler>(scopeFactory, "run.file.open"));
-        dispatcher.RegisterHandler("window.minimize", new ScopedRpcHandler<WindowMinimizeRpcHandler>(scopeFactory, "window.minimize"));
-        dispatcher.RegisterHandler("window.maximize", new ScopedRpcHandler<WindowMaximizeRpcHandler>(scopeFactory, "window.maximize"));
-        dispatcher.RegisterHandler("window.close", new ScopedRpcHandler<WindowCloseRpcHandler>(scopeFactory, "window.close"));
         return dispatcher;
     }
 

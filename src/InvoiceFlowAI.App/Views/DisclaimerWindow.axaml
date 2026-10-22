@@ -1,0 +1,36 @@
+<atom:Window xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:atom="https://atomui.net"
+             x:Class="InvoiceFlowAI.App.Views.DisclaimerWindow"
+             Title="免责声明"
+             Width="640" Height="580"
+             WindowStartupLocation="CenterOwner">
+  <ScrollViewer>
+    <StackPanel Margin="28" Spacing="14">
+      <TextBlock Text="免责声明" FontSize="12" Opacity="0.55" />
+      <TextBlock Text="使用前请确认以下事项" FontSize="24" FontWeight="SemiBold" />
+
+      <TextBlock Text="软件说明" FontWeight="SemiBold" />
+      <ItemsControl x:Name="SoftwareList">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,0,0,6" />
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <TextBlock Text="风险提示" FontWeight="SemiBold" />
+      <ItemsControl x:Name="RiskList">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,0,0,6" />
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <atom:Button ButtonType="Primary" Content="我已知晓"
+                   HorizontalAlignment="Right"
+                   Click="OnAcknowledgeClick" />
+    </StackPanel>
+  </ScrollViewer>
+</atom:Window>

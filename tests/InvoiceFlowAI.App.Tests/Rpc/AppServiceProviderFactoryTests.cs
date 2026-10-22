@@ -1,7 +1,10 @@
 using System.Text.Json;
 using FluentAssertions;
 using InvoiceFlowAI.App.Events;
+using InvoiceFlowAI.App.Navigation;
 using InvoiceFlowAI.App.Rpc;
+using InvoiceFlowAI.App.Services;
+using InvoiceFlowAI.App.ViewModels;
 using InvoiceFlowAI.Application.Archive;
 using InvoiceFlowAI.Application.Persistence;
 using InvoiceFlowAI.Application.Pipeline;
@@ -85,6 +88,12 @@ public sealed class AppServiceProviderFactoryTests
                 provider.GetRequiredService<IAppEventBus>().Should().BeOfType<AppEventBus>();
                 provider.GetRequiredService<IDesktopRunExecutorLeaseFactory>()
                     .Should().BeOfType<ScopedDesktopRunExecutorLeaseFactory>();
+                provider.GetRequiredService<IAppNavigator>().Should().BeOfType<AppNavigator>();
+                provider.GetRequiredService<IRunSession>().Should().BeOfType<RunSession>();
+                provider.GetRequiredService<ShellViewModel>().Pages.Should().HaveCount(3);
+                provider.GetServices<IPageViewModel>()
+                    .Any(page => page is WebPageViewModel web && web.Key == "settings")
+                    .Should().BeTrue();
                 scope.ServiceProvider.GetRequiredService<IDesktopRunService>().Should().NotBeNull();
                 scope.ServiceProvider.GetRequiredService<IDesktopRunExecutor>().Should().NotBeNull();
                 scope.ServiceProvider.GetRequiredService<IMailboxScanner>().Should().BeOfType<MailKitMailboxScanner>();
@@ -187,9 +196,6 @@ public sealed class AppServiceProviderFactoryTests
                     "run.folder.open",
                     "run.manual-review.open",
                     "run.file.open",
-                    "window.minimize",
-                    "window.maximize",
-                    "window.close",
                 ]);
 
                 var unavailableFolder = await DispatchAsync(dispatcher, "run.folder.open", parameters: null);

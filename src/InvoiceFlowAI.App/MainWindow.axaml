@@ -1,11 +1,43 @@
-<Window xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:webview="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.WebView"
-        x:Class="InvoiceFlowAI.App.MainWindow"
-        Title="InvoiceFlowAI"
-        Width="1100"
-        Height="720"
-        MinWidth="640"
-        MinHeight="480">
-    <webview:NativeWebView x:Name="AppWebView" />
-</Window>
+<atom:Window xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:atom="https://atomui.net"
+             xmlns:vm="using:InvoiceFlowAI.App.ViewModels"
+             x:Class="InvoiceFlowAI.App.MainWindow"
+             x:DataType="vm:ShellViewModel"
+             Title="InvoiceFlowAI"
+             Width="1180" Height="760"
+             MinWidth="980" MinHeight="640"
+             WindowStartupLocation="CenterScreen"
+             IsMinimizeCaptionButtonVisible="True"
+             IsMaximizeCaptionButtonVisible="True"
+             IsCloseCaptionButtonVisible="True">
+  <Grid ColumnDefinitions="252,*">
+    <Grid Grid.Column="0" RowDefinitions="*,Auto" Margin="12,16,8,12">
+      <atom:NavMenu x:Name="NavigationMenu" Mode="Vertical" />
+      <StackPanel Grid.Row="1" Spacing="2">
+        <atom:Button ButtonType="Text"
+                     HorizontalAlignment="Stretch"
+                     HorizontalContentAlignment="Left"
+                     Content="回到首页"
+                     Command="{Binding GoHomeCommand}" />
+        <atom:Button ButtonType="Text"
+                     HorizontalAlignment="Stretch"
+                     HorizontalContentAlignment="Left"
+                     Content="免责声明"
+                     Command="{Binding ShowDisclaimerCommand}" />
+        <atom:Button ButtonType="Text"
+                     HorizontalAlignment="Stretch"
+                     HorizontalContentAlignment="Left"
+                     Content="产品官网"
+                     Command="{Binding OpenWebsiteCommand}" />
+        <TextBlock Text="{Binding Version}"
+                   Margin="10,8,0,0"
+                   FontSize="11"
+                   Opacity="0.45" />
+      </StackPanel>
+    </Grid>
+    <Grid x:Name="ContentHost" Grid.Column="1" Margin="0,8,8,8">
+      <ContentControl x:Name="NativeContent" />
+    </Grid>
+  </Grid>
+</atom:Window>

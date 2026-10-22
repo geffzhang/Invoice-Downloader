@@ -1,6 +1,5 @@
 using FluentAssertions;
 using InvoiceFlowAI.App.Desktop;
-using InvoiceFlowAI.App.Settings;
 using InvoiceFlowAI.Application.Archive;
 using InvoiceFlowAI.Application.Mail;
 using InvoiceFlowAI.Application.Persistence;
@@ -142,37 +141,11 @@ public sealed class AvaloniaDesktopActionServiceTests
         result.Message.Should().NotContain(temp.Path);
     }
 
-    [Fact]
-    public async Task Window_commands_are_delegated_to_the_ui_dispatcher()
-    {
-        using var temp = new TempDirectory();
-        var window = new FakeWindowCommandDispatcher();
-        var service = CreateService(temp.Path, window: window);
-
-        var result = await service.ExecuteWindowCommandAsync("minimize", TestContext.Current.CancellationToken);
-
-        result.Succeeded.Should().BeTrue();
-        window.Commands.Should().ContainSingle().Which.Should().Be("minimize");
-    }
-
-    [Fact]
-    public async Task Avalonia_window_dispatcher_executes_commands_through_ui_thread_dispatcher()
-    {
-        var uiDispatcher = new FakeAvaloniaUiDispatcher();
-        var windowDispatcher = new AvaloniaWindowCommandDispatcher(new AvaloniaMainWindowAccessor(), uiDispatcher);
-
-        var executed = await windowDispatcher.ExecuteAsync("maximize", TestContext.Current.CancellationToken);
-
-        executed.Should().BeFalse();
-        uiDispatcher.InvocationCount.Should().Be(1);
-    }
-
     private static AvaloniaDesktopActionService CreateService(
         string outputRoot,
         FakePathLauncher? launcher = null,
         FakeArchiveArtifactStore? artifacts = null,
-        FakeReportApplicationService? reports = null,
-        FakeWindowCommandDispatcher? window = null)
+        FakeReportApplicationService? reports = null)
     {
         var data = new ReportRunData(
             "run-1", "Completed", "RUN_COMPLETED", DateTimeOffset.UtcNow,
@@ -186,8 +159,7 @@ public sealed class AvaloniaDesktopActionServiceTests
             new FakeReportRunDataSource(data),
             artifacts ?? new FakeArchiveArtifactStore(),
             reports ?? new FakeReportApplicationService("reports/run-1/report.xlsx", "hash-1"),
-            launcher ?? new FakePathLauncher(),
-            window ?? new FakeWindowCommandDispatcher());
+            launcher ?? new FakePathLauncher());
     }
 
     private static ArchiveArtifactSnapshot NewArtifact(
@@ -275,37 +247,5 @@ public sealed class AvaloniaDesktopActionServiceTests
             if (Exception is not null) return Task.FromException(Exception);
             return Task.CompletedTask;
         }
-    }
-
-    private sealed class FakeWindowCommandDispatcher : IWindowCommandDispatcher
-    {
-        public List<string> Commands { get; } = [];
-        public Task<bool> ExecuteAsync(string command, CancellationToken cancellationToken)
-        {
-            Commands.Add(command);
-            return Task.FromResult(true);
-        }
-    }
-
-    private sealed class FakeAvaloniaUiDispatcher : IAvaloniaUiDispatcher
-    {
-        public int InvocationCount { get; private set; }
-
-        public Task<TResult> InvokeAsync<TResult>(Func<TResult> action, CancellationToken cancellationToken)
-        {
-            InvocationCount++;
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(action());
-        }
-
-        public Task InvokeAsync(Action action, CancellationToken cancellationToken)
-        {
-            InvocationCount++;
-            cancellationToken.ThrowIfCancellationRequested();
-            action();
-            return Task.CompletedTask;
-        }
-
-        public void Post(Action action) => action();
     }
 }

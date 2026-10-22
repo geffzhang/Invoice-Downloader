@@ -41,19 +41,6 @@ public sealed class DesktopActionRpcHandlerTests
     }
 
     [Fact]
-    public async Task Window_handler_binds_command_to_registered_method_and_accepts_empty_params()
-    {
-        var actions = new FakeDesktopActionService();
-        var handler = new WindowMinimizeRpcHandler(actions);
-
-        var result = await DispatchAsync(handler, null);
-
-        result.Error.Should().BeNull();
-        actions.WindowCommand.Should().Be("minimize");
-        result.Result!.Value.GetProperty("succeeded").GetBoolean().Should().BeTrue();
-    }
-
-    [Fact]
     public async Task File_handler_rejects_missing_typed_params_before_calling_native_service()
     {
         var actions = new FakeDesktopActionService();
@@ -81,7 +68,6 @@ public sealed class DesktopActionRpcHandlerTests
         public string? OpenRunId { get; private set; }
         public string? ManualReviewRunId { get; private set; }
         public RunFileOpenRequest? FileRequest { get; private set; }
-        public string? WindowCommand { get; private set; }
 
         public Task<DesktopActionResult> OpenRunFolderAsync(string? runId, CancellationToken cancellationToken)
         {
@@ -98,12 +84,6 @@ public sealed class DesktopActionRpcHandlerTests
         public Task<DesktopActionResult> OpenFileAsync(RunFileOpenRequest request, CancellationToken cancellationToken)
         {
             FileRequest = request;
-            return Task.FromResult(new DesktopActionResult(true, null, null));
-        }
-
-        public Task<DesktopActionResult> ExecuteWindowCommandAsync(string command, CancellationToken cancellationToken)
-        {
-            WindowCommand = command;
             return Task.FromResult(new DesktopActionResult(true, null, null));
         }
     }

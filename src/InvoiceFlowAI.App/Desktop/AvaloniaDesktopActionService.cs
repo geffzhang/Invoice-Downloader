@@ -16,8 +16,7 @@ public sealed class AvaloniaDesktopActionService(
     IReportRunDataSource reportData,
     IArchiveArtifactStore artifacts,
     IReportApplicationService reports,
-    IDesktopPathLauncher launcher,
-    IWindowCommandDispatcher windowCommands) : IDesktopActionService
+    IDesktopPathLauncher launcher) : IDesktopActionService
 {
     private const string ActionFailed = "DESKTOP_ACTION_FAILED";
     private const string PathInvalid = "DESKTOP_PATH_INVALID";
@@ -139,29 +138,6 @@ public sealed class AvaloniaDesktopActionService(
         return await LaunchAsync(filePath, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<DesktopActionResult> ExecuteWindowCommandAsync(string command, CancellationToken cancellationToken)
-    {
-        if (command is not ("minimize" or "maximize" or "close"))
-        {
-            return Failure(RpcErrorCodes.RpcInvalidParams, "The window action is unavailable.");
-        }
-
-        try
-        {
-            return await windowCommands.ExecuteAsync(command, cancellationToken).ConfigureAwait(false)
-                ? Success()
-                : Failure(ActionFailed, "The window action could not be completed.");
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception)
-        {
-            return Failure(ActionFailed, "The window action could not be completed.");
-        }
-    }
-
     private async Task<DesktopActionResult> LaunchAsync(string path, CancellationToken cancellationToken)
     {
         try
@@ -246,32 +222,4 @@ public sealed class AvaloniaUiDispatcher : IAvaloniaUiDispatcher
         ArgumentNullException.ThrowIfNull(action);
         Dispatcher.UIThread.Post(action);
     }
-}
-
-public sealed class AvaloniaWindowCommandDispatcher(
-    IMainWindowAccessor windowAccessor,
-    IAvaloniaUiDispatcher dispatcher) : IWindowCommandDispatcher
-{
-    public Task<bool> ExecuteAsync(string command, CancellationToken cancellationToken)
-        => dispatcher.InvokeAsync(() =>
-        {
-            var window = windowAccessor.MainWindow;
-            if (window is null) return false;
-            switch (command)
-            {
-                case "minimize":
-                    window.WindowState = WindowState.Minimized;
-                    return true;
-                case "maximize":
-                    window.WindowState = window.WindowState == WindowState.Maximized
-                        ? WindowState.Normal
-                        : WindowState.Maximized;
-                    return true;
-                case "close":
-                    Dispatcher.UIThread.Post(window.Close, DispatcherPriority.Background);
-                    return true;
-                default:
-                    return false;
-            }
-        }, cancellationToken);
 }

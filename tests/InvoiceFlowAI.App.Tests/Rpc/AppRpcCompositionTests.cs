@@ -35,9 +35,6 @@ public sealed class AppRpcCompositionTests
             "run.folder.open",
             "run.manual-review.open",
             "run.file.open",
-            "window.minimize",
-            "window.maximize",
-            "window.close",
         ]);
         dispatcher.RegisteredMethods.Should().NotContain("report.open");
         dispatcher.RegisteredMethods.Should().NotContain("start_processing");
@@ -46,7 +43,7 @@ public sealed class AppRpcCompositionTests
             new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, "hello", RpcDispatcher.HelloMethod, null),
             CancellationToken.None);
         hello.Result!.Value.GetProperty("registeredMethods").EnumerateArray()
-            .Select(x => x.GetString()).Should().Contain(["settings.get", "run.start", "run.report.export", "run.file.open", "window.close"]);
+            .Select(x => x.GetString()).Should().Contain(["settings.get", "run.start", "run.report.export", "run.file.open", "run.stop"]);
     }
 
     [Fact]

@@ -3,9 +3,11 @@ using System.Text;
 using Avalonia.Controls;
 using InvoiceFlowAI.App.Desktop;
 using InvoiceFlowAI.App.Events;
+using InvoiceFlowAI.App.Navigation;
 using InvoiceFlowAI.App.Rpc;
 using InvoiceFlowAI.App.Services;
 using InvoiceFlowAI.App.Settings;
+using InvoiceFlowAI.App.ViewModels;
 using InvoiceFlowAI.Application.Configuration;
 using InvoiceFlowAI.Application.Extraction;
 using InvoiceFlowAI.Application.Persistence;
@@ -48,7 +50,6 @@ public static class AppServiceProviderFactory
         services.AddSingleton<WebViewRunEventPublisher>();
         services.AddSingleton<IDesktopPathLauncher, ShellDesktopPathLauncher>();
         services.AddSingleton<IAvaloniaUiDispatcher, AvaloniaUiDispatcher>();
-        services.AddSingleton<IWindowCommandDispatcher, AvaloniaWindowCommandDispatcher>();
         services.AddSingleton<IAppEventBus, AppEventBus>();
         services.AddSingleton<NativeRunEventPublisher>();
         services.AddSingleton<RunEventPublisherFanOut>(provider => new RunEventPublisherFanOut(
@@ -61,6 +62,20 @@ public static class AppServiceProviderFactory
         services.AddSingleton<IMainWindowAccessor>(provider => provider.GetRequiredService<AvaloniaMainWindowAccessor>());
         services.AddSingleton<IDirectoryPicker, AvaloniaDirectoryPicker>();
         services.AddSingleton<IScopedOperationRunner, ScopedOperationRunner>();
+        services.AddSingleton<IRpcDispatcher>(provider => AppRpcComposition.CreateDispatcher(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            typeof(App).Assembly.GetName().Version?.ToString() ?? "0.0.0"));
+        services.AddSingleton<IRunSession, RunSession>();
+        services.AddSingleton<IAppNavigator, AppNavigator>();
+        services.AddSingleton<IDialogService, AtomUiDialogService>();
+        services.AddSingleton<INotificationService, AtomUiNotificationService>();
+        services.AddSingleton<IDisclaimerService, DisclaimerService>();
+        services.AddSingleton<IRunShutdownService, RunShutdownService>();
+        services.AddSingleton<ShellViewModel>();
+        services.AddSingleton<MainWindow>();
+        services.AddSingleton<IPageViewModel>(new WebPageViewModel("settings", "启动配置", "Step 1", "/"));
+        services.AddSingleton<IPageViewModel>(new WebPageViewModel("processing", "处理中心", "Step 2", "/processing"));
+        services.AddSingleton<IPageViewModel>(new WebPageViewModel("analysis", "结果分析", "Step 3", "/analysis"));
         services.AddInvoiceFlowInfrastructure();
         services.AddInvoiceFlowApplication();
 
@@ -90,9 +105,6 @@ public static class AppServiceProviderFactory
         services.AddScoped<RunFolderOpenRpcHandler>();
         services.AddScoped<ManualReviewFolderOpenRpcHandler>();
         services.AddScoped<RunFileOpenRpcHandler>();
-        services.AddScoped<WindowMinimizeRpcHandler>();
-        services.AddScoped<WindowMaximizeRpcHandler>();
-        services.AddScoped<WindowCloseRpcHandler>();
         services.AddScoped<RunContextRpcHandler>();
         services.AddScoped<RunStartRpcHandler>();
         services.AddScoped<RunStatusRpcHandler>();
