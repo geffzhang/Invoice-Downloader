@@ -98,7 +98,11 @@ public static class InvoiceFlowAIInfrastructureServiceCollectionExtensions
             serviceProvider.GetRequiredService<InvoiceNormalizer>(),
             serviceProvider.GetRequiredService<IInvoiceAcceptanceService>(),
             serviceProvider.GetRequiredService<InvoiceExtractionRules>()));
-        services.AddSingleton<IPdfPageRenderer, PdfiumPageRenderer>();
+        services.AddSingleton<PdfiumPageRenderer>();
+        services.AddSingleton<ImagePageRenderer>();
+        services.AddSingleton<IPdfPageRenderer>(serviceProvider => new DocumentPageRenderer(
+            serviceProvider.GetRequiredService<PdfiumPageRenderer>(),
+            serviceProvider.GetRequiredService<ImagePageRenderer>()));
         services.AddSingleton<IOcrFallback, SimdPaddleOcrFallback>();
         services.AddUrlRecoveryStrategies();
         services.AddScoped<UrlRecoveryWorkerManifestStore>();

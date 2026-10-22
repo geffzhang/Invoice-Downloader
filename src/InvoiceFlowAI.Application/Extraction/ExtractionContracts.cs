@@ -32,9 +32,14 @@ public sealed record DocumentSource(
 
 public sealed record BoundingBox(float X, float Y, float Width, float Height);
 
+/// <summary>
+/// A recognized text line. <see cref="Confidence"/> is a calibrated value in [0,1],
+/// or <see langword="null"/> when the OCR provider cannot supply one. Callers must
+/// treat <see langword="null"/> as unknown rather than assuming a pass threshold.
+/// </summary>
 public sealed record OcrLine(
     string Text,
-    decimal Confidence,
+    decimal? Confidence,
     BoundingBox Bounds,
     int PageNumber);
 

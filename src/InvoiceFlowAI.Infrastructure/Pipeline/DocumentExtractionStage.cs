@@ -3,6 +3,7 @@ using InvoiceFlowAI.Application.Parsers;
 using InvoiceFlowAI.Application.Pipeline;
 using InvoiceFlowAI.Domain.Candidates;
 using InvoiceFlowAI.Domain.Invoices;
+using InvoiceFlowAI.Infrastructure.Ocr;
 
 namespace InvoiceFlowAI.Infrastructure.Pipeline;
 
@@ -357,21 +358,23 @@ public sealed class DocumentExtractionStage : IDocumentExtractionStage
         InvoiceDocument? deterministicSource,
         CancellationToken cancellationToken)
     {
-        string? temporaryPdfPath = null;
+        string? temporaryPath = null;
+        var mimeType = ResolveMimeType(item.Candidate.ContentType, item.Candidate.OriginalFileName);
         try
         {
-            if (item.Candidate.ContentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase)
-                && !item.Content.IsEmpty)
+            if (IsLocalPageSource(mimeType) && !item.Content.IsEmpty)
             {
-                temporaryPdfPath = Path.Combine(Path.GetTempPath(), $"invoiceflow-{Guid.NewGuid():N}.pdf");
-                await File.WriteAllBytesAsync(temporaryPdfPath, item.Content.ToArray(), cancellationToken).ConfigureAwait(false);
+                temporaryPath = Path.Combine(
+                    Path.GetTempPath(),
+                    $"invoiceflow-{Guid.NewGuid():N}{ExtensionFor(mimeType)}");
+                await File.WriteAllBytesAsync(temporaryPath, item.Content.ToArray(), cancellationToken).ConfigureAwait(false);
             }
 
             var source = new DocumentSource(
                 item.Candidate.DocumentId,
-                LocalPath: temporaryPdfPath ?? string.Empty,
+                LocalPath: temporaryPath ?? string.Empty,
                 SourceUrl: item.Candidate.SourceUrl?.AbsoluteUri ?? string.Empty,
-                MimeType: item.Candidate.ContentType,
+                MimeType: mimeType,
                 ContentHash: GetMetadata(item.Candidate, "content_sha256"),
                 AttachmentPartId: GetMetadata(item.Candidate, "attachment_part_id"),
                 Mailbox: GetMetadata(item.Candidate, "mailbox"),
@@ -385,12 +388,53 @@ public sealed class DocumentExtractionStage : IDocumentExtractionStage
         }
         finally
         {
-            if (temporaryPdfPath is not null)
+            if (temporaryPath is not null)
             {
-                File.Delete(temporaryPdfPath);
+                File.Delete(temporaryPath);
             }
         }
     }
+
+    private static string ResolveMimeType(string contentType, string fileName)
+    {
+        var normalized = NormalizeMimeType(contentType);
+        if (normalized.Equals("application/pdf", StringComparison.OrdinalIgnoreCase)
+            || ImagePageRenderer.IsSupportedMimeType(normalized))
+        {
+            return normalized;
+        }
+
+        var inferred = InferMimeTypeFromFileName(fileName);
+        return inferred.Length > 0 ? inferred : normalized;
+    }
+
+    private static string NormalizeMimeType(string contentType) =>
+        (contentType ?? string.Empty).Split(';')[0].Trim();
+
+    private static string InferMimeTypeFromFileName(string fileName) => Path.GetExtension(fileName).ToLowerInvariant() switch
+    {
+        ".pdf" => "application/pdf",
+        ".png" => "image/png",
+        ".jpg" or ".jpeg" => "image/jpeg",
+        ".gif" => "image/gif",
+        ".bmp" => "image/bmp",
+        ".webp" => "image/webp",
+        _ => string.Empty,
+    };
+
+    private static bool IsLocalPageSource(string mimeType) =>
+        mimeType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase)
+        || ImagePageRenderer.IsSupportedMimeType(mimeType);
+
+    private static string ExtensionFor(string mimeType) => mimeType.ToLowerInvariant() switch
+    {
+        "image/png" => ".png",
+        "image/jpeg" or "image/jpg" => ".jpg",
+        "image/gif" => ".gif",
+        "image/bmp" => ".bmp",
+        "image/webp" => ".webp",
+        _ => ".pdf",
+    };
 
     private static InvoiceResponseFields? ToCorrections(InvoiceDocument? document) => document is null
         ? null

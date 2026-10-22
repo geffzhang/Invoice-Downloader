@@ -59,6 +59,37 @@ public sealed class DocumentExtractionStageTests
     }
 
     [Fact]
+    public async Task Generic_extraction_receives_candidate_image_bytes_as_temporary_local_source()
+    {
+        var extractor = new FakeFieldExtractor(AcceptedExtraction);
+        var stage = CreateStage([], extractor);
+
+        var result = await stage.ExecuteAsync(
+            new CandidateBatch([WorkItem("image-source", contentType: "image/jpeg", fileName: "receipt.jpg")]),
+            CancellationToken.None);
+
+        result.Results.Should().ContainSingle().Which.Status.Should().Be(CandidateStatus.Resolved);
+        extractor.SourceExistedDuringCall.Should().BeTrue();
+        extractor.SourceBytesDuringCall.Should().Equal(1, 2, 3);
+        extractor.LastRequest!.Source.MimeType.Should().Be("image/jpeg");
+        File.Exists(extractor.LastRequest.Source.LocalPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Generic_extraction_infers_image_mime_type_from_file_name()
+    {
+        var extractor = new FakeFieldExtractor(AcceptedExtraction);
+        var stage = CreateStage([], extractor);
+
+        await stage.ExecuteAsync(
+            new CandidateBatch([WorkItem("image-inferred", contentType: "application/octet-stream", fileName: "receipt.png")]),
+            CancellationToken.None);
+
+        extractor.SourceExistedDuringCall.Should().BeTrue();
+        extractor.LastRequest!.Source.MimeType.Should().Be("image/png");
+    }
+
+    [Fact]
     public async Task Ambiguous_special_parser_claims_return_manual_review_without_generic_fallback()
     {
         var format = new FakeParser("pdf-text-invoice", "pdf", 400, true, NeedsFallback);

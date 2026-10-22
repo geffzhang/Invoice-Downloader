@@ -43,7 +43,7 @@ public sealed class UserSettingsForeignKeyTests : IClassFixture<SqliteTestFixtur
         result.Version.Should().Be(1);
 
         var rulesCount = await ReadScalarAsync(context, "SELECT COUNT(*) FROM RuleSets;");
-        rulesCount.Should().BeGreaterOrEqualTo(1);
+        rulesCount.Should().BeGreaterThanOrEqualTo(1);
 
         var settingsCount = await ReadScalarAsync(context, "SELECT COUNT(*) FROM UserSettings;");
         settingsCount.Should().Be(1);

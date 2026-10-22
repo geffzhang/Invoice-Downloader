@@ -108,8 +108,7 @@ public sealed class SimdPaddleOcrFallback : IOcrFallback, IAsyncDisposable
                 .ThenBy(line => line.Bounds.Y)
                 .ThenBy(line => line.Bounds.X)
                 .ToArray();
-            var confidence = ordered.Length == 0 ? 0m : ordered.Average(line => line.Confidence);
-            return new OcrFallbackOutcome(ordered, confidence);
+            return new OcrFallbackOutcome(ordered, AggregateConfidence(ordered));
         }
         catch (OperationCanceledException)
         {
@@ -251,6 +250,17 @@ public sealed class SimdPaddleOcrFallback : IOcrFallback, IAsyncDisposable
         }
     }
 
+    internal static decimal? AggregateConfidence(IReadOnlyList<OcrLine> lines)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+        if (lines.Count == 0 || lines.Any(line => line.Confidence is null))
+        {
+            return null;
+        }
+
+        return lines.Average(line => line.Confidence!.Value);
+    }
+
     private static OcrLine ToOcrLine(PaddleOcrLine line, RenderedPage page)
     {
         var box = line.Box;
@@ -258,7 +268,9 @@ public sealed class SimdPaddleOcrFallback : IOcrFallback, IAsyncDisposable
         var top = Math.Clamp(Math.Min(Math.Min(box.Y1, box.Y2), Math.Min(box.Y3, box.Y4)), 0, page.Height);
         var right = Math.Clamp(Math.Max(Math.Max(box.X1, box.X2), Math.Max(box.X3, box.X4)), left, page.Width);
         var bottom = Math.Clamp(Math.Max(Math.Max(box.Y1, box.Y2), Math.Max(box.Y3, box.Y4)), top, page.Height);
-        var confidence = decimal.Clamp((decimal)line.RecognitionScore, 0m, 1m);
-        return new OcrLine(line.Text, confidence, new BoundingBox(left, top, right - left, bottom - top), page.PageNumber);
+        // Sdcb.SimdPaddleOCR 2.0.0 exposes RecognitionScore on an uncalibrated raw scale
+        // (roughly 20-45 even for clean text), not as a 0-1 probability. Clamping it would
+        // report 1.0 for almost every line, so confidence is intentionally unavailable.
+        return new OcrLine(line.Text, Confidence: null, new BoundingBox(left, top, right - left, bottom - top), page.PageNumber);
     }
 }

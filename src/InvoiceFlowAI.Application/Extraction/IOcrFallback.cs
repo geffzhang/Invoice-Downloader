@@ -4,7 +4,7 @@ namespace InvoiceFlowAI.Application.Extraction;
 
 public sealed record OcrFallbackOutcome(
     IReadOnlyList<OcrLine> Lines,
-    decimal AggregateConfidence);
+    decimal? AggregateConfidence);
 
 public interface IOcrFallback
 {

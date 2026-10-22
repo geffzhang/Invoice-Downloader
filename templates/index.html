@@ -479,7 +479,7 @@
         .page-scroll--locked { overflow: hidden; }
 
         .page-wrap {
-            width: min(1200px, calc(100% - 18px));
+            width: min(1440px, calc(100% - 24px));
             margin: 0 auto;
             padding: 10px 0 8px;
         }
@@ -496,7 +496,24 @@
 
         .page-wrap--narrow { width: min(1120px, calc(100% - 28px)); }
 
+        .page-scroll--locked:has(.page-wrap--analysis),
+        .page-scroll--locked:has(.page-wrap--processing) { overflow: auto; }
+
+        .page-wrap--processing {
+            height: auto;
+            min-height: 100%;
+        }
+
+        .page-wrap--analysis {
+            height: auto;
+            min-height: 100%;
+            display: block;
+        }
+
+        .page-wrap--analysis > * + * { margin-top: 10px; }
+
         .page-wrap--settings {
+            width: min(1520px, calc(100% - 18px));
             min-height: 100%;
             height: auto;
             justify-content: flex-start;
@@ -1166,7 +1183,7 @@
             position: fixed;
             z-index: 41;
             inset: 3vh auto;
-            width: min(1100px, calc(100vw - 24px));
+            width: min(1560px, calc(100vw - 48px));
             height: 94vh;
             left: 50%;
             transform: translateX(-50%);
@@ -1227,19 +1244,45 @@
         @media (max-width: 1180px) {
             .settings-grid, .cards-grid, .metrics-grid { grid-template-columns: 1fr; }
             .manual-banner { flex-direction: column; align-items: flex-start; }
+            .app-shell--initial-setup .app-main { top: 2vh; bottom: auto; width: calc(100vw - 24px); height: 96vh; }
         }
 
         @media (max-width: 920px) {
             .app-shell { flex-direction: column; height: 100%; margin: 0; padding: 0; }
-            .app-sidebar { width: 100%; min-width: 0; }
+            .app-sidebar {
+                width: 100%;
+                min-width: 0;
+                flex-direction: row;
+                align-items: center;
+                gap: 6px;
+                padding: 8px 10px;
+                border-right: none;
+                border-bottom: 1px solid rgba(255,255,255,0.06);
+            }
+            .sidebar-top { flex-shrink: 0; padding: 0 4px; }
+            .sidebar-logo { width: 32px; height: 32px; border-radius: 10px; font-size: 13px; }
+            .sidebar-subtitle { display: none; }
+            .sidebar-nav { flex-direction: row; align-items: center; gap: 4px; min-width: 0; }
+            .sidebar-nav__item { width: auto; flex: 1 1 0; justify-content: center; padding: 8px 6px; gap: 6px; }
+            .sidebar-nav__item-copy strong { font-size: 12px; white-space: nowrap; }
+            .sidebar-nav__item-copy span { display: none; }
+            .sidebar-nav__item-icon { width: 28px; height: 28px; min-width: 28px; border-radius: 9px; font-size: 18px; }
+            .sidebar-footer { flex-direction: row; align-items: center; gap: 4px; padding-top: 0; border-top: none; flex-shrink: 0; }
+            .sidebar-foot-button { width: auto; min-height: 30px; padding: 0 4px; }
+            .sidebar-foot-button__label,
+            .sidebar-link-row,
+            .sidebar-brand { display: none; }
             .page-wrap, .page-wrap--narrow { width: min(100%, calc(100% - 20px)); }
-            .page-header-shell, .progress-main, .footer-bar, .window-chrome { flex-direction: column; align-items: flex-start; }
+            .bridge-status { top: 70px; }
+            .page-header-shell, .progress-main, .footer-bar { flex-direction: column; align-items: flex-start; }
+            .page-wrap--settings .page-header-shell { align-items: flex-start; }
+            .window-chrome { padding: 0 10px 0 12px; }
             .footer-slot--right, .page-header-badge, .progress-actions { justify-content: flex-start; }
             .terminal-line { grid-template-columns: 1fr; gap: 2px; margin-bottom: 8px; }
-            .sidebar-link-row { width: 100%; }
             .page-wrap--settings .settings-column .settings-date-row { flex-wrap: wrap; }
             .app-sidebar,
             .app-main { border-radius: 0; }
+            .app-shell--initial-setup .app-main { top: 2vh; bottom: auto; width: calc(100vw - 20px); height: 96vh; }
         }
     </style>
 </head>

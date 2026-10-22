@@ -29,6 +29,36 @@ public sealed class SimdPaddleOcrFallbackTests
     }
 
     [Fact]
+    public void AggregateConfidence_averages_calibrated_lines()
+    {
+        var lines = new OcrLine[]
+        {
+            new("a", 0.8m, new BoundingBox(0, 0, 1, 1), 1),
+            new("b", 1.0m, new BoundingBox(0, 0, 1, 1), 1),
+        };
+
+        SimdPaddleOcrFallback.AggregateConfidence(lines).Should().Be(0.9m);
+    }
+
+    [Fact]
+    public void AggregateConfidence_is_unknown_when_any_line_is_unknown()
+    {
+        var lines = new OcrLine[]
+        {
+            new("a", 0.9m, new BoundingBox(0, 0, 1, 1), 1),
+            new("b", null, new BoundingBox(0, 0, 1, 1), 1),
+        };
+
+        SimdPaddleOcrFallback.AggregateConfidence(lines).Should().BeNull();
+    }
+
+    [Fact]
+    public void AggregateConfidence_is_unknown_without_lines()
+    {
+        SimdPaddleOcrFallback.AggregateConfidence([]).Should().BeNull();
+    }
+
+    [Fact]
     public async Task Recognize_rejects_invalid_image_before_model_initialization()
     {
         var fallback = new SimdPaddleOcrFallback(new SimdPaddleOcrOptions(
