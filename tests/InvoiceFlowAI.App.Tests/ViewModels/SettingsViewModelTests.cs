@@ -1,6 +1,5 @@
 using FluentAssertions;
 using InvoiceFlowAI.App.Desktop;
-using InvoiceFlowAI.App.Navigation;
 using InvoiceFlowAI.App.Services;
 using InvoiceFlowAI.App.Settings;
 using InvoiceFlowAI.App.Tests.TestSupport;
@@ -381,44 +380,4 @@ public sealed class SettingsViewModelTests
             => Task.FromResult(new DirectoryChooseResult(false, @"D:\picked"));
     }
 
-    private sealed class FakeDesktopRunService(RunContextSnapshot context) : IDesktopRunService
-    {
-        public List<RunStartRequest> Started { get; } = [];
-
-        public Task<RunContextSnapshot> GetContextAsync(CancellationToken cancellationToken)
-            => Task.FromResult(context);
-
-        public Task<RunStartResult> StartAsync(RunStartRequest request, CancellationToken cancellationToken)
-        {
-            Started.Add(request);
-            return Task.FromResult(new RunStartResult(true, request.RunId, null));
-        }
-
-        public Task<RunProgressSnapshot> GetProgressAsync(string? runId, CancellationToken cancellationToken)
-            => throw new NotSupportedException();
-
-        public Task<RunStopResult> StopAsync(RunStopRequest request, CancellationToken cancellationToken)
-            => throw new NotSupportedException();
-    }
-
-    public sealed class FakeRunSession : IRunSession
-    {
-        public string? RunId { get; private set; }
-        public void SetRunId(string? runId) => RunId = runId;
-    }
-
-    private sealed class RecordingNavigator : IAppNavigator
-    {
-        public List<string> Requested { get; } = [];
-        public Task NavigateAsync(string key, CancellationToken cancellationToken = default)
-        {
-            Requested.Add(key);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class NullNotificationService : INotificationService
-    {
-        public void Show(string message, NotificationKind kind) { }
-    }
 }
