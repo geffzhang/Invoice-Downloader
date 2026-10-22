@@ -10,6 +10,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-22-avalonia-native-ui-design.md`
 
+**参考资料:**
+
+- 「一天时间将一个 web 组件库完全迁移成(Avalonia)原生组件库」(dotNET跨平台):TKCode.Arc(Arc Web 组件库的 Avalonia 移植,基于 AtomUI + Avalonia 12.1.4 精确锁定)的迁移经验,与本计划同技术栈,可对照其命名冲突与 headless 测试处理:<https://mp.weixin.qq.com/s/6ZyC0IIa5bVMebxSX5cixA>
+- TKCode.Arc 仓库 <https://github.com/AtomUICommunity/TKCode.Arc>:1400+ 测试含无头 Avalonia 测试;其记录 Avalonia 12.1.4 的 `ITransition` 无法由外部实现(`TransitionBase.Apply` 为 internal)——本计划不使用自定义动效,沿用 AtomUI ControlTheme 默认过渡即可。
+
 ## Global Constraints
 
 - 分支固定 `avalonia-native`;每个任务结束时代码必须可编译、测试全绿、可独立提交。
@@ -21,6 +26,7 @@
 - 用户可见文案只来自产品语言(AGENTS.md):禁止把 `StatusText`、`LastError`、`FailureCode`、`SafeMessage`、`ReasonCode`、`label`、`RunLogEntry.Message` 等后端原文/错误码渲染到界面;所有页面文案必须是固定中文产品文案或由快照数值拼装的中文。
 - 饥饿式退役:删除某个 RPC handler 的任务必须同时删除其专用测试与 App 注册;不得留孤儿 handler。
 - 测试栈为 xUnit v3 4.0.2 + Microsoft.Testing.Platform;禁止引入 `Avalonia.Headless.XUnit`(与 v3 4.0.2 不兼容,设计 §7.2);异步测试必须传 `TestContext.Current.CancellationToken`。
+- 控件名冲突:AtomUI 与 Avalonia 存在同名类型(实测 `AtomUI.Desktop.Controls.Window` 与 `Avalonia.Controls.Window` 冲突报 CS0104;TKCode.Arc 文档另列 `Button`/`Calendar`/`DatePicker`/`Slider`/`SplitButton`/`TabItem`/`TimePicker`/`TreeView`/`ContextMenu`/`Carousel`)。XAML 一律用 `atom:` 前缀;代码中同时引用两个命名空间时,冲突类型必须用别名或全限定名(本计划 `MainWindow` 用全限定 `AtomUI.Desktop.Controls.Window`,新代码遵循同样规则)。
 - 不迁移 SPA 的 QA 会话自动启动钩子(`autostart_enabled` / `autostart_token` / `isControlledAutostartConsumed`);受控复跑的**锁定**行为(输出目录、日期、邮箱)必须保留。
 - 每个提交信息的最后一行固定为:`Co-Authored-By: Claude Code <noreply@anthropic.com>`。
 
