@@ -21,7 +21,7 @@
 
 Designed for individuals, freelancers, and small teams that manually collect multiple e-invoices each month. Connect your own QQ Mail or 163 Mail account to collect invoices in batches, run OCR, archive them by category, and create a summary while retaining low-confidence results for human review.
 
-Download: [latest Windows x64 installer and portable package](https://github.com/EthanYoQ/Invoice-Downloader/releases/latest)
+Download: [latest Windows x64 installer and portable package](https://github.com/geffzhang/Invoice-Downloader/releases/latest)
 
 *Email and invoice files are processed locally. If you enable GLM OCR / vision recognition, invoice images are sent to your configured model provider for extraction.*
 

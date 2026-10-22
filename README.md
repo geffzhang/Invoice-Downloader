@@ -21,7 +21,7 @@
 
 面向每月需要手工收集多张电子发票的个人、自由职业者和小团队。连接自己的 QQ 或 163 邮箱后，可批量收集发票、OCR 识别、分类归档并生成汇总；低置信度结果保留给用户人工检查。
 
-下载：[最新 Windows x64 安装版与免安装版](https://github.com/EthanYoQ/Invoice-Downloader/releases/latest)
+下载：[最新 Windows x64 安装版与免安装版](https://github.com/geffzhang/Invoice-Downloader/releases/latest)
 
 *邮件和发票文件在本地处理。启用 GLM OCR / 视觉识别时，发票图片会发送到你配置的模型服务商用于提取。*
 

@@ -51,7 +51,7 @@ public sealed partial class ShellViewModel : ObservableObject
 
     public string Version { get; }
 
-    public string WebsiteUrl => "https://github.com/EthanYoQ/Invoice-Downloader";
+    public string WebsiteUrl => "https://github.com/geffzhang/Invoice-Downloader";
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {

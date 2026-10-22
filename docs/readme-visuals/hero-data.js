@@ -4,7 +4,7 @@ window.README_HERO_CONFIG = {
     zh: {
       htmlLang: "zh-CN",
       brand: "InvoiceFlowAI",
-      byline: "Invoice Assistant · EthanYoQ",
+      byline: "Invoice Assistant",
       logo: "../../build/windows/assets/invoiceflowai-icon.svg",
       headline: ["邮箱发票，自动归档", "下载 · 识别 · 汇总"],
       proof: {
@@ -28,7 +28,7 @@ window.README_HERO_CONFIG = {
     en: {
       htmlLang: "en",
       brand: "InvoiceFlowAI",
-      byline: "Invoice Assistant · EthanYoQ",
+      byline: "Invoice Assistant",
       logo: "../../build/windows/assets/invoiceflowai-icon.svg",
       headline: ["Invoices, organized", "Download · OCR · report"],
       proof: {
