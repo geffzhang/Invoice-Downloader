@@ -2632,7 +2632,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 - Test: `tests/InvoiceFlowAI.App.Tests/ViewModels/SettingsViewModelTests.cs`
 
 **Interfaces:**
-- Consumes: `IScopedOperationRunner`(Task 2)、`IAccountApplicationService` / `IAccountTestService`(Task 2)、`IUserSettingsStore`、`ISecretRetentionStore`、`ISecretStore`、`IDesktopRunService`、`IDirectoryPicker`、`IRunSession` / `IAppNavigator` / `INotificationService`(Task 5)。
+- Consumes: `IScopedOperationRunner`(Task 2)、`IAccountApplicationService` / `IAccountTestService`(Task 2)、`IUserSettingsStore`、`ISecretRetentionStore`、`ISecretStore`、`IPersistentSecretStore`、`IDesktopRunService`、`IDirectoryPicker`、`IRunSession` / `IAppNavigator` / `INotificationService`(Task 5)。
 - Produces: `SettingsViewModel : ObservableObject, IPageViewModel`,成员见下:
   - 可绑定属性:`Email`、`AuthCode`、`ApiKey`、`RememberSettings`、`CompanyName`、`OutputDirectory`、`DateFrom`(`DateTime?`)、`DateTo`、`IsBusy`、`PageError`、`EmailStatus`、`EmailStatusMessage`、`ApiStatus`、`ApiStatusMessage`、`OutputDirectoryLocked`、`DateRangeLocked`、`EmailLocked`、`NeedsInitialSetup`。
   - 命令:`TestEmailCommand`、`TestApiKeyCommand`、`ChooseDirectoryCommand`、`StartCommand`。
@@ -3258,6 +3258,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IPageViewModel
         IRunSession runSession,
         IAppNavigator navigator,
         INotificationService notifications,
+        IPersistentSecretStore persistentSecrets,
         ILogger<SettingsViewModel> logger)
     {
         _operations = operations ?? throw new ArgumentNullException(nameof(operations));
@@ -4035,6 +4036,7 @@ public partial class SettingsPageView : UserControl
             provider.GetRequiredService<IRunSession>(),
             provider.GetRequiredService<IAppNavigator>(),
             provider.GetRequiredService<INotificationService>(),
+            provider.GetRequiredService<IPersistentSecretStore>(),
             provider.GetRequiredService<ILogger<SettingsViewModel>>()));
         services.AddSingleton<IPageViewModel>(provider => provider.GetRequiredService<SettingsViewModel>());
 ```
