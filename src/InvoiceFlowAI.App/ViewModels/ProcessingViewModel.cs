@@ -33,7 +33,9 @@ public sealed partial class ProcessingViewModel : ObservableObject, IPageViewMod
     private int _lastErrors;
     private RunState _lastState = RunState.Idle;
     private bool _stopLogged;
+    private bool _stopAccepted;
     private bool _navigated;
+    private bool _navigationInFlight;
     private bool _started;
 
     [ObservableProperty]
@@ -134,6 +136,7 @@ public sealed partial class ProcessingViewModel : ObservableObject, IPageViewMod
         }
 
         _started = true;
+        ResetForRun();
         _pollCancellation?.Dispose();
         _pollCancellation = new CancellationTokenSource();
         _runEventSubscription = _bus.Subscribe(_ => _dispatcher.Post(RefreshFromEvent));
@@ -147,7 +150,33 @@ public sealed partial class ProcessingViewModel : ObservableObject, IPageViewMod
         _runEventSubscription?.Dispose();
         _runEventSubscription = null;
         _pollCancellation?.Cancel();
+        _pollCancellation?.Dispose();
+        _pollCancellation = null;
         return Task.CompletedTask;
+    }
+
+    private void ResetForRun()
+    {
+        var sessionRunId = _runSession.RunId;
+        if (string.IsNullOrWhiteSpace(sessionRunId) || string.Equals(sessionRunId, _runId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _runId = null;
+        RunIdLabel = string.Empty;
+        _navigated = false;
+        _navigationInFlight = false;
+        _stopLogged = false;
+        _stopAccepted = false;
+        _lastState = RunState.Idle;
+        _lastEmails = 0;
+        _lastInvoices = 0;
+        _lastErrors = 0;
+        IsRunning = false;
+        CanStop = false;
+        StopPending = false;
+        Logs.Clear();
     }
 
     private async void RefreshFromEvent()
@@ -206,6 +235,8 @@ public sealed partial class ProcessingViewModel : ObservableObject, IPageViewMod
                 return;
             }
 
+            _stopAccepted = true;
+            _stopLogged = true;
             StopPending = true;
             AppendLog(ProcessingCopy.StopAccepted);
         }
@@ -280,10 +311,10 @@ public sealed partial class ProcessingViewModel : ObservableObject, IPageViewMod
 
     private async Task ApplyAsync(RunProgressSnapshot snapshot, CancellationToken cancellationToken)
     {
-        ProgressValue = snapshot.IsRunning ? snapshot.Progress : 100;
+        ProgressValue = snapshot.RunState == RunState.Completed ? 100 : snapshot.Progress;
         IsRunning = snapshot.IsRunning;
         CanStop = snapshot.CanStop;
-        StopPending = snapshot.StopRequested;
+        StopPending = _stopAccepted || snapshot.StopRequested;
         EmailCount = snapshot.Stats.Emails;
         InvoiceCount = snapshot.Stats.Invoices;
         ErrorCount = snapshot.Stats.Errors;
@@ -316,15 +347,25 @@ public sealed partial class ProcessingViewModel : ObservableObject, IPageViewMod
                 });
             }
 
-            if (!_navigated)
+            if (!_navigated && !_navigationInFlight)
             {
-                _navigated = true;
-                if (_options.TerminalNavigationDelay > TimeSpan.Zero)
+                // 导航成功后才记为已完成;失败时由下一次轮询重试。
+                _navigationInFlight = true;
+                try
                 {
-                    await Task.Delay(_options.TerminalNavigationDelay, cancellationToken).ConfigureAwait(true);
-                }
+                    if (_options.TerminalNavigationDelay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(_options.TerminalNavigationDelay, cancellationToken).ConfigureAwait(true);
+                    }
 
-                await _navigator.NavigateAsync("analysis", cancellationToken).ConfigureAwait(true);
+                    // 轮询令牌会在离开本页时被取消,导航本身不能再受它约束。
+                    await _navigator.NavigateAsync("analysis", CancellationToken.None).ConfigureAwait(true);
+                    _navigated = true;
+                }
+                finally
+                {
+                    _navigationInFlight = false;
+                }
             }
         }
 

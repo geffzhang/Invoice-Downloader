@@ -124,12 +124,30 @@ public sealed class ProcessingViewModelTests
         harness.Runs.Progress = Snapshot(RunState.Running, stage: "scan-mailbox", progress: 15, stats: new(4, 0, 0));
         var viewModel = harness.CreateViewModel();
         await viewModel.OnActivatedAsync(TestContext.Current.CancellationToken);
+        harness.Runs.Progress = Snapshot(RunState.Running, stage: "scan-mailbox", progress: 20, stats: new(9, 0, 0));
+
+        harness.Bus.Publish(new AppRunEvent("run.progress", "run-1", 1, DateTimeOffset.UtcNow, new object()));
+        await Task.Yield();
+
+        // The poll interval is an hour, so only the run event can produce 9.
+        viewModel.EmailCount.Should().Be(9);
+        await viewModel.OnDeactivatedAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Deactivation_removes_the_run_event_subscription()
+    {
+        var harness = new ProcessingHarness(pollInterval: TimeSpan.FromHours(1));
+        harness.Runs.Progress = Snapshot(RunState.Running, stage: "scan-mailbox", progress: 15, stats: new(4, 0, 0));
+        var viewModel = harness.CreateViewModel();
+        await viewModel.OnActivatedAsync(TestContext.Current.CancellationToken);
+        await viewModel.OnDeactivatedAsync(TestContext.Current.CancellationToken);
+        harness.Runs.Progress = Snapshot(RunState.Running, stage: "scan-mailbox", progress: 15, stats: new(9, 0, 0));
 
         harness.Bus.Publish(new AppRunEvent("run.progress", "run-1", 1, DateTimeOffset.UtcNow, new object()));
         await Task.Yield();
 
         viewModel.EmailCount.Should().Be(4);
-        await viewModel.OnDeactivatedAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -143,6 +161,88 @@ public sealed class ProcessingViewModelTests
 
         viewModel.HasPageError.Should().BeTrue();
         viewModel.PageError.Should().Be("任务记录不可用,请返回重新开始。");
+    }
+
+    [Fact]
+    public async Task Terminal_navigation_retries_after_a_failed_attempt()
+    {
+        var harness = new ProcessingHarness();
+        var navigator = new ThrowingOnceNavigator();
+        harness.Runs.Progress = Snapshot(RunState.Completed, stage: "completed", progress: 100);
+        var viewModel = harness.CreateViewModel(navigator);
+
+        await FluentActions
+            .Awaiting(() => viewModel.RefreshAsync(TestContext.Current.CancellationToken))
+            .Should().ThrowAsync<InvalidOperationException>();
+        await viewModel.RefreshAsync(TestContext.Current.CancellationToken);
+
+        navigator.Attempts.Should().Be(2);
+        navigator.Requested.Should().Equal("analysis");
+    }
+
+    [Fact]
+    public async Task Reactivating_for_a_new_run_resets_state_and_navigates_again()
+    {
+        var harness = new ProcessingHarness(pollInterval: TimeSpan.FromHours(1));
+        harness.Session.SetRunId("run-1");
+        harness.Runs.Progress = Snapshot(RunState.Completed, stage: "completed", progress: 100, stats: new(3, 2, 0));
+        var viewModel = harness.CreateViewModel();
+        await viewModel.OnActivatedAsync(TestContext.Current.CancellationToken);
+
+        viewModel.RunIdLabel.Should().Be("run-1");
+        viewModel.Logs.Should().NotBeEmpty();
+        harness.Navigator.Requested.Should().Equal("analysis");
+        await viewModel.OnDeactivatedAsync(TestContext.Current.CancellationToken);
+
+        harness.Session.SetRunId("run-2");
+        await viewModel.OnActivatedAsync(TestContext.Current.CancellationToken);
+
+        viewModel.RunIdLabel.Should().Be("run-2");
+        viewModel.Logs.Should().NotBeEmpty();
+        harness.Navigator.Requested.Should().Equal("analysis", "analysis");
+        await viewModel.OnDeactivatedAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Stop_keeps_the_button_disabled_and_logs_once_when_snapshots_lag()
+    {
+        var harness = new ProcessingHarness();
+        harness.Session.SetRunId("run-1");
+        harness.Runs.Progress = Snapshot(RunState.Running, stage: "scan-mailbox", canStop: true);
+        var viewModel = harness.CreateViewModel();
+        await viewModel.RefreshAsync(TestContext.Current.CancellationToken);
+
+        await viewModel.StopCommand.ExecuteAsync(null);
+
+        // A stale snapshot that has not observed the stop request yet.
+        harness.Runs.Progress = Snapshot(RunState.Running, stage: "scan-mailbox", progress: 20, canStop: true);
+        await viewModel.RefreshAsync(TestContext.Current.CancellationToken);
+        viewModel.StopPending.Should().BeTrue();
+        viewModel.StopCommand.CanExecute(null).Should().BeFalse();
+
+        harness.Runs.Progress = Snapshot(RunState.Stopping, stage: "scan-mailbox", progress: 25, canStop: true);
+        await viewModel.RefreshAsync(TestContext.Current.CancellationToken);
+
+        viewModel.Logs.Should().ContainSingle(entry => entry.Message == "已收到安全停止指令,正在收尾...");
+    }
+
+    [Fact]
+    public async Task Failed_and_cancelled_runs_keep_their_real_progress()
+    {
+        var harness = new ProcessingHarness();
+        var viewModel = harness.CreateViewModel();
+
+        harness.Runs.Progress = Snapshot(RunState.Failed, stage: "scan-mailbox", progress: 60);
+        await viewModel.RefreshAsync(TestContext.Current.CancellationToken);
+        viewModel.ProgressValue.Should().Be(60);
+
+        harness.Runs.Progress = Snapshot(RunState.Cancelled, stage: "scan-mailbox", progress: 35);
+        await viewModel.RefreshAsync(TestContext.Current.CancellationToken);
+        viewModel.ProgressValue.Should().Be(35);
+
+        harness.Runs.Progress = Snapshot(RunState.Completed, stage: "completed", progress: 99);
+        await viewModel.RefreshAsync(TestContext.Current.CancellationToken);
+        viewModel.ProgressValue.Should().Be(100);
     }
 
     private static RunProgressSnapshot Snapshot(
@@ -192,7 +292,7 @@ public sealed class ProcessingViewModelTests
         public AppEventBus Bus { get; } = new(NullLogger<AppEventBus>.Instance);
         public SynchronousUiDispatcher Dispatcher { get; } = new();
 
-        public ProcessingViewModel CreateViewModel()
+        public ProcessingViewModel CreateViewModel(IAppNavigator? navigator = null)
         {
             var operations = TestScopedOperationRunner.Create(services =>
                 services.AddSingleton<IDesktopRunService>(Runs));
@@ -200,12 +300,30 @@ public sealed class ProcessingViewModelTests
             return new ProcessingViewModel(
                 operations,
                 Session,
-                Navigator,
+                navigator ?? Navigator,
                 Notifications,
                 Bus,
                 Dispatcher,
                 new ProcessingOptions(_pollInterval, TimeSpan.Zero),
                 NullLogger<ProcessingViewModel>.Instance);
+        }
+    }
+
+    private sealed class ThrowingOnceNavigator : IAppNavigator
+    {
+        public int Attempts { get; private set; }
+        public List<string> Requested { get; } = [];
+
+        public Task NavigateAsync(string key, CancellationToken cancellationToken = default)
+        {
+            Attempts++;
+            if (Attempts == 1)
+            {
+                throw new InvalidOperationException("导航失败。");
+            }
+
+            Requested.Add(key);
+            return Task.CompletedTask;
         }
     }
 }

@@ -16,8 +16,10 @@ public sealed partial class ShellViewModel : ObservableObject
     private readonly IReadOnlyDictionary<string, IPageViewModel> _pages;
     private readonly SemaphoreSlim _navigationGate = new(1, 1);
 
-    // 生命周期回调持有导航锁;标记用于识别回调内发起的导航并快速失败,避免自死锁。
-    private static readonly AsyncLocal<bool> LifecycleCallbackActive = new();
+    // 生命周期回调持有导航锁;作用域标记用于识别回调内发起的导航并快速失败,避免自死锁。
+    // 回调结束后作用域被置为失效:延续到回调之外的异步任务仍持有同一作用域对象,
+    // 只会看到 IsActive=false,因此可以在导航锁释放后正常导航。
+    private static readonly AsyncLocal<LifecycleScope?> LifecycleCallbackScope = new();
 
     [ObservableProperty]
     private IPageViewModel? _currentPage;
@@ -68,7 +70,7 @@ public sealed partial class ShellViewModel : ObservableObject
 
     public async Task NavigateAsync(string key, CancellationToken cancellationToken)
     {
-        if (LifecycleCallbackActive.Value)
+        if (LifecycleCallbackScope.Value is { IsActive: true })
         {
             throw new InvalidOperationException("导航不能在页面生命周期回调期间发起。");
         }
@@ -79,7 +81,8 @@ public sealed partial class ShellViewModel : ObservableObject
         }
 
         await _navigationGate.WaitAsync(cancellationToken).ConfigureAwait(true);
-        LifecycleCallbackActive.Value = true;
+        var scope = new LifecycleScope();
+        LifecycleCallbackScope.Value = scope;
         try
         {
             var previous = CurrentPage;
@@ -93,7 +96,8 @@ public sealed partial class ShellViewModel : ObservableObject
         }
         finally
         {
-            LifecycleCallbackActive.Value = false;
+            scope.Deactivate();
+            LifecycleCallbackScope.Value = null;
             _navigationGate.Release();
         }
     }
@@ -114,4 +118,13 @@ public sealed partial class ShellViewModel : ObservableObject
 
     [RelayCommand]
     private Task OpenWebsiteAsync(CancellationToken cancellationToken) => _pathLauncher.OpenAsync(WebsiteUrl, cancellationToken);
+
+    private sealed class LifecycleScope
+    {
+        private int _isActive = 1;
+
+        public bool IsActive => Volatile.Read(ref _isActive) == 1;
+
+        public void Deactivate() => Volatile.Write(ref _isActive, 0);
+    }
 }
