@@ -1170,23 +1170,16 @@
             -webkit-backdrop-filter: blur(20px);
         }
 
-        .app-shell--initial-setup::before {
-            content: "";
-            position: fixed;
-            inset: 0;
-            z-index: 40;
-            background: rgba(4,7,14,0.66);
-            backdrop-filter: blur(12px);
-        }
-
         .app-shell--initial-setup .app-main {
             position: fixed;
             z-index: 41;
-            inset: 3vh auto;
-            width: min(1560px, calc(100vw - 48px));
-            height: 94vh;
-            left: 50%;
-            transform: translateX(-50%);
+            top: max(3vh, 40px);
+            bottom: 3vh;
+            left: calc(var(--sidebar-width) + 24px);
+            right: 24px;
+            width: auto;
+            height: auto;
+            transform: none;
             box-shadow: var(--shadow-panel);
         }
 
@@ -1244,7 +1237,12 @@
         @media (max-width: 1180px) {
             .settings-grid, .cards-grid, .metrics-grid { grid-template-columns: 1fr; }
             .manual-banner { flex-direction: column; align-items: flex-start; }
-            .app-shell--initial-setup .app-main { top: 2vh; bottom: auto; width: calc(100vw - 24px); height: 96vh; }
+            .app-shell--initial-setup .app-main {
+                top: max(2vh, 40px);
+                bottom: 2vh;
+                left: calc(var(--sidebar-width) + 12px);
+                right: 12px;
+            }
         }
 
         @media (max-width: 920px) {
@@ -1282,7 +1280,17 @@
             .page-wrap--settings .settings-column .settings-date-row { flex-wrap: wrap; }
             .app-sidebar,
             .app-main { border-radius: 0; }
-            .app-shell--initial-setup .app-main { top: 2vh; bottom: auto; width: calc(100vw - 20px); height: 96vh; }
+            .app-shell--initial-setup .app-main {
+                position: relative;
+                z-index: auto;
+                top: auto;
+                right: auto;
+                bottom: auto;
+                left: auto;
+                width: auto;
+                height: auto;
+                box-shadow: none;
+            }
         }
     </style>
 </head>
