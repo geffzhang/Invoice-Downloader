@@ -170,7 +170,7 @@ UI 冒烟为辅、人工清单兜底"为性价比平衡点。
    - **Dispatcher 封送抽象为 `IUiDispatcher` 接口**(生产实现走 Avalonia 调度器,测试注入同步实现),并入阶段 1a 的基础设施
 2. **Headless UI 冒烟(Avalonia.Headless)**
    - 壳装配冒烟:MainWindow 能创建、侧边栏选中切换、三页控件实例化不崩
-   - **阶段 0 就验证 AtomUI 在 headless 下的兼容性**;若有问题,缩小为最小冒烟范围(只测壳结构)
+   - **阶段 0 就验证 AtomUI 在 headless 下的兼容性**:已用最小复现确认 AtomUI 6.2.8 在 Avalonia.Headless 12.1.4 下可创建 `atom:Window`、`Show()` 并物化控件模板;真正的阻塞是下一条的 `Avalonia.Headless.XUnit`
    - ⚠️ xunit v3 升级时已实测:Avalonia.Headless.XUnit 12.1.4 与 xunit.v3 4.0.2 不兼容
      (其 `AvaloniaFactDiscoverer` 调用的 `TestIntrospectionHelper.GetTestCaseDetails` 签名在
      v3 4.0 已移除,发现期即 `MissingMethodException`);手工 `HeadlessUnitTestSession` 在
@@ -198,7 +198,7 @@ UI 冒烟为辅、人工清单兜底"为性价比平衡点。
 
 | 风险 | 缓解 |
 |---|---|
-| AtomUI 在 Avalonia.Headless 下不兼容,冒烟测试写不了 | 阶段 0 提前验证;降级为只测壳结构的最小冒烟范围。已提前暴露更深一层:Avalonia.Headless.XUnit 与 xunit.v3 4.0.2 本身不兼容(见 §7.2 实测记录),冒烟方案按 §7.2 过渡做法设计 |
+| Avalonia.Headless.XUnit 与 xunit.v3 4.0.2 不兼容,`[AvaloniaFact]` 冒烟测试写不了(AtomUI 本身在 headless 下可用,已用最小复现验证) | 阶段 0 提前验证;不使用 `Avalonia.Headless.XUnit`,改用自建 STA headless host(见 §7.2 过渡做法);降级为只测壳结构的最小冒烟范围。上游 AvaloniaUI/Avalonia#22072 跟踪中 |
 | 嵌入模式改造 SPA 影响现有 WebView 版行为 | 一次性、几十行 JS;加参数隔离,默认不带参数时行为不变 |
 | 过渡期双 UI 并存增加维护面 | 双 UI 并存期尽量短;饥饿式退役保证 RPC 无孤儿 |
 | 大阶段 1a 一次改动过大 | 壳与页面拆成 1a/1b,分别可发布 |
