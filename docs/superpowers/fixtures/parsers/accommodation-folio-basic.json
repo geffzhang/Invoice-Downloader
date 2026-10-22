@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "parserId": "accommodation-folio",
+  "version": "1.0",
+  "fixtureId": "accommodation-folio-basic",
+  "sourceKind": "pdf",
+  "documentId": "document-folio-1",
+  "fields": {
+    "invoiceDate": "2026-09-12",
+    "purchaser": "ACME Holdings",
+    "seller": "万丽酒店",
+    "amount": "1280.00",
+    "taxAmount": "160.00",
+    "totalAmount": "1440.00",
+    "invoiceNumber": "FOLIO-9981",
+    "documentType": "AccommodationFolio"
+  }
+}

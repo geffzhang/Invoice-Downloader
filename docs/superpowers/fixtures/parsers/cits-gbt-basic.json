@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1.0",
+  "parserId": "cits-gbt",
+  "version": "1.0",
+  "fixtureId": "cits-gbt-basic",
+  "sourceKind": "pdf",
+  "documentId": "document-cits-1",
+  "fields": {
+    "invoiceDate": "2026-03-17",
+    "purchaser": "ACME Holdings",
+    "seller": "CITS GBT",
+    "amount": "1885.82",
+    "invoiceNumber": "SCCT00921845",
+    "documentType": "FlightTicket"
+  }
+}

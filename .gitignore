@@ -44,7 +44,6 @@ tmp/
 .codex/
 .runtime/
 .playwright-mcp/
-docs/superpowers/
 dist/
 build/work/
 build/runtime/

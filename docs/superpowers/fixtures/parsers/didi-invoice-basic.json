@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "1.0",
+  "parserId": "didi-invoice",
+  "version": "1.0",
+  "fixtureId": "didi-invoice-basic",
+  "sourceKind": "pdf",
+  "documentId": "document-didi-1",
+  "fields": {
+    "invoiceDate": "2026-03-11",
+    "purchaser": "ACME Holdings",
+    "seller": "杭州滴滴出行科技有限公司",
+    "amount": "418.80",
+    "taxAmount": "12.20",
+    "invoiceNumber": "26337000000257791609",
+    "documentType": "RideInvoice"
+  }
+}

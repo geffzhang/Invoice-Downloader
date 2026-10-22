@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "1.0",
+  "parserId": "ride-itinerary",
+  "version": "1.0",
+  "fixtureId": "ride-itinerary-basic",
+  "sourceKind": "pdf",
+  "documentId": "document-ride-itinerary-1",
+  "isInvoice": false,
+  "flags": ["Itinerary"],
+  "fields": {
+    "invoiceDate": "2025-12-20",
+    "purchaser": "个人",
+    "seller": "高德地图",
+    "amount": "46.10",
+    "documentType": "RideItinerary"
+  }
+}
