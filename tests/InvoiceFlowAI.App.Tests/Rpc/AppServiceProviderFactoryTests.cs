@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FluentAssertions;
+using InvoiceFlowAI.App.Events;
 using InvoiceFlowAI.App.Rpc;
 using InvoiceFlowAI.Application.Archive;
 using InvoiceFlowAI.Application.Persistence;
@@ -80,8 +81,8 @@ public sealed class AppServiceProviderFactoryTests
             await using (var provider = AppServiceProviderFactory.Create(appDataDirectory))
             await using (var scope = provider.CreateAsyncScope())
             {
-                provider.GetRequiredService<IRunEventPublisher>()
-                    .Should().BeSameAs(provider.GetRequiredService<WebViewRunEventPublisher>());
+                provider.GetRequiredService<IRunEventPublisher>().Should().BeOfType<RunEventPublisherFanOut>();
+                provider.GetRequiredService<IAppEventBus>().Should().BeOfType<AppEventBus>();
                 provider.GetRequiredService<IDesktopRunExecutorLeaseFactory>()
                     .Should().BeOfType<ScopedDesktopRunExecutorLeaseFactory>();
                 scope.ServiceProvider.GetRequiredService<IDesktopRunService>().Should().NotBeNull();

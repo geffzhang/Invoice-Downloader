@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Avalonia.Controls;
 using InvoiceFlowAI.App.Desktop;
+using InvoiceFlowAI.App.Events;
 using InvoiceFlowAI.App.Rpc;
 using InvoiceFlowAI.App.Services;
 using InvoiceFlowAI.App.Settings;
@@ -37,6 +38,7 @@ public static class AppServiceProviderFactory
         var entropy = SHA256.HashData(Encoding.UTF8.GetBytes("InvoiceFlowAI|secret-store|v1"));
 
         var services = new ServiceCollection();
+        services.AddLogging();
         services.AddDbContext<InvoiceFlowDbContext>(options => options.UseSqlite(
             $"Data Source={databasePath};Cache=Shared;Pooling=False"));
         services.AddSingleton<IPersistentSecretStore>(new DpapiSecretStore(secretPath, entropy));
@@ -46,7 +48,14 @@ public static class AppServiceProviderFactory
         services.AddSingleton<IDesktopPathLauncher, ShellDesktopPathLauncher>();
         services.AddSingleton<IAvaloniaUiDispatcher, AvaloniaUiDispatcher>();
         services.AddSingleton<IWindowCommandDispatcher, AvaloniaWindowCommandDispatcher>();
-        services.AddSingleton<IRunEventPublisher>(provider => provider.GetRequiredService<WebViewRunEventPublisher>());
+        services.AddSingleton<IAppEventBus, AppEventBus>();
+        services.AddSingleton<NativeRunEventPublisher>();
+        services.AddSingleton<RunEventPublisherFanOut>(provider => new RunEventPublisherFanOut(
+        [
+            provider.GetRequiredService<WebViewRunEventPublisher>(),
+            provider.GetRequiredService<NativeRunEventPublisher>(),
+        ]));
+        services.AddSingleton<IRunEventPublisher>(provider => provider.GetRequiredService<RunEventPublisherFanOut>());
         services.AddSingleton<IDesktopRunExecutorLeaseFactory, ScopedDesktopRunExecutorLeaseFactory>();
         services.AddSingleton<IMainWindowAccessor>(provider => provider.GetRequiredService<AvaloniaMainWindowAccessor>());
         services.AddSingleton<IDirectoryPicker, AvaloniaDirectoryPicker>();
