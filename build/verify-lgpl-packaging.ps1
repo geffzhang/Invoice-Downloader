@@ -48,4 +48,12 @@ if (-not (Select-String -LiteralPath $license -Pattern 'GNU LESSER GENERAL PUBLI
     throw 'LGPL-3.0.txt does not contain the LGPL text.'
 }
 
+$gplLicense = Join-Path $publish 'licenses/GPL-3.0.txt'
+if (-not (Test-Path -LiteralPath $gplLicense -PathType Leaf)) {
+    throw 'GPL-3.0.txt is missing from the publish output.'
+}
+if (-not (Select-String -LiteralPath $gplLicense -Pattern 'GNU GENERAL PUBLIC LICENSE' -Quiet)) {
+    throw 'GPL-3.0.txt does not contain the GPL text.'
+}
+
 Write-Host "LGPL packaging checks passed: $($atomDlls.Count) AtomUI assemblies, $($allFiles.Count) files."

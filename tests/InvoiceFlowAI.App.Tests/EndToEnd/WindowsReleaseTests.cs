@@ -1,13 +1,13 @@
 // Windows release acceptance tests (Task 12). Exercises the full
-// release-verification chain (manifest + backend + signing) end
-// to end on a synthetic publish output. The tests run on any
-// platform — they don't require a real Windows installer — so the
-// "clean Windows 11 x64 hardware install" gate stays as the final
-// external check (see docs/superpowers/specs/external-validation.md).
+// release-verification chain (manifest + signing) end to end on a
+// synthetic publish output. The tests run on any platform — they
+// don't require a real Windows installer — so the "clean Windows
+// 11 x64 hardware install" gate stays as the final external check
+// (see docs/superpowers/specs/external-validation.md).
 //
 // What these tests cover:
 //   * Round-trip: build a fake publish dir, emit a manifest+adapter,
-//     all three verifiers return clean.
+//     both verifiers return clean.
 //   * Drift: tamper with the manifest (missing file, wrong hash,
 //     wrong size) — the corresponding Issue.Code fires.
 //   * Unsigned exe is detected by SignedAssetVerifier.
@@ -23,7 +23,6 @@ namespace InvoiceFlowAI.App.Tests.EndToEnd;
 public sealed class WindowsReleaseTests
 {
     private readonly IReleaseManifestVerifier _release = new ReleaseManifestVerifier();
-    private readonly IWebViewBackendVerifier _backend = new WebViewBackendVerifier();
     private readonly ISignedAssetVerifier _signed = new SignedAssetVerifier();
 
     [Fact]
@@ -33,21 +32,16 @@ public sealed class WindowsReleaseTests
         try
         {
             WritePeShapedFile(Path.Combine(dir, "InvoiceFlowAI.exe"), 2048);
-            WritePeShapedFile(Path.Combine(dir, "WebView2Loader.dll"), 200 * 1024);
 
             var appExeBytes = File.ReadAllBytes(Path.Combine(dir, "InvoiceFlowAI.exe"));
-            var backendBytes = File.ReadAllBytes(Path.Combine(dir, "WebView2Loader.dll"));
 
             var manifest = new ReleaseManifest(
                 1, "2026.09.23.0", "git-revision", "win-x64", "Release", false,
-                new ReleaseManifestWebView2("1.0.4255-prerelease", "120.0.6099.71"),
                 new ReleaseManifestPlaywright("1.62.0", "120.0.6099.71"),
                 new[]
                 {
                     new ReleaseManifestAsset("InvoiceFlowAI.exe", appExeBytes.LongLength,
                         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(appExeBytes)).ToLowerInvariant()),
-                    new ReleaseManifestAsset("WebView2Loader.dll", backendBytes.LongLength,
-                        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(backendBytes)).ToLowerInvariant()),
                 },
                 "models/manifest.json", "browsers/manifest.json", "licenses/THIRD-PARTY-NOTICES.txt",
                 "fp");
@@ -57,9 +51,6 @@ public sealed class WindowsReleaseTests
                 new("InvoiceFlowAI.exe", appExeBytes.LongLength,
                     Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(appExeBytes)).ToLowerInvariant(),
                     "exe"),
-                new("WebView2Loader.dll", backendBytes.LongLength,
-                    Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(backendBytes)).ToLowerInvariant(),
-                    "dll"),
             };
 
             var releaseReport = _release.VerifyFromAdapter(manifest, dir, adapters);
@@ -67,20 +58,13 @@ public sealed class WindowsReleaseTests
                 ? "all assets match"
                 : "issues: " + string.Join(",", releaseReport.Issues.Select(i => i.Code)));
 
-            var backendReport = _backend.Verify(
-                new WebViewBackendManifest("1.0", "WebView2", "WebView2Loader.dll",
-                    ExpectedRuntimeVersion: "120.0.6099.71",
-                    ExpectedChromiumRevision: "120.0.6099.71"),
-                dir);
-            backendReport.AllPresent.Should().BeTrue();
-
             // SignedAssetVerifier requires real Authenticode. The synthetic
             // PE we wrote has no WIN_CERTIFICATE table, so this verifier
             // will report NotSigned. That's the *expected* behaviour for
             // an unsigned build; the production MSI is signed in CI.
             var signingReport = _signed.Verify(
                 new SignedAssetManifest("1.0", "CN=InvoiceFlowAI",
-                    new[] { "InvoiceFlowAI.exe", "WebView2Loader.dll" }),
+                    new[] { "InvoiceFlowAI.exe" }),
                 dir);
             signingReport.AllSigned.Should().BeFalse();
             signingReport.Issues.Should().AllSatisfy(i => i.Code.Should().Be("NotSigned"));
@@ -100,7 +84,6 @@ public sealed class WindowsReleaseTests
 
             var manifest = new ReleaseManifest(
                 1, "2026.09.23.0", "git", "win-x64", "Release", false,
-                new ReleaseManifestWebView2("p", "r"),
                 new ReleaseManifestPlaywright("p", "r"),
                 new[]
                 {
@@ -127,7 +110,6 @@ public sealed class WindowsReleaseTests
         {
             var manifest = new ReleaseManifest(
                 1, "v", "git", "win-x64", "Release", false,
-                new ReleaseManifestWebView2("p", "r"),
                 new ReleaseManifestPlaywright("p", "r"),
                 Array.Empty<ReleaseManifestAsset>(),
                 "m", "b", "l", "fp");
@@ -140,22 +122,6 @@ public sealed class WindowsReleaseTests
 
             report.Issues.Should().ContainSingle();
             report.Issues[0].Code.Should().Be("PathTraversalDetected");
-        }
-        finally { TryDelete(dir); }
-    }
-
-    [Fact]
-    public void WebView_backend_missing_blocks_release()
-    {
-        var dir = NewTempPublishDir();
-        try
-        {
-            var report = _backend.Verify(
-                new WebViewBackendManifest("1.0", "WebView2", "WebView2Loader.dll", "r", "r"),
-                dir);
-
-            report.AllPresent.Should().BeFalse();
-            report.Issues.Should().Contain(i => i.Code == "BackendFileMissing");
         }
         finally { TryDelete(dir); }
     }

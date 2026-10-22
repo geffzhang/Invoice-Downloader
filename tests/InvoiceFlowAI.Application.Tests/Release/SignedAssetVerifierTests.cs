@@ -1,10 +1,7 @@
-// Verifies WebViewBackendVerifier and SignedAssetVerifier (Task 11):
-//   * Backend manifest with all fields + present file → clean report
-//   * Backend file missing → BackendFileMissing
-//   * Empty runtime / Chromium revision → issue
-//   * Backend file too small → BackendTooSmall
+// Verifies SignedAssetVerifier:
 //   * Signed manifest with unsigned PE → NotSigned
 //   * Signed manifest with missing file → AssetMissing
+//   * Manifest with no assets → clean report
 
 using FluentAssertions;
 using InvoiceFlowAI.Application.Release;
@@ -12,85 +9,9 @@ using Xunit;
 
 namespace InvoiceFlowAI.Application.Tests.Release;
 
-public sealed class WebViewBackendAndSigningTests
+public sealed class SignedAssetVerifierTests
 {
-    private readonly IWebViewBackendVerifier _backend = new WebViewBackendVerifier();
     private readonly ISignedAssetVerifier _signer = new SignedAssetVerifier();
-
-    [Fact]
-    public void Backend_present_and_matching_returns_clean_report()
-    {
-        var dir = NewTempDir();
-        try
-        {
-            // Write a "backend" file large enough to satisfy the size sanity check.
-            var backend = Path.Combine(dir, "WebView2Loader.dll");
-            File.WriteAllBytes(backend, new byte[200 * 1024]);
-            var manifest = new WebViewBackendManifest(
-                "1.0", "WebView2", "WebView2Loader.dll",
-                ExpectedRuntimeVersion: "120.0.6099.71",
-                ExpectedChromiumRevision: "120.0.6099.71");
-
-            var report = _backend.Verify(manifest, dir);
-
-            report.AllPresent.Should().BeTrue();
-            report.Issues.Should().BeEmpty();
-        }
-        finally { TryDelete(dir); }
-    }
-
-    [Fact]
-    public void Backend_file_missing_reports_BackendFileMissing()
-    {
-        var dir = NewTempDir();
-        try
-        {
-            var manifest = new WebViewBackendManifest(
-                "1.0", "WebView2", "WebView2Loader.dll", "120.0", "120.0");
-
-            var report = _backend.Verify(manifest, dir);
-
-            report.AllPresent.Should().BeFalse();
-            report.Issues.Should().Contain(i => i.Code == "BackendFileMissing");
-        }
-        finally { TryDelete(dir); }
-    }
-
-    [Fact]
-    public void Backend_too_small_reports_BackendTooSmall()
-    {
-        var dir = NewTempDir();
-        try
-        {
-            File.WriteAllBytes(Path.Combine(dir, "WebView2Loader.dll"), new byte[16 * 1024]);
-            var manifest = new WebViewBackendManifest(
-                "1.0", "WebView2", "WebView2Loader.dll", "120.0", "120.0");
-
-            var report = _backend.Verify(manifest, dir);
-
-            report.Issues.Should().Contain(i => i.Code == "BackendTooSmall");
-        }
-        finally { TryDelete(dir); }
-    }
-
-    [Fact]
-    public void Missing_runtime_or_chromium_revision_reports_issue()
-    {
-        var dir = NewTempDir();
-        try
-        {
-            var manifest = new WebViewBackendManifest(
-                "1.0", "WebView2", "WebView2Loader.dll",
-                ExpectedRuntimeVersion: "",
-                ExpectedChromiumRevision: "");
-
-            var report = _backend.Verify(manifest, dir);
-
-            report.Issues.Should().Contain(i => i.Code == "RuntimeVersionMissing");
-            report.Issues.Should().Contain(i => i.Code == "ChromiumRevisionMissing");
-        }
-        finally { TryDelete(dir); }
-    }
 
     [Fact]
     public void Unsigned_PE_reports_NotSigned()

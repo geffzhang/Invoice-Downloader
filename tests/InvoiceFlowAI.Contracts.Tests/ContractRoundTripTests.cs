@@ -333,7 +333,6 @@ public sealed class ContractRoundTripTests
         var reloaded = JsonSerializer.Deserialize<ReleaseManifest>(roundTripped, Strict);
         reloaded!.Assets.Should().HaveCount(manifest.Assets.Count);
         reloaded.RuntimeIdentifier.Should().Be(manifest.RuntimeIdentifier);
-        reloaded.WebView2.PackageVersion.Should().Be(manifest.WebView2.PackageVersion);
     }
 
     [Fact]

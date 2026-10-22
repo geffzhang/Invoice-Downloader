@@ -13,7 +13,6 @@ public sealed record ReleaseManifest(
     string RuntimeIdentifier,
     string Configuration,
     bool Signed,
-    ReleaseManifestWebView2 WebView2,
     ReleaseManifestPlaywright Playwright,
     IReadOnlyList<ReleaseManifestAsset> Assets,
     string ModelManifestPath,

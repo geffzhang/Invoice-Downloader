@@ -22,8 +22,6 @@
     <!-- Avalonia UI 12 -->
     <PackageVersion Include="Avalonia" Version="12.1.4" />
     <PackageVersion Include="Avalonia.Desktop" Version="12.1.4" />
-    <!-- Kept for build/release-manifest.ps1 metadata; the app no longer references the package. -->
-    <PackageVersion Include="Avalonia.Controls.WebView" Version="12.1.1" />
     <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.1.4" />
     <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.1.4" />
     <PackageVersion Include="Avalonia.Headless" Version="12.1.4" />

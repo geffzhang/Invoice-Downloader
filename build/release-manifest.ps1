@@ -37,10 +37,8 @@ if (-not (Test-Path -LiteralPath $PublishRoot -PathType Container)) {
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 [xml]$packageProps = Get-Content -LiteralPath (Join-Path $repoRoot 'Directory.Packages.props') -Raw
-$webViewPackageVersion = $packageProps.SelectSingleNode("//PackageVersion[@Include='Avalonia.Controls.WebView']").Version
 $playwrightPackageVersion = $packageProps.SelectSingleNode("//PackageVersion[@Include='Microsoft.Playwright']").Version
 $runtimeSources = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'windows/runtime-sources.json') -Raw | ConvertFrom-Json
-$fixedRuntimeVersion = [string]$runtimeSources.webview2.version
 $chromiumRevision = ''
 foreach ($entry in $runtimeSources.playwright.expected_entries) {
     if ([string]$entry -match '^chromium-(\d+)$') {
@@ -48,9 +46,7 @@ foreach ($entry in $runtimeSources.playwright.expected_entries) {
         break
     }
 }
-if ([string]::IsNullOrWhiteSpace($webViewPackageVersion) -or
-    [string]::IsNullOrWhiteSpace($playwrightPackageVersion) -or
-    [string]::IsNullOrWhiteSpace($fixedRuntimeVersion) -or
+if ([string]::IsNullOrWhiteSpace($playwrightPackageVersion) -or
     [string]::IsNullOrWhiteSpace($chromiumRevision)) {
     throw 'Release manifest runtime metadata is incomplete.'
 }
@@ -87,10 +83,6 @@ $manifest = [ordered]@{
     runtimeIdentifier   = $RuntimeIdentifier
     configuration       = $Configuration
     signed              = $Signed
-    webView2             = [ordered]@{
-        packageVersion      = $webViewPackageVersion
-        fixedRuntimeVersion = $fixedRuntimeVersion
-    }
     playwright          = [ordered]@{
         packageVersion   = $playwrightPackageVersion
         chromiumRevision = $chromiumRevision

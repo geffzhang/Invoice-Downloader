@@ -13,9 +13,9 @@ external execution confirms them.
 - Confirm the application launches without Python dependencies,
   without any DLL-not-found dialogs, and without a "missing
   component" wizard.
-- Confirm WebView2Loader.dll is loaded from the install directory
-  (not a system path) and WebView2 runtime version matches the
-  `webView2.fixedRuntimeVersion` field of `release.json`.
+- Confirm no WebView2 runtime or WebView2Loader.dll is required at
+  runtime: the app uses the native Avalonia UI, and AtomUI assemblies
+  ship as separate DLLs in the install directory.
 
 ## 2. DeepSeek live endpoint compatibility
 

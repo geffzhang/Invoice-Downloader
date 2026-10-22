@@ -5,7 +5,6 @@
   "runtimeIdentifier": "win-x64",
   "configuration": "Release",
   "signed": false,
-  "webView2": { "packageVersion": "1.0.4255-prerelease", "fixedRuntimeVersion": "fixture-fixed-runtime" },
   "playwright": { "packageVersion": "1.62.0", "chromiumRevision": "fixture-chromium-revision" },
   "assets": [
     { "relativePath": "InvoiceFlowAI.exe", "length": 1234, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },

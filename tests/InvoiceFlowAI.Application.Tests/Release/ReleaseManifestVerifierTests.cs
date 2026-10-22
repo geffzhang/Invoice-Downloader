@@ -289,7 +289,6 @@ public sealed class ReleaseManifestVerifierTests
 
     private static ReleaseManifest NewManifest(params ReleaseManifestAsset[] assets) =>
         new(1, "2026.09.23.0", "fixture", "win-x64", "Release", false,
-            new ReleaseManifestWebView2("1.0.4255-prerelease", "fixture"),
             new ReleaseManifestPlaywright("1.62.0", "fixture"),
             assets,
             "models/manifest.json",
