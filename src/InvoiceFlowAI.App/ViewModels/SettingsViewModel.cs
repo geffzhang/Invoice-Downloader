@@ -27,6 +27,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IPageViewModel
     private readonly IRunSession _runSession;
     private readonly IAppNavigator _navigator;
     private readonly INotificationService _notifications;
+    private readonly IPersistentSecretStore _persistentSecrets;
     private readonly ILogger<SettingsViewModel> _logger;
 
     private UserSettingsSnapshot? _snapshot;
@@ -105,6 +106,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IPageViewModel
         IRunSession runSession,
         IAppNavigator navigator,
         INotificationService notifications,
+        IPersistentSecretStore persistentSecrets,
         ILogger<SettingsViewModel> logger)
     {
         _operations = operations ?? throw new ArgumentNullException(nameof(operations));
@@ -112,6 +114,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IPageViewModel
         _runSession = runSession ?? throw new ArgumentNullException(nameof(runSession));
         _navigator = navigator ?? throw new ArgumentNullException(nameof(navigator));
         _notifications = notifications ?? throw new ArgumentNullException(nameof(notifications));
+        _persistentSecrets = persistentSecrets ?? throw new ArgumentNullException(nameof(persistentSecrets));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -193,7 +196,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IPageViewModel
         catch (Exception exception)
         {
             _logger.LogError(exception, "加载设置失败。");
-            PageError = SettingsCopy.SaveFailed;
+            PageError = SettingsCopy.LoadFailed;
         }
     }
 
@@ -380,38 +383,35 @@ public sealed partial class SettingsViewModel : ObservableObject, IPageViewModel
         var remember = RememberSettings;
         var companyName = remember ? CompanyName.Trim() : string.Empty;
         var outputDirectory = remember ? NullIfBlank(OutputDirectory) : null;
+        var authCode = NullIfBlank(AuthCode);
+        var apiKey = NullIfBlank(ApiKey);
+        var turningOffRemember = _rememberAtLoad && !remember;
 
         var state = await _operations.RunAsync(
             async (provider, token) =>
             {
                 var settingsStore = provider.GetRequiredService<IUserSettingsStore>();
                 var secretRetention = provider.GetRequiredService<ISecretRetentionStore>();
-                var secretStore = provider.GetRequiredService<ISecretStore>();
                 var accounts = provider.GetRequiredService<IAccountApplicationService>();
 
-                var retention = remember ? SecretRetention.Persistent : SecretRetention.Session;
-                var turningOffRemember = _rememberAtLoad && !remember;
                 if (turningOffRemember)
                 {
-                    await secretStore.DeleteAsync(AuthCodeSecretName, token).ConfigureAwait(false);
-                    await secretStore.DeleteAsync(ApiKeySecretName, token).ConfigureAwait(false);
+                    // 只清理持久化副本,本次会话中新输入的密钥保留在会话存储中。
+                    await _persistentSecrets.DeleteAsync(AuthCodeSecretName, token).ConfigureAwait(false);
+                    await _persistentSecrets.DeleteAsync(ApiKeySecretName, token).ConfigureAwait(false);
                 }
 
-                _rememberAtLoad = remember;
-
-                // 先清除旧的持久化密钥,再写入本轮输入,避免关闭"记住设置"时把刚输入的值一起删掉。
-                if (!string.IsNullOrWhiteSpace(AuthCode))
+                var retention = remember ? SecretRetention.Persistent : SecretRetention.Session;
+                if (authCode is not null)
                 {
                     await secretRetention.SetAsync(
-                        new SecretSetRequest(AuthCodeSecretName, AuthCode.Trim(), retention), token).ConfigureAwait(false);
-                    AuthCode = string.Empty;
+                        new SecretSetRequest(AuthCodeSecretName, authCode, retention), token).ConfigureAwait(false);
                 }
 
-                if (!string.IsNullOrWhiteSpace(ApiKey))
+                if (apiKey is not null)
                 {
                     await secretRetention.SetAsync(
-                        new SecretSetRequest(ApiKeySecretName, ApiKey.Trim(), retention), token).ConfigureAwait(false);
-                    ApiKey = string.Empty;
+                        new SecretSetRequest(ApiKeySecretName, apiKey, retention), token).ConfigureAwait(false);
                 }
 
                 var savedAccount = _account;
@@ -455,6 +455,17 @@ public sealed partial class SettingsViewModel : ObservableObject, IPageViewModel
 
         _account = state.Account;
         _snapshot = state.Snapshot;
+        if (authCode is not null)
+        {
+            AuthCode = string.Empty;
+        }
+
+        if (apiKey is not null)
+        {
+            ApiKey = string.Empty;
+        }
+
+        _rememberAtLoad = remember;
         Email = _account?.EmailAddress ?? Email;
         NeedsInitialSetup = string.IsNullOrWhiteSpace(_snapshot.CompanyName)
             || string.IsNullOrWhiteSpace(_snapshot.LastOutputDirectory)

@@ -22,6 +22,7 @@ public static class SettingsCopy
     public const string EmailTestFailed = "邮箱授权验证失败,请检查邮箱地址与授权码。";
     public const string ApiTestPassed = "API Key 验证通过。";
     public const string ApiTestFailed = "API Key 验证失败,请检查 Key 是否正确。";
+    public const string LoadFailed = "配置加载失败,请稍后重试。";
     public const string SaveFailed = "配置暂未保存,请稍后重试。";
     public const string StartFailed = "任务启动失败,请稍后重试。";
     public const string RunAlreadyActive = "已有任务正在运行。";

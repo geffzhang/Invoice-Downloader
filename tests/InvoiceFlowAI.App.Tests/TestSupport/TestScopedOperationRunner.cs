@@ -12,7 +12,10 @@ public sealed class TestScopedOperationRunner(IServiceProvider provider) : IScop
     {
         var services = new ServiceCollection();
         configure(services);
-        return new TestScopedOperationRunner(services.BuildServiceProvider());
+        return new TestScopedOperationRunner(services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+        }));
     }
 
     public async Task<T> RunAsync<T>(

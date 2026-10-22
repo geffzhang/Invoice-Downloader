@@ -12,6 +12,7 @@ using InvoiceFlowAI.Application.Security;
 using InvoiceFlowAI.Contracts.Accounts;
 using InvoiceFlowAI.Contracts.Rpc;
 using InvoiceFlowAI.Contracts.Settings;
+using InvoiceFlowAI.Infrastructure.Security;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -60,12 +61,10 @@ public sealed class SettingsViewModelTests
 
         await viewModel.SaveAsync(TestContext.Current.CancellationToken);
 
-        harness.Secrets.Requests.Should().Contain(r =>
-            r.Name == "mail.imap.auth-code"
-            && r.Value == "auth-123"
-            && r.Retention == SecretRetention.Persistent);
-        harness.Secrets.Requests.Should().Contain(r =>
-            r.Name == "deepseek.api-key" && r.Value == "sk-123");
+        (await harness.PersistentSecrets.GetAsync("mail.imap.auth-code", TestContext.Current.CancellationToken))
+            .Should().Be("auth-123");
+        (await harness.PersistentSecrets.GetAsync("deepseek.api-key", TestContext.Current.CancellationToken))
+            .Should().Be("sk-123");
         harness.Accounts.Saved.Should().ContainSingle();
         harness.Accounts.Saved[0].Account.EmailAddress.Should().Be("alice@163.com");
         harness.Accounts.Saved[0].Account.ImapHost.Should().Be("imap.163.com");
@@ -88,10 +87,53 @@ public sealed class SettingsViewModelTests
         viewModel.RememberSettings = false;
         await viewModel.SaveAsync(TestContext.Current.CancellationToken);
 
-        harness.SecretsStore.Deleted.Should().BeEquivalentTo("mail.imap.auth-code", "deepseek.api-key");
+        harness.PersistentSecrets.Deleted.Should().BeEquivalentTo("mail.imap.auth-code", "deepseek.api-key");
         harness.Settings.Updates.Should().ContainSingle();
         harness.Settings.Updates[0].CompanyName.Should().BeEmpty();
         harness.Settings.Updates[0].LastOutputDirectory.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Turning_off_remember_then_testing_api_key_keeps_the_session_key_for_start()
+    {
+        var harness = SettingsHarness.Create();
+        var viewModel = harness.CreateViewModel();
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        viewModel.Email = "alice@163.com";
+        viewModel.CompanyName = "示例科技";
+        viewModel.OutputDirectory = @"D:\out";
+        viewModel.DateFrom = new DateTime(2026, 9, 1);
+        viewModel.DateTo = new DateTime(2026, 9, 30);
+        viewModel.RememberSettings = false;
+        viewModel.ApiKey = "sk-1";
+
+        await viewModel.TestApiKeyCommand.ExecuteAsync(null);
+        await viewModel.StartCommand.ExecuteAsync(null);
+
+        (await harness.SecretsStore.GetAsync("deepseek.api-key", TestContext.Current.CancellationToken))
+            .Should().Be("sk-1");
+        harness.PersistentSecrets.Deleted.Should().Contain("deepseek.api-key");
+        harness.Runs.Started.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Turning_off_remember_keeps_a_new_session_auth_code_and_deletes_the_persisted_copy()
+    {
+        var harness = SettingsHarness.Create();
+        await harness.PersistentSecrets.SaveAsync(
+            "mail.imap.auth-code", "persisted-auth", TestContext.Current.CancellationToken);
+        var viewModel = harness.CreateViewModel();
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        viewModel.RememberSettings = false;
+        viewModel.AuthCode = "new-auth";
+
+        await viewModel.SaveAsync(TestContext.Current.CancellationToken);
+
+        (await harness.SessionSecrets.GetAsync("mail.imap.auth-code", TestContext.Current.CancellationToken))
+            .Should().Be("new-auth");
+        (await harness.PersistentSecrets.GetAsync("mail.imap.auth-code", TestContext.Current.CancellationToken))
+            .Should().BeNull();
+        viewModel.AuthCode.Should().BeEmpty();
     }
 
     [Fact]
@@ -172,8 +214,9 @@ public sealed class SettingsViewModelTests
             Accounts = new FakeAccountApplicationService();
             Tests = new FakeAccountTestService();
             Settings = new FakeUserSettingsStore();
-            Secrets = new FakeSecretRetentionStore();
-            SecretsStore = new FakeSecretStore();
+            PersistentSecrets = new InMemorySecretStore();
+            SessionSecrets = new InMemorySecretStore();
+            SecretsStore = new CompositeSecretStore(PersistentSecrets, SessionSecrets);
             Picker = new FakeDirectoryPicker();
             Runs = new FakeDesktopRunService(context);
             Session = new FakeRunSession();
@@ -184,8 +227,9 @@ public sealed class SettingsViewModelTests
         public FakeAccountApplicationService Accounts { get; }
         public FakeAccountTestService Tests { get; }
         public FakeUserSettingsStore Settings { get; }
-        public FakeSecretRetentionStore Secrets { get; }
-        public FakeSecretStore SecretsStore { get; }
+        public InMemorySecretStore PersistentSecrets { get; }
+        public InMemorySecretStore SessionSecrets { get; }
+        public ISecretStore SecretsStore { get; }
         public FakeDirectoryPicker Picker { get; }
         public FakeDesktopRunService Runs { get; }
         public FakeRunSession Session { get; }
@@ -207,12 +251,16 @@ public sealed class SettingsViewModelTests
         {
             var operations = TestScopedOperationRunner.Create(services =>
             {
-                services.AddSingleton<IAccountApplicationService>(Accounts);
-                services.AddSingleton<IAccountTestService>(Tests);
-                services.AddSingleton<IUserSettingsStore>(Settings);
-                services.AddSingleton<ISecretRetentionStore>(Secrets);
-                services.AddSingleton<ISecretStore>(SecretsStore);
-                services.AddSingleton<IDesktopRunService>(Runs);
+                services.AddScoped<IAccountApplicationService>(_ => Accounts);
+                services.AddScoped<IAccountTestService>(_ => Tests);
+                services.AddScoped<IUserSettingsStore>(_ => Settings);
+                services.AddScoped<IPersistentSecretStore>(_ => PersistentSecrets);
+                services.AddScoped<ISessionSecretStore>(_ => SessionSecrets);
+                services.AddScoped<ISecretRetentionStore>(provider => new SecretApplicationService(
+                    provider.GetRequiredService<IPersistentSecretStore>(),
+                    provider.GetRequiredService<ISessionSecretStore>()));
+                services.AddScoped<ISecretStore>(_ => SecretsStore);
+                services.AddScoped<IDesktopRunService>(_ => Runs);
             });
 
             return new SettingsViewModel(
@@ -221,6 +269,7 @@ public sealed class SettingsViewModelTests
                 Session,
                 Navigator,
                 new NullNotificationService(),
+                PersistentSecrets,
                 NullLogger<SettingsViewModel>.Instance);
         }
     }
@@ -303,29 +352,24 @@ public sealed class SettingsViewModelTests
                 outputDirectory);
     }
 
-    private sealed class FakeSecretRetentionStore : ISecretRetentionStore
+    private sealed class InMemorySecretStore : IPersistentSecretStore, ISessionSecretStore
     {
-        public List<SecretSetRequest> Requests { get; } = [];
+        private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);
 
-        public Task<SecretMutationResult> SetAsync(SecretSetRequest request, CancellationToken cancellationToken)
-        {
-            Requests.Add(request);
-            return Task.FromResult(new SecretMutationResult(
-                request.Name,
-                true,
-                request.Retention == SecretRetention.Persistent));
-        }
-    }
-
-    private sealed class FakeSecretStore : ISecretStore
-    {
         public List<string> Deleted { get; } = [];
 
-        public Task SaveAsync(string name, string value, CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task<string?> GetAsync(string name, CancellationToken cancellationToken) => Task.FromResult<string?>(null);
+        public Task SaveAsync(string name, string value, CancellationToken cancellationToken)
+        {
+            _values[name] = value;
+            return Task.CompletedTask;
+        }
+
+        public Task<string?> GetAsync(string name, CancellationToken cancellationToken)
+            => Task.FromResult(_values.TryGetValue(name, out var value) ? value : null);
 
         public Task DeleteAsync(string name, CancellationToken cancellationToken)
         {
+            _values.Remove(name);
             Deleted.Add(name);
             return Task.CompletedTask;
         }
