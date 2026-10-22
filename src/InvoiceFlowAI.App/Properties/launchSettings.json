@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "InvoiceFlowAI": {
+      "commandName": "Project",
+      "hotReloadEnabled": false,
+      "nativeDebugging": false
+    }
+  }
+}
