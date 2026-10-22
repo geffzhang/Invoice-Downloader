@@ -233,6 +233,19 @@ public sealed class AvaloniaUiDispatcher : IAvaloniaUiDispatcher
 {
     public Task<TResult> InvokeAsync<TResult>(Func<TResult> action, CancellationToken cancellationToken)
     => Dispatcher.UIThread.InvokeAsync(async () => action()).WaitAsync(cancellationToken);
+
+    public Task InvokeAsync(Action action, CancellationToken cancellationToken)
+        => InvokeAsync(() =>
+        {
+            action();
+            return true;
+        }, cancellationToken);
+
+    public void Post(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        Dispatcher.UIThread.Post(action);
+    }
 }
 
 public sealed class AvaloniaWindowCommandDispatcher(

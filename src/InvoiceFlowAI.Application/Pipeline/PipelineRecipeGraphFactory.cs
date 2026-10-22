@@ -229,6 +229,7 @@ public static class PipelineApplicationServiceCollectionExtensions
         services.AddSingleton<ActiveRunRegistry>();
         services.AddScoped<IDesktopRunService, DesktopRunService>();
         services.AddScoped<RunResultsQueryService>();
+        services.AddScoped<IRunResultsQueryService>(provider => provider.GetRequiredService<RunResultsQueryService>());
         services.AddScoped<IDesktopRunExecutor, RunExecutionService>();
         services.AddScoped<ITerminalDecisionService, TerminalDecisionService>();
         services.AddScoped<IReportExportStage, ReportExportStage>();

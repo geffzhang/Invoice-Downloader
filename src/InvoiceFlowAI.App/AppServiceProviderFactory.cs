@@ -3,6 +3,7 @@ using System.Text;
 using Avalonia.Controls;
 using InvoiceFlowAI.App.Desktop;
 using InvoiceFlowAI.App.Rpc;
+using InvoiceFlowAI.App.Services;
 using InvoiceFlowAI.App.Settings;
 using InvoiceFlowAI.Application.Configuration;
 using InvoiceFlowAI.Application.Extraction;
@@ -49,6 +50,7 @@ public static class AppServiceProviderFactory
         services.AddSingleton<IDesktopRunExecutorLeaseFactory, ScopedDesktopRunExecutorLeaseFactory>();
         services.AddSingleton<IMainWindowAccessor>(provider => provider.GetRequiredService<AvaloniaMainWindowAccessor>());
         services.AddSingleton<IDirectoryPicker, AvaloniaDirectoryPicker>();
+        services.AddSingleton<IScopedOperationRunner, ScopedOperationRunner>();
         services.AddInvoiceFlowInfrastructure();
         services.AddInvoiceFlowApplication();
 

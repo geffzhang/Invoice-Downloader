@@ -40,6 +40,8 @@ public static class InvoiceFlowAIInfrastructureServiceCollectionExtensions
             serviceProvider.GetRequiredService<ISessionSecretStore>()));
         services.AddScoped<AccountTestService>();
         services.AddScoped<AccountApplicationService>();
+        services.AddScoped<IAccountApplicationService>(provider => provider.GetRequiredService<AccountApplicationService>());
+        services.AddScoped<IAccountTestService>(provider => provider.GetRequiredService<AccountTestService>());
         services.AddScoped<IMailboxConnectionTester, MailKitMailboxConnectionTester>();
         services.AddScoped<IProviderConnectionTester, DeepSeekProviderConnectionTester>();
         services.TryAddSingleton<IMailboxSessionFactory, MailboxSessionFactory>();

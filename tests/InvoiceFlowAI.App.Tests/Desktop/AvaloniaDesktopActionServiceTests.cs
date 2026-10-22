@@ -297,5 +297,15 @@ public sealed class AvaloniaDesktopActionServiceTests
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(action());
         }
+
+        public Task InvokeAsync(Action action, CancellationToken cancellationToken)
+        {
+            InvocationCount++;
+            cancellationToken.ThrowIfCancellationRequested();
+            action();
+            return Task.CompletedTask;
+        }
+
+        public void Post(Action action) => action();
     }
 }

@@ -9,7 +9,7 @@ using InvoiceFlowAI.Contracts.Rpc;
 
 namespace InvoiceFlowAI.Application.Accounts;
 
-public sealed class AccountTestService
+public sealed class AccountTestService : IAccountTestService
 {
     private const string DeepSeekProviderId = "deepseek";
 

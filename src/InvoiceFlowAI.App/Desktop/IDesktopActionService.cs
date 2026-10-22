@@ -23,4 +23,6 @@ public interface IWindowCommandDispatcher
 public interface IAvaloniaUiDispatcher
 {
     Task<TResult> InvokeAsync<TResult>(Func<TResult> action, CancellationToken cancellationToken);
+    Task InvokeAsync(Action action, CancellationToken cancellationToken);
+    void Post(Action action);
 }

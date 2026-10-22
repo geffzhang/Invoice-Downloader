@@ -5,7 +5,7 @@ using InvoiceFlowAI.Contracts.Rpc;
 
 namespace InvoiceFlowAI.Application.Runs;
 
-public sealed class RunResultsQueryService
+public sealed class RunResultsQueryService : IRunResultsQueryService
 {
     private readonly IReportRunDataSource _dataSource;
     private readonly IDesktopRunService _runs;

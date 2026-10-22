@@ -4,7 +4,7 @@ using InvoiceFlowAI.Contracts.Accounts;
 
 namespace InvoiceFlowAI.Application.Accounts;
 
-public sealed class AccountApplicationService
+public sealed class AccountApplicationService : IAccountApplicationService
 {
     public const string ImapAuthCodeCredentialName = "mail.imap.auth-code";
 
