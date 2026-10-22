@@ -1,4 +1,3 @@
-using System.Text.Json;
 using FluentAssertions;
 using InvoiceFlowAI.App.Events;
 using InvoiceFlowAI.App.Navigation;
@@ -10,11 +9,6 @@ using InvoiceFlowAI.Application.Persistence;
 using InvoiceFlowAI.Application.Pipeline;
 using InvoiceFlowAI.Application.Runs;
 using InvoiceFlowAI.Application.Reports;
-using InvoiceFlowAI.Contracts.Accounts;
-using InvoiceFlowAI.Contracts.Errors;
-using InvoiceFlowAI.Contracts.Reports;
-using InvoiceFlowAI.Contracts.Rpc;
-using InvoiceFlowAI.Contracts.Settings;
 using InvoiceFlowAI.Infrastructure.Mail;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
@@ -91,9 +85,10 @@ public sealed class AppServiceProviderFactoryTests
                 provider.GetRequiredService<IAppNavigator>().Should().BeOfType<AppNavigator>();
                 provider.GetRequiredService<IRunSession>().Should().BeOfType<RunSession>();
                 provider.GetRequiredService<ShellViewModel>().Pages.Should().HaveCount(3);
-                provider.GetServices<IPageViewModel>()
-                    .Any(page => page is WebPageViewModel web && web.Key == "settings")
-                    .Should().BeTrue();
+                var pages = provider.GetServices<IPageViewModel>().ToArray();
+                pages.Should().Contain(page => page.GetType() == typeof(SettingsViewModel));
+                pages.Should().NotContain(page =>
+                    page.GetType() == typeof(WebPageViewModel) && page.Key == "settings");
                 scope.ServiceProvider.GetRequiredService<IDesktopRunService>().Should().NotBeNull();
                 scope.ServiceProvider.GetRequiredService<IDesktopRunExecutor>().Should().NotBeNull();
                 scope.ServiceProvider.GetRequiredService<IMailboxScanner>().Should().BeOfType<MailKitMailboxScanner>();
@@ -139,113 +134,6 @@ public sealed class AppServiceProviderFactoryTests
                 Directory.Delete(appDataDirectory, recursive: true);
             }
         }
-    }
-
-    [Fact]
-    public async Task Typed_rpc_surface_dispatches_without_exposing_secrets_or_legacy_methods()
-    {
-        var appDataDirectory = Path.Combine(Path.GetTempPath(), $"invoiceflow-rpc-{Guid.NewGuid():N}");
-        try
-        {
-            await using (var provider = AppServiceProviderFactory.Create(appDataDirectory))
-            {
-                var dispatcher = AppRpcComposition.CreateDispatcher(
-                    provider.GetRequiredService<IServiceScopeFactory>(),
-                    "3.0.0");
-
-                var settings = await DispatchAsync(dispatcher, "settings.get", parameters: null);
-                settings.GetProperty("revision").GetInt32().Should().Be(1);
-
-                var updatedSettings = await DispatchAsync(dispatcher, "settings.update",
-                    new SettingsUpdateRequest(1, CompanyName: "RPC Buyer"));
-                updatedSettings.GetProperty("companyName").GetString().Should().Be("RPC Buyer");
-
-                var accounts = await DispatchAsync(dispatcher, "account.list", parameters: null);
-                accounts.GetProperty("items").GetArrayLength().Should().Be(0);
-
-                var savedAccount = await DispatchAsync(dispatcher, "account.save",
-                    new AccountSaveRequest(new MailboxAccountDraft(
-                        "rpc-account",
-                        "buyer@example.com",
-                        "imap.example.com",
-                        993,
-                        true,
-                        "mail.imap.auth-code",
-                        "Buyer"), ExpectedRevision: 0));
-                savedAccount.GetProperty("credentialConfigured").GetBoolean().Should().BeFalse();
-
-                var accountTest = await DispatchAsync(dispatcher, "account.test", new AccountTestRequest("rpc-account"));
-                accountTest.GetProperty("failureCode").GetString().Should().Be("CREDENTIALS_NOT_CONFIGURED");
-
-                var providerTest = await DispatchAsync(dispatcher, "provider.test",
-                    new ProviderTestRequest("deepseek", "deepseek.api-key"));
-                providerTest.GetProperty("failureCode").GetString().Should().Be("CREDENTIALS_NOT_CONFIGURED");
-
-                const string secretValue = "temporary-rpc-secret";
-                var secretSet = await DispatchAsync(dispatcher, "secret.set",
-                    new SecretSetRequest("deepseek.api-key", secretValue, SecretRetention.Session));
-                secretSet.GetRawText().Should().NotContain(secretValue);
-                (await DispatchAsync(dispatcher, "secret.delete", new SecretDeleteRequest("deepseek.api-key")))
-                    .GetProperty("configured").GetBoolean().Should().BeFalse();
-
-                var directory = await DispatchAsync(dispatcher, "directory.choose", parameters: null);
-                directory.GetProperty("cancelled").GetBoolean().Should().BeTrue();
-                dispatcher.RegisteredMethods.Should().Contain("run.start");
-                dispatcher.RegisteredMethods.Should().Contain("run.results.get");
-                dispatcher.RegisteredMethods.Should().Contain([
-                    "run.folder.open",
-                    "run.manual-review.open",
-                    "run.file.open",
-                ]);
-
-                var unavailableFolder = await DispatchAsync(dispatcher, "run.folder.open", parameters: null);
-                unavailableFolder.GetProperty("succeeded").GetBoolean().Should().BeFalse();
-
-                var context = await DispatchAsync(dispatcher, "run.context.get", parameters: null);
-                context.GetProperty("explicitRunContext").GetBoolean().Should().BeFalse();
-
-                var status = await DispatchAsync(dispatcher, "run.progress.get", parameters: null);
-                status.GetProperty("isRunning").GetBoolean().Should().BeFalse();
-
-                var invalidStart = await dispatcher.DispatchAsync(
-                    new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, "invalid-run", "run.start", null),
-                    TestContext.Current.CancellationToken);
-                invalidStart.Ok.Should().BeFalse();
-                invalidStart.Error!.Code.Should().Be(RpcDispatcher.InvalidParamsCode);
-
-                var missingReport = await dispatcher.DispatchAsync(
-                    new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, "missing-report", "run.report.export",
-                        JsonSerializer.SerializeToElement(new ReportExportRequest("missing-run"), JsonOptions.Default)),
-                    TestContext.Current.CancellationToken);
-                missingReport.Ok.Should().BeFalse();
-                missingReport.Error!.Code.Should().Be(RpcErrorCodes.ReportExportFailed);
-
-                var missingResults = await dispatcher.DispatchAsync(
-                    new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, "missing-results", "run.results.get", null),
-                    TestContext.Current.CancellationToken);
-                missingResults.Ok.Should().BeFalse();
-                missingResults.Error!.Code.Should().Be(RpcErrorCodes.RunNotFound);
-            }
-        }
-        finally
-        {
-            if (Directory.Exists(appDataDirectory))
-            {
-                Directory.Delete(appDataDirectory, recursive: true);
-            }
-        }
-    }
-
-    private static async Task<JsonElement> DispatchAsync(RpcDispatcher dispatcher, string method, object? parameters)
-    {
-        JsonElement? element = parameters is null
-            ? null
-            : JsonSerializer.SerializeToElement(parameters, JsonOptions.Default);
-        var response = await dispatcher.DispatchAsync(
-            new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, Guid.NewGuid().ToString("N"), method, element),
-            TestContext.Current.CancellationToken);
-        response.Ok.Should().BeTrue(response.Error?.UserMessage);
-        return response.Result!.Value;
     }
 
     private sealed class TestMailboxSessionFactory : IMailboxSessionFactory

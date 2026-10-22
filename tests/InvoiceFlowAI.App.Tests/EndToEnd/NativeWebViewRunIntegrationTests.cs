@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
@@ -104,6 +105,24 @@ public sealed class NativeWebViewRunIntegrationTests
             await Task.Run(() => thread.Join(TimeSpan.FromSeconds(5)));
             NativeRunWebViewTestContext.Current = null;
             if (Directory.Exists(dataDirectory)) Directory.Delete(dataDirectory, recursive: true);
+        }
+    }
+}
+
+internal sealed class NativeWebViewFactAttribute : FactAttribute
+{
+    public NativeWebViewFactAttribute(
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+        : base(sourceFilePath, sourceLineNumber)
+    {
+        if (!OperatingSystem.IsWindows() || !Environment.UserInteractive)
+        {
+            Skip = "Requires an interactive Windows desktop.";
+        }
+        else if (!string.Equals(Environment.GetEnvironmentVariable("INVOICEFLOW_RUN_NATIVE_WEBVIEW_TEST"), "1", StringComparison.Ordinal))
+        {
+            Skip = "Set INVOICEFLOW_RUN_NATIVE_WEBVIEW_TEST=1 to run the native WebView test.";
         }
     }
 }

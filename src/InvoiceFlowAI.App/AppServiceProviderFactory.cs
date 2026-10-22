@@ -20,6 +20,7 @@ using InvoiceFlowAI.Infrastructure.Persistence.Stores;
 using InvoiceFlowAI.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Serilog;
 
 namespace InvoiceFlowAI.App;
@@ -73,7 +74,15 @@ public static class AppServiceProviderFactory
         services.AddSingleton<IRunShutdownService, RunShutdownService>();
         services.AddSingleton<ShellViewModel>();
         services.AddSingleton<MainWindow>();
-        services.AddSingleton<IPageViewModel>(new WebPageViewModel("settings", "启动配置", "Step 1", "/"));
+        services.AddSingleton<SettingsViewModel>(provider => new SettingsViewModel(
+            provider.GetRequiredService<IScopedOperationRunner>(),
+            provider.GetRequiredService<IDirectoryPicker>(),
+            provider.GetRequiredService<IRunSession>(),
+            provider.GetRequiredService<IAppNavigator>(),
+            provider.GetRequiredService<INotificationService>(),
+            provider.GetRequiredService<IPersistentSecretStore>(),
+            provider.GetRequiredService<ILogger<SettingsViewModel>>()));
+        services.AddSingleton<IPageViewModel>(provider => provider.GetRequiredService<SettingsViewModel>());
         services.AddSingleton<IPageViewModel>(new WebPageViewModel("processing", "处理中心", "Step 2", "/processing"));
         services.AddSingleton<IPageViewModel>(new WebPageViewModel("analysis", "结果分析", "Step 3", "/analysis"));
         services.AddInvoiceFlowInfrastructure();
@@ -92,15 +101,6 @@ public static class AppServiceProviderFactory
         services.AddScoped<IRuleSetBootstrapStore, EfRuleSetBootstrapStore>();
         services.AddScoped<RuleSetValidator>();
 
-        services.AddScoped<SettingsGetRpcHandler>();
-        services.AddScoped<SettingsUpdateRpcHandler>();
-        services.AddScoped<AccountListRpcHandler>();
-        services.AddScoped<AccountSaveRpcHandler>();
-        services.AddScoped<AccountTestRpcHandler>();
-        services.AddScoped<ProviderTestRpcHandler>();
-        services.AddScoped<SecretSetRpcHandler>();
-        services.AddScoped<SecretDeleteRpcHandler>();
-        services.AddScoped<DirectoryChooseRpcHandler>();
         services.AddScoped<IDesktopActionService, AvaloniaDesktopActionService>();
         services.AddScoped<RunFolderOpenRpcHandler>();
         services.AddScoped<ManualReviewFolderOpenRpcHandler>();

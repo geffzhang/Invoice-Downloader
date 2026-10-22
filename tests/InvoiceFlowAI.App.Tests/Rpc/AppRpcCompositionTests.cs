@@ -17,15 +17,6 @@ public sealed class AppRpcCompositionTests
         var dispatcher = AppRpcComposition.CreateDispatcher(provider.GetRequiredService<IServiceScopeFactory>(), "3.0.0");
 
         dispatcher.RegisteredMethods.Should().Contain([
-            "settings.get",
-            "settings.update",
-            "account.list",
-            "account.save",
-            "account.test",
-            "provider.test",
-            "secret.set",
-            "secret.delete",
-            "directory.choose",
             "run.context.get",
             "run.start",
             "run.progress.get",
@@ -43,7 +34,7 @@ public sealed class AppRpcCompositionTests
             new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, "hello", RpcDispatcher.HelloMethod, null),
             CancellationToken.None);
         hello.Result!.Value.GetProperty("registeredMethods").EnumerateArray()
-            .Select(x => x.GetString()).Should().Contain(["settings.get", "run.start", "run.report.export", "run.file.open", "run.stop"]);
+            .Select(x => x.GetString()).Should().Contain(["run.start", "run.report.export", "run.file.open", "run.stop"]);
     }
 
     [Fact]

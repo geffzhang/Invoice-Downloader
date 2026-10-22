@@ -1,6 +1,13 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:InvoiceFlowAI.App.ViewModels"
+             xmlns:views="using:InvoiceFlowAI.App.Views"
              x:Class="InvoiceFlowAI.App.App">
+  <Application.DataTemplates>
+    <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+      <views:SettingsPageView />
+    </DataTemplate>
+  </Application.DataTemplates>
   <Application.Styles>
     <FluentTheme />
   </Application.Styles>

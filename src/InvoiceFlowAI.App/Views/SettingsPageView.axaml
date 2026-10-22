@@ -1,0 +1,155 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:atom="https://atomui.net"
+             xmlns:vm="using:InvoiceFlowAI.App.ViewModels"
+             xmlns:conv="using:InvoiceFlowAI.App.Converters"
+             x:Class="InvoiceFlowAI.App.Views.SettingsPageView"
+             x:DataType="vm:SettingsViewModel">
+  <UserControl.Resources>
+    <conv:StatusToAlertTypeConverter x:Key="StatusToAlertType" />
+  </UserControl.Resources>
+
+  <ScrollViewer>
+    <StackPanel Margin="28,20,28,28" Spacing="18">
+      <StackPanel Spacing="6">
+        <TextBlock Text="{Binding Eyebrow}" FontSize="12" Opacity="0.55" />
+        <TextBlock Text="{Binding Title}" FontSize="26" FontWeight="SemiBold" />
+      </StackPanel>
+
+      <atom:Alert Type="Error"
+                  IsShowIcon="True"
+                  IsClosable="False"
+                  Message="{Binding PageError}"
+                  IsVisible="{Binding HasPageError}" />
+
+      <atom:Alert Type="Info"
+                  IsShowIcon="True"
+                  IsClosable="False"
+                  Message="受控复跑已锁定输出目录与日期窗口。"
+                  IsVisible="{Binding IsControlledRun}" />
+
+      <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
+        <StackPanel Grid.Column="0" Spacing="16">
+          <atom:Card Header="邮箱源配置" StyleVariant="Outlined">
+            <StackPanel Spacing="10">
+              <TextBlock Text="邮箱地址" FontWeight="SemiBold" />
+              <atom:LineEdit Text="{Binding Email, Mode=TwoWay}"
+                             PlaceholderText="name@qq.com"
+                             IsEnabled="{Binding !EmailLocked}" />
+              <TextBlock Text="当前支持 QQ 邮箱与 163 邮箱,域名会决定 IMAP 通道。"
+                         FontSize="12" Opacity="0.55" TextWrapping="Wrap" />
+
+              <TextBlock Text="授权码" FontWeight="SemiBold" Margin="0,6,0,0" />
+              <atom:LineEdit Text="{Binding AuthCode, Mode=TwoWay}"
+                             PlaceholderText="请输入邮箱授权码"
+                             PasswordChar="●"
+                             IsEnableRevealButton="True" />
+
+              <atom:Button ButtonType="Default"
+                           Content="测试邮箱授权码"
+                           HorizontalAlignment="Left"
+                           Command="{Binding TestEmailCommand}" />
+
+              <atom:Alert Type="{Binding EmailStatus, Converter={StaticResource StatusToAlertType}}"
+                          IsShowIcon="True"
+                          IsClosable="False"
+                          Message="{Binding EmailStatusMessage}"
+                          IsVisible="{Binding HasEmailStatus}" />
+            </StackPanel>
+          </atom:Card>
+
+          <atom:Card Header="输出目录设置" StyleVariant="Outlined">
+            <StackPanel Spacing="10">
+              <atom:LineEdit Text="{Binding OutputDirectory, Mode=TwoWay}"
+                             PlaceholderText="请选择本地输出目录"
+                             IsReadOnly="True" />
+              <atom:Button ButtonType="Default"
+                           Content="浏览目录"
+                           HorizontalAlignment="Left"
+                           Command="{Binding ChooseDirectoryCommand}" />
+              <TextBlock Text="系统会在此目录下继续按发票类型落盘,并生成待人工复核目录。"
+                         FontSize="12" Opacity="0.55" TextWrapping="Wrap"
+                         IsVisible="{Binding !OutputDirectoryLocked}" />
+              <TextBlock Text="当前为受控复跑,本轮输出目录由诊断上下文锁定。"
+                         FontSize="12" Opacity="0.55" TextWrapping="Wrap"
+                         IsVisible="{Binding OutputDirectoryLocked}" />
+            </StackPanel>
+          </atom:Card>
+        </StackPanel>
+
+        <StackPanel Grid.Column="1" Spacing="16">
+          <atom:Card Header="智能处理引擎" StyleVariant="Outlined">
+            <StackPanel Spacing="10">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Grid.Column="0" Text="DeepSeek API Key" FontWeight="SemiBold" />
+                <atom:Button Grid.Column="1"
+                             ButtonType="Link"
+                             Content="获取 API Key"
+                             Click="OnOpenApiKeysClick" />
+              </Grid>
+              <atom:LineEdit Text="{Binding ApiKey, Mode=TwoWay}"
+                             PlaceholderText="sk-..."
+                             PasswordChar="●"
+                             IsEnableRevealButton="True" />
+              <atom:Button ButtonType="Default"
+                           Content="测试 API Key"
+                           HorizontalAlignment="Left"
+                           Command="{Binding TestApiKeyCommand}" />
+              <TextBlock Text="额度不足时会直接提示,处理页也会同步显示配额相关警告。"
+                         FontSize="12" Opacity="0.55" TextWrapping="Wrap"
+                         IsVisible="{Binding !HasApiStatus}" />
+              <atom:Alert Type="{Binding ApiStatus, Converter={StaticResource StatusToAlertType}}"
+                          IsShowIcon="True"
+                          IsClosable="False"
+                          Message="{Binding ApiStatusMessage}"
+                          IsVisible="{Binding HasApiStatus}" />
+            </StackPanel>
+          </atom:Card>
+
+          <atom:Card Header="提取时间范围" StyleVariant="Outlined">
+            <StackPanel Spacing="10">
+              <StackPanel Orientation="Horizontal" Spacing="10">
+                <atom:DatePicker SelectedDateTime="{Binding DateFrom, Mode=TwoWay}"
+                                 Format="yyyy-MM-dd"
+                                 IsEnabled="{Binding !DateRangeLocked}" />
+                <TextBlock Text="—" VerticalAlignment="Center" Opacity="0.55" />
+                <atom:DatePicker SelectedDateTime="{Binding DateTo, Mode=TwoWay}"
+                                 Format="yyyy-MM-dd"
+                                 IsEnabled="{Binding !DateRangeLocked}" />
+              </StackPanel>
+              <TextBlock Text="确认起止日期后可直接开始提取。"
+                         FontSize="12" Opacity="0.55" TextWrapping="Wrap"
+                         IsVisible="{Binding !DateRangeLocked}" />
+              <TextBlock Text="当前为受控复跑,日期范围已按上下文锁定。"
+                         FontSize="12" Opacity="0.55" TextWrapping="Wrap"
+                         IsVisible="{Binding DateRangeLocked}" />
+            </StackPanel>
+          </atom:Card>
+
+          <atom:Card Header="公司配置" StyleVariant="Outlined">
+            <StackPanel Spacing="10">
+              <TextBlock Text="公司" FontWeight="SemiBold" />
+              <atom:LineEdit Text="{Binding CompanyName, Mode=TwoWay}"
+                             PlaceholderText="填写用于匹配购买方的公司名称" />
+              <TextBlock Text="按购买方包含公司名称进行匹配,明确不匹配的票据会单独进入“非目标公司发票”。"
+                         FontSize="12" Opacity="0.55" TextWrapping="Wrap" />
+            </StackPanel>
+          </atom:Card>
+        </StackPanel>
+      </Grid>
+
+      <Border BorderThickness="0,1,0,0" BorderBrush="#22888888" Padding="0,14,0,0">
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+            <atom:ToggleSwitch IsChecked="{Binding RememberSettings, Mode=TwoWay}" />
+            <TextBlock Text="自动记住当前配置" VerticalAlignment="Center" />
+          </StackPanel>
+          <atom:Button Grid.Column="1"
+                       ButtonType="Primary"
+                       Content="开始提取"
+                       Command="{Binding StartCommand}" />
+        </Grid>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

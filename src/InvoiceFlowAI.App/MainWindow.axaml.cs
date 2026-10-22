@@ -159,6 +159,12 @@ public partial class MainWindow : AtomUI.Desktop.Controls.Window
             return;
         }
 
+        // 选中状态由 SyncSelection 回写,NavMenu 会再异步发一次选中事件;当前页重复选中直接忽略。
+        if (string.Equals(_shell.CurrentPage?.Key, key, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         try
         {
             await _shell.NavigateAsync(key, CancellationToken.None);
