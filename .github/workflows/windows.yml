@@ -50,6 +50,12 @@ jobs:
         shell: pwsh
         run: dotnet build -c Release --no-restore
 
+      - name: Verify embedded SPA assets
+        shell: pwsh
+        run: |
+          node build/compile-webview-page.mjs --check
+          node --test "tests/InvoiceFlowAI.App.Tests/Rpc/*.test.mjs"
+
       - name: Run full test suite
         shell: pwsh
         run: dotnet test -c Release --no-build --nologo

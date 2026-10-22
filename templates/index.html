@@ -1295,11 +1295,18 @@
                 box-shadow: none;
             }
         }
+        /* Embedded mode: the native Avalonia shell owns the sidebar and window chrome. */
+        body.is-embedded .app-shell { border-radius: 0; }
+        body.is-embedded .app-main { border-radius: 0; }
+        body.is-embedded .app-sidebar,
+        body.is-embedded .window-chrome,
+        body.is-embedded .bridge-status { display: none; }
     </style>
 </head>
 <body>
     <div id="bridge-status" class="bridge-status" role="status" aria-live="polite">正在连接桌面服务</div>
     <div id="root"></div>
+    <script src="./embed_mode.js"></script>
     <script src="./rpc_client.js"></script>
     <script src="./settings_rpc.js"></script>
     <script src="./run_page_rpc.js"></script>

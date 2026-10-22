@@ -1594,11 +1594,24 @@ function AnalysisPage({ onOpenDisclaimer }) {
     );
 }
 
+function EmbedNavigationBridge() {
+    const navigate = useNavigate();
+    useEffect(() => {
+        window.__invoiceFlowHostNavigate = (path) => navigate(path);
+        return () => {
+            delete window.__invoiceFlowHostNavigate;
+        };
+    }, [navigate]);
+    return null;
+}
+
 function App() {
     const [showDisclaimer, setShowDisclaimer] = useState(false);
+    const embed = window.__invoiceFlowEmbed || { enabled: false, initialPath: "/" };
     return (
         <>
-            <MemoryRouter>
+            <MemoryRouter initialEntries={[embed.initialPath || "/"]}>
+                <EmbedNavigationBridge />
                 <Routes>
                     <Route path="/" element={<SettingsPage onOpenDisclaimer={() => setShowDisclaimer(true)} />} />
                     <Route path="/processing" element={<ProcessingPage onOpenDisclaimer={() => setShowDisclaimer(true)} />} />

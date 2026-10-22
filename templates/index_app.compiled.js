@@ -2032,9 +2032,25 @@ function AnalysisPage({
     disabled: !outputPath
   })));
 }
+function EmbedNavigationBridge() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    window.__invoiceFlowHostNavigate = path => navigate(path);
+    return () => {
+      delete window.__invoiceFlowHostNavigate;
+    };
+  }, [navigate]);
+  return null;
+}
 function App() {
   const [showDisclaimer, setShowDisclaimer] = useState(false);
-  return React.createElement(React.Fragment, null, React.createElement(MemoryRouter, null, React.createElement(Routes, null, React.createElement(Route, {
+  const embed = window.__invoiceFlowEmbed || {
+    enabled: false,
+    initialPath: "/"
+  };
+  return React.createElement(React.Fragment, null, React.createElement(MemoryRouter, {
+    initialEntries: [embed.initialPath || "/"]
+  }, React.createElement(EmbedNavigationBridge, null), React.createElement(Routes, null, React.createElement(Route, {
     path: "/",
     element: React.createElement(SettingsPage, {
       onOpenDisclaimer: () => setShowDisclaimer(true)
