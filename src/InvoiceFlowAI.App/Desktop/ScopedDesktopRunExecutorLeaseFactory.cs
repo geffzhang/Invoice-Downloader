@@ -1,7 +1,7 @@
 using InvoiceFlowAI.Application.Runs;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace InvoiceFlowAI.App.Rpc;
+namespace InvoiceFlowAI.App.Desktop;
 
 public sealed class ScopedDesktopRunExecutorLeaseFactory(IServiceScopeFactory scopeFactory)
     : IDesktopRunExecutorLeaseFactory

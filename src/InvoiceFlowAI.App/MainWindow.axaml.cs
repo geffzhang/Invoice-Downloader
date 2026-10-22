@@ -5,11 +5,9 @@ using AtomUI.Controls;
 using AtomUI.Desktop.Controls;
 using AtomUI.Icons.AntDesign;
 using InvoiceFlowAI.App.Navigation;
-using InvoiceFlowAI.App.Rpc;
 using InvoiceFlowAI.App.Services;
 using InvoiceFlowAI.App.Settings;
 using InvoiceFlowAI.App.ViewModels;
-using InvoiceFlowAI.App.Views;
 using Microsoft.Extensions.Logging;
 
 namespace InvoiceFlowAI.App;
@@ -20,7 +18,6 @@ public partial class MainWindow : AtomUI.Desktop.Controls.Window
     private readonly AvaloniaMainWindowAccessor _windowAccessor;
     private readonly IRunShutdownService _shutdown;
     private readonly ILogger<MainWindow> _logger;
-    private readonly EmbedWebViewHost _embedHost;
     private readonly Dictionary<string, NavMenuNode> _nodes = new(StringComparer.Ordinal);
     private bool _syncingSelection;
     private bool _closeConfirmed;
@@ -37,8 +34,6 @@ public partial class MainWindow : AtomUI.Desktop.Controls.Window
     public MainWindow(
         ShellViewModel shell,
         AvaloniaMainWindowAccessor windowAccessor,
-        IRpcDispatcher rpcDispatcher,
-        WebViewRunEventPublisher runEventPublisher,
         IRunShutdownService shutdown,
         ILogger<MainWindow> logger)
     {
@@ -51,9 +46,6 @@ public partial class MainWindow : AtomUI.Desktop.Controls.Window
         DataContext = shell;
         _windowAccessor.Set(this);
         BuildNavigation();
-
-        _embedHost = new EmbedWebViewHost(rpcDispatcher, runEventPublisher) { IsVisible = false };
-        ContentHost.Children.Add(_embedHost);
 
         NavigationMenu.NavMenuNodeSelected += OnNavigationNodeSelected;
         _shell.PropertyChanged += OnShellPropertyChanged;
@@ -107,20 +99,13 @@ public partial class MainWindow : AtomUI.Desktop.Controls.Window
         }
     }
 
-    private async void UpdateContent()
+    private void UpdateContent()
     {
         try
         {
             var page = _shell.CurrentPage;
-            var isWeb = page is WebPageViewModel;
-            NativeContent.Content = isWeb ? null : page;
-            _embedHost.IsVisible = isWeb;
+            NativeContent.Content = page;
             SyncSelection(page);
-
-            if (page is WebPageViewModel webPage)
-            {
-                await _embedHost.NavigateAsync(webPage);
-            }
         }
         catch (Exception exception)
         {
@@ -212,6 +197,5 @@ public partial class MainWindow : AtomUI.Desktop.Controls.Window
         _shell.PropertyChanged -= OnShellPropertyChanged;
         NavigationMenu.NavMenuNodeSelected -= OnNavigationNodeSelected;
         _windowAccessor.Set(null);
-        _embedHost.Dispose();
     }
 }

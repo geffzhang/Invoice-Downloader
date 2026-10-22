@@ -7,10 +7,10 @@
     <AssemblyName>InvoiceFlowAI.App.Tests</AssemblyName>
     <IsPackable>false</IsPackable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <!-- This project contains more than one Avalonia Application (headless + two
-         native WebView end-to-end hosts), so the AtomUI localization bootstrap
-         generator cannot pick a single host. The headless host attaches AtomUI
-         manually; localization overrides are not used in tests. -->
+    <!-- This project declares its own Avalonia Application (the headless test host)
+         while referencing the production App, so the AtomUI localization bootstrap
+         generator is disabled here. The headless host attaches AtomUI manually;
+         localization overrides are not used in tests. -->
     <AtomUIDisableLocalizationBuildIntegration>true</AtomUIDisableLocalizationBuildIntegration>
   </PropertyGroup>
 

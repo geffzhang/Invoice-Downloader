@@ -1,7 +1,7 @@
 using FluentAssertions;
+using InvoiceFlowAI.App.Desktop;
 using InvoiceFlowAI.App.Events;
 using InvoiceFlowAI.App.Navigation;
-using InvoiceFlowAI.App.Rpc;
 using InvoiceFlowAI.App.Services;
 using InvoiceFlowAI.App.ViewModels;
 using InvoiceFlowAI.Application.Archive;
@@ -70,7 +70,7 @@ public sealed class AppServiceProviderFactoryTests
     }
 
     [Fact]
-    public async Task Create_migrates_database_bootstraps_default_settings_and_registers_rpc_services()
+    public async Task Create_migrates_database_bootstraps_default_settings_and_registers_native_services()
     {
         var appDataDirectory = Path.Combine(Path.GetTempPath(), $"invoiceflow-app-{Guid.NewGuid():N}");
         try
@@ -78,7 +78,8 @@ public sealed class AppServiceProviderFactoryTests
             await using (var provider = AppServiceProviderFactory.Create(appDataDirectory))
             await using (var scope = provider.CreateAsyncScope())
             {
-                provider.GetRequiredService<IRunEventPublisher>().Should().BeOfType<RunEventPublisherFanOut>();
+                provider.GetRequiredService<IRunEventPublisher>()
+                    .Should().BeSameAs(provider.GetRequiredService<NativeRunEventPublisher>());
                 provider.GetRequiredService<IAppEventBus>().Should().BeOfType<AppEventBus>();
                 provider.GetRequiredService<IDesktopRunExecutorLeaseFactory>()
                     .Should().BeOfType<ScopedDesktopRunExecutorLeaseFactory>();
@@ -88,12 +89,6 @@ public sealed class AppServiceProviderFactoryTests
                 var pages = provider.GetServices<IPageViewModel>().ToArray();
                 pages.Should().Contain(page => page.GetType() == typeof(SettingsViewModel));
                 pages.Should().Contain(page => page.GetType() == typeof(ProcessingViewModel));
-                pages.Should().NotContain(page =>
-                    page.GetType() == typeof(WebPageViewModel) && page.Key == "settings");
-                pages.Should().NotContain(page =>
-                    page.GetType() == typeof(WebPageViewModel) && page.Key == "processing");
-                pages.Should().NotContain(page =>
-                    page.GetType() == typeof(WebPageViewModel) && page.Key == "analysis");
                 scope.ServiceProvider.GetRequiredService<IDesktopRunService>().Should().NotBeNull();
                 scope.ServiceProvider.GetRequiredService<IDesktopRunExecutor>().Should().NotBeNull();
                 scope.ServiceProvider.GetRequiredService<IMailboxScanner>().Should().BeOfType<MailKitMailboxScanner>();

@@ -4,7 +4,6 @@ using Avalonia.Controls;
 using InvoiceFlowAI.App.Desktop;
 using InvoiceFlowAI.App.Events;
 using InvoiceFlowAI.App.Navigation;
-using InvoiceFlowAI.App.Rpc;
 using InvoiceFlowAI.App.Services;
 using InvoiceFlowAI.App.Settings;
 using InvoiceFlowAI.App.ViewModels;
@@ -48,24 +47,15 @@ public static class AppServiceProviderFactory
         services.AddSingleton<IPersistentSecretStore>(new DpapiSecretStore(secretPath, entropy));
         services.AddSingleton<IUserSettingsSnapshotStore>(new JsonUserSettingsSnapshotStore(legacySnapshotPath));
         services.AddSingleton<AvaloniaMainWindowAccessor>();
-        services.AddSingleton<WebViewRunEventPublisher>();
         services.AddSingleton<IDesktopPathLauncher, ShellDesktopPathLauncher>();
         services.AddSingleton<IAvaloniaUiDispatcher, AvaloniaUiDispatcher>();
         services.AddSingleton<IAppEventBus, AppEventBus>();
         services.AddSingleton<NativeRunEventPublisher>();
-        services.AddSingleton<RunEventPublisherFanOut>(provider => new RunEventPublisherFanOut(
-        [
-            provider.GetRequiredService<WebViewRunEventPublisher>(),
-            provider.GetRequiredService<NativeRunEventPublisher>(),
-        ]));
-        services.AddSingleton<IRunEventPublisher>(provider => provider.GetRequiredService<RunEventPublisherFanOut>());
+        services.AddSingleton<IRunEventPublisher>(provider => provider.GetRequiredService<NativeRunEventPublisher>());
         services.AddSingleton<IDesktopRunExecutorLeaseFactory, ScopedDesktopRunExecutorLeaseFactory>();
         services.AddSingleton<IMainWindowAccessor>(provider => provider.GetRequiredService<AvaloniaMainWindowAccessor>());
         services.AddSingleton<IDirectoryPicker, AvaloniaDirectoryPicker>();
         services.AddSingleton<IScopedOperationRunner, ScopedOperationRunner>();
-        services.AddSingleton<IRpcDispatcher>(provider => AppRpcComposition.CreateDispatcher(
-            provider.GetRequiredService<IServiceScopeFactory>(),
-            typeof(App).Assembly.GetName().Version?.ToString() ?? "0.0.0"));
         services.AddSingleton<IRunSession, RunSession>();
         services.AddSingleton<IAppNavigator, AppNavigator>();
         services.AddSingleton<IDialogService, AtomUiDialogService>();

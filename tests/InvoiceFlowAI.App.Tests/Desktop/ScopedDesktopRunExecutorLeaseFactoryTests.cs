@@ -1,11 +1,11 @@
 using FluentAssertions;
-using InvoiceFlowAI.App.Rpc;
+using InvoiceFlowAI.App.Desktop;
 using InvoiceFlowAI.Application.Runs;
 using InvoiceFlowAI.Contracts.Rpc;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace InvoiceFlowAI.App.Tests.Rpc;
+namespace InvoiceFlowAI.App.Tests.Desktop;
 
 public sealed class ScopedDesktopRunExecutorLeaseFactoryTests
 {

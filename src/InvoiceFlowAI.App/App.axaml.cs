@@ -6,7 +6,7 @@ using Serilog;
 namespace InvoiceFlowAI.App;
 
 /// <summary>
-/// Avalonia UI application root and desktop RPC composition point.
+/// Avalonia UI application root.
 /// </summary>
 public partial class App : Avalonia.Application
 {
