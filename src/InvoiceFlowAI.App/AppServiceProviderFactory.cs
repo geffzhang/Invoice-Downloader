@@ -94,7 +94,15 @@ public static class AppServiceProviderFactory
             provider.GetRequiredService<ProcessingOptions>(),
             provider.GetRequiredService<ILogger<ProcessingViewModel>>()));
         services.AddSingleton<IPageViewModel>(provider => provider.GetRequiredService<ProcessingViewModel>());
-        services.AddSingleton<IPageViewModel>(new WebPageViewModel("analysis", "结果分析", "Step 3", "/analysis"));
+        services.AddSingleton(AnalysisOptions.Production);
+        services.AddSingleton<AnalysisViewModel>(provider => new AnalysisViewModel(
+            provider.GetRequiredService<IScopedOperationRunner>(),
+            provider.GetRequiredService<IRunSession>(),
+            provider.GetRequiredService<IAppNavigator>(),
+            provider.GetRequiredService<INotificationService>(),
+            provider.GetRequiredService<AnalysisOptions>(),
+            provider.GetRequiredService<ILogger<AnalysisViewModel>>()));
+        services.AddSingleton<IPageViewModel>(provider => provider.GetRequiredService<AnalysisViewModel>());
         services.AddInvoiceFlowInfrastructure();
         services.AddInvoiceFlowApplication();
 
@@ -112,11 +120,6 @@ public static class AppServiceProviderFactory
         services.AddScoped<RuleSetValidator>();
 
         services.AddScoped<IDesktopActionService, AvaloniaDesktopActionService>();
-        services.AddScoped<RunFolderOpenRpcHandler>();
-        services.AddScoped<ManualReviewFolderOpenRpcHandler>();
-        services.AddScoped<RunFileOpenRpcHandler>();
-        services.AddScoped<RunResultsGetRpcHandler>();
-        services.AddScoped<ReportExportRpcHandler>();
 
         configureServices?.Invoke(services);
 

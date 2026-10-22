@@ -16,13 +16,7 @@ public sealed class AppRpcCompositionTests
         await using var provider = services.BuildServiceProvider();
         var dispatcher = AppRpcComposition.CreateDispatcher(provider.GetRequiredService<IServiceScopeFactory>(), "3.0.0");
 
-        dispatcher.RegisteredMethods.Should().Contain([
-            "run.results.get",
-            "run.report.export",
-            "run.folder.open",
-            "run.manual-review.open",
-            "run.file.open",
-        ]);
+        dispatcher.RegisteredMethods.Should().OnlyContain(method => method == RpcDispatcher.HelloMethod);
         dispatcher.RegisteredMethods.Should().NotContain("report.open");
         dispatcher.RegisteredMethods.Should().NotContain("start_processing");
         dispatcher.RegisteredMethods.Should().NotContain("run.context.get");
@@ -34,7 +28,7 @@ public sealed class AppRpcCompositionTests
             new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, "hello", RpcDispatcher.HelloMethod, null),
             CancellationToken.None);
         hello.Result!.Value.GetProperty("registeredMethods").EnumerateArray()
-            .Select(x => x.GetString()).Should().Contain(["run.report.export", "run.file.open"]);
+            .Select(x => x.GetString()).Should().OnlyContain(method => method == RpcDispatcher.HelloMethod);
     }
 
     [Fact]

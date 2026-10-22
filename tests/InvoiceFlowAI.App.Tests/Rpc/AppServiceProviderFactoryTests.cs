@@ -92,6 +92,8 @@ public sealed class AppServiceProviderFactoryTests
                     page.GetType() == typeof(WebPageViewModel) && page.Key == "settings");
                 pages.Should().NotContain(page =>
                     page.GetType() == typeof(WebPageViewModel) && page.Key == "processing");
+                pages.Should().NotContain(page =>
+                    page.GetType() == typeof(WebPageViewModel) && page.Key == "analysis");
                 scope.ServiceProvider.GetRequiredService<IDesktopRunService>().Should().NotBeNull();
                 scope.ServiceProvider.GetRequiredService<IDesktopRunExecutor>().Should().NotBeNull();
                 scope.ServiceProvider.GetRequiredService<IMailboxScanner>().Should().BeOfType<MailKitMailboxScanner>();
@@ -108,8 +110,8 @@ public sealed class AppServiceProviderFactoryTests
                 scope.ServiceProvider.GetRequiredService<IReportApplicationService>().Should().BeOfType<ReportApplicationService>();
                 scope.ServiceProvider.GetRequiredService<IReportExportStage>().Should().BeOfType<ReportExportStage>();
                 scope.ServiceProvider.GetRequiredService<RunResultsQueryService>().Should().NotBeNull();
-                scope.ServiceProvider.GetRequiredService<ReportExportRpcHandler>().Should().NotBeNull();
-                scope.ServiceProvider.GetRequiredService<RunResultsGetRpcHandler>().Should().NotBeNull();
+                provider.GetRequiredService<AnalysisViewModel>().Should().BeOfType<AnalysisViewModel>();
+                provider.GetServices<IPageViewModel>().Should().Contain(page => page.GetType() == typeof(AnalysisViewModel));
                 await using var secondScope = provider.CreateAsyncScope();
                 secondScope.ServiceProvider.GetRequiredService<ActiveRunRegistry>()
                     .Should().BeSameAs(scope.ServiceProvider.GetRequiredService<ActiveRunRegistry>());

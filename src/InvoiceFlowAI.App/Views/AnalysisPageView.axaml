@@ -1,0 +1,119 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:atom="https://atomui.net"
+             xmlns:vm="using:InvoiceFlowAI.App.ViewModels"
+             x:Class="InvoiceFlowAI.App.Views.AnalysisPageView"
+             x:DataType="vm:AnalysisViewModel">
+  <ScrollViewer>
+    <StackPanel Margin="28,20,28,28" Spacing="18">
+      <Grid ColumnDefinitions="*,Auto">
+        <StackPanel Grid.Column="0" Spacing="6">
+          <TextBlock Text="{Binding Eyebrow}" FontSize="12" Opacity="0.55" />
+          <TextBlock Text="{Binding Title}" FontSize="26" FontWeight="SemiBold" />
+        </StackPanel>
+        <StackPanel Grid.Column="1"
+                    Orientation="Horizontal"
+                    Spacing="10"
+                    VerticalAlignment="Center">
+          <atom:Button ButtonType="Primary"
+                       Content="{Binding ExportButtonText}"
+                       IsLoading="{Binding IsExporting}"
+                       Command="{Binding ExportCommand}" />
+          <atom:Button ButtonType="Link"
+                       Content="开始新批次"
+                       Command="{Binding StartNewBatchCommand}" />
+        </StackPanel>
+      </Grid>
+
+      <atom:Alert Type="Error"
+                  IsShowIcon="True"
+                  IsClosable="False"
+                  Message="{Binding PageError}"
+                  IsVisible="{Binding HasPageError}" />
+
+      <atom:Card StyleVariant="Outlined">
+        <StackPanel Spacing="6">
+          <TextBlock Text="运行结果" FontSize="12" Opacity="0.55" />
+          <TextBlock Text="{Binding SummaryText}" FontSize="15" TextWrapping="Wrap" />
+        </StackPanel>
+      </atom:Card>
+
+      <atom:Alert Type="Warning"
+                  IsShowIcon="True"
+                  IsClosable="False"
+                  Message="{Binding QuotaMessage}"
+                  IsVisible="{Binding HasQuotaWarning}" />
+
+      <atom:Alert Type="Warning"
+                  IsShowIcon="True"
+                  IsClosable="False"
+                  Message="{Binding ProcessingErrorWarning}"
+                  IsVisible="{Binding HasProcessingErrorWarning}" />
+
+      <Grid ColumnDefinitions="*,*,*" ColumnSpacing="16">
+        <atom:Card Grid.Column="0" StyleVariant="Outlined">
+          <StackPanel Spacing="6">
+            <TextBlock Text="处理成功" FontSize="12" Opacity="0.55" />
+            <TextBlock Text="{Binding SuccessCount}" FontSize="28" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding SuccessHelper}" FontSize="12" Opacity="0.55" TextWrapping="Wrap" />
+          </StackPanel>
+        </atom:Card>
+
+        <atom:Card Grid.Column="1" StyleVariant="Outlined">
+          <StackPanel Spacing="6">
+            <TextBlock Text="暂存记录" FontSize="12" Opacity="0.55" />
+            <TextBlock Text="{Binding RetentionCount}" FontSize="28" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding RetentionHelper}" FontSize="12" Opacity="0.55" TextWrapping="Wrap" />
+          </StackPanel>
+        </atom:Card>
+
+        <atom:Card Grid.Column="2" StyleVariant="Outlined">
+          <StackPanel Spacing="6">
+            <TextBlock Text="待人工复核" FontSize="12" Opacity="0.55" />
+            <TextBlock Text="{Binding ManualCheckCount}" FontSize="28" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding ManualHelper}" FontSize="12" Opacity="0.55" TextWrapping="Wrap" />
+          </StackPanel>
+        </atom:Card>
+      </Grid>
+
+      <atom:Card StyleVariant="Outlined" IsVisible="{Binding HasManualReview}">
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel Grid.Column="0" Spacing="6">
+            <TextBlock Text="{Binding ManualReviewTitle}" FontWeight="SemiBold" TextWrapping="Wrap" />
+            <TextBlock Text="请优先前往待人工复核文件夹处理这些记录。"
+                       FontSize="12" Opacity="0.55" TextWrapping="Wrap" />
+          </StackPanel>
+          <atom:Button Grid.Column="1"
+                       ButtonType="Default"
+                       VerticalAlignment="Center"
+                       Content="打开待人工复核"
+                       Command="{Binding OpenManualReviewFolderCommand}" />
+        </Grid>
+      </atom:Card>
+
+      <atom:Card StyleVariant="Outlined">
+        <StackPanel Spacing="10">
+          <TextBlock Text="{Binding OutputTitle}" FontWeight="SemiBold" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding OutputHint}" FontSize="12" Opacity="0.55" TextWrapping="Wrap" />
+          <atom:Button ButtonType="Default"
+                       HorizontalAlignment="Left"
+                       Content="打开输出目录"
+                       Command="{Binding OpenOutputFolderCommand}" />
+        </StackPanel>
+      </atom:Card>
+
+      <atom:Card Header="结果分布" StyleVariant="Outlined" IsVisible="{Binding HasGroupedErrors}">
+        <ItemsControl ItemsSource="{Binding GroupedErrors}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:AnalysisGroupItem">
+              <Grid ColumnDefinitions="*,Auto" Margin="0,6,0,0">
+                <TextBlock Grid.Column="0" Text="{Binding Label}" />
+                <TextBlock Grid.Column="1" Text="{Binding Count}" FontWeight="SemiBold" />
+              </Grid>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </atom:Card>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>
