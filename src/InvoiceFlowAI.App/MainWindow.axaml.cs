@@ -21,6 +21,7 @@ public partial class MainWindow : AtomUI.Desktop.Controls.Window
     private readonly Dictionary<string, NavMenuNode> _nodes = new(StringComparer.Ordinal);
     private bool _syncingSelection;
     private bool _closeConfirmed;
+    private bool _closeInProgress;
 
     /// <summary>
     /// XAML 运行时加载器的构造入口。应用始终通过依赖注入组合本窗口,
@@ -168,27 +169,42 @@ public partial class MainWindow : AtomUI.Desktop.Controls.Window
         }
 
         e.Cancel = true;
-        try
+
+        // 两次快速关闭请求只允许一次保存与确认流程,避免重复 Flush 与重复弹窗。
+        if (_closeInProgress)
         {
-            await _shell.FlushAsync(CancellationToken.None);
-        }
-        catch (Exception exception)
-        {
-            _logger.LogError(exception, "关闭前保存设置失败。");
+            return;
         }
 
+        _closeInProgress = true;
         try
         {
-            var decision = await _shutdown.ConfirmCloseAsync(CancellationToken.None);
-            if (decision == RunCloseDecision.Close)
+            try
             {
-                _closeConfirmed = true;
-                Close();
+                await _shell.FlushAsync(CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogError(exception, "关闭前保存设置失败。");
+            }
+
+            try
+            {
+                var decision = await _shutdown.ConfirmCloseAsync(CancellationToken.None);
+                if (decision == RunCloseDecision.Close)
+                {
+                    _closeConfirmed = true;
+                    Close();
+                }
+            }
+            catch (Exception exception)
+            {
+                _logger.LogError(exception, "关闭确认失败。");
             }
         }
-        catch (Exception exception)
+        finally
         {
-            _logger.LogError(exception, "关闭确认失败。");
+            _closeInProgress = false;
         }
     }
 

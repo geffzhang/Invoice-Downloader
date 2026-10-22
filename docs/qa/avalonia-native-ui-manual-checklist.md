@@ -44,5 +44,6 @@
 ## 6. 发布产物
 
 - [ ] `licenses/THIRD-PARTY-NOTICES.txt` 与 `licenses/LGPL-3.0.txt` 存在于安装目录。
+- [ ] `licenses/GPL-3.0.txt` 存在于安装目录,且随 MSI 一并安装。
 - [ ] 安装目录内 `AtomUI*.dll` 为独立文件,未被合并进主程序。
 - [ ] `build/verify-lgpl-packaging.ps1` 在发布目录上通过。

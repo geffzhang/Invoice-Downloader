@@ -4,7 +4,7 @@ using InvoiceFlowAI.App.Settings;
 using InvoiceFlowAI.App.Tests.Headless;
 using Xunit;
 
-namespace InvoiceFlowAI.App.Tests.Rpc;
+namespace InvoiceFlowAI.App.Tests;
 
 public sealed class AvaloniaDirectoryPickerTests
 {

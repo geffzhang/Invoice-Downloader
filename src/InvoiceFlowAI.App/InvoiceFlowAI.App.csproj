@@ -29,7 +29,6 @@
     <PackageReference Include="Serilog.Sinks.File" />
   </ItemGroup>
 
-
   <ItemGroup>
     <ProjectReference Include="..\InvoiceFlowAI.Domain\InvoiceFlowAI.Domain.csproj" />
     <ProjectReference Include="..\InvoiceFlowAI.Contracts\InvoiceFlowAI.Contracts.csproj" />

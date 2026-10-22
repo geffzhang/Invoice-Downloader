@@ -36,7 +36,7 @@
                    Opacity="0.45" />
       </StackPanel>
     </Grid>
-    <Grid x:Name="ContentHost" Grid.Column="1" Margin="0,8,8,8">
+    <Grid Grid.Column="1" Margin="0,8,8,8">
       <ContentControl x:Name="NativeContent" />
     </Grid>
   </Grid>

@@ -174,6 +174,33 @@ public sealed class DesktopRunServiceTests
     }
 
     [Fact]
+    public async Task Terminal_progress_reaches_one_hundred_only_when_the_run_completed()
+    {
+        var fixture = new ServiceFixture();
+        fixture.Lifecycle.Seed(new RunStateSnapshot("run-failed", RunLifecycleState.Failed,
+            "scan-mailbox", "RUN_FAILED", 1, DateTimeOffset.UtcNow, null));
+        fixture.Events.Seed(new StoredRunEventRecord("run-failed", 1, "run.progress",
+            "{\"stage\":\"scan-mailbox\",\"completed\":3,\"total\":3,\"percent\":100}", DateTimeOffset.UtcNow, null));
+        fixture.Lifecycle.Seed(new RunStateSnapshot("run-cancelled", RunLifecycleState.Cancelled,
+            "extract-documents", null, 1, DateTimeOffset.UtcNow, null));
+        fixture.Events.Seed(new StoredRunEventRecord("run-cancelled", 1, "run.progress",
+            "{\"stage\":\"extract-documents\",\"completed\":2,\"total\":5,\"percent\":40}", DateTimeOffset.UtcNow, null));
+        fixture.Lifecycle.Seed(new RunStateSnapshot("run-completed", RunLifecycleState.Completed,
+            "completed", null, 0, DateTimeOffset.UtcNow, null));
+
+        var failed = await fixture.Service.GetProgressAsync("run-failed", CancellationToken.None);
+        var cancelled = await fixture.Service.GetProgressAsync("run-cancelled", CancellationToken.None);
+        var completed = await fixture.Service.GetProgressAsync("run-completed", CancellationToken.None);
+
+        failed.RunState.Should().Be(RunState.Failed);
+        failed.Progress.Should().Be(99);
+        cancelled.RunState.Should().Be(RunState.Cancelled);
+        cancelled.Progress.Should().Be(40);
+        completed.RunState.Should().Be(RunState.Completed);
+        completed.Progress.Should().Be(100);
+    }
+
+    [Fact]
     public async Task Terminal_progress_uses_persisted_summary_and_safe_failure_reason()
     {
         var fixture = new ServiceFixture();

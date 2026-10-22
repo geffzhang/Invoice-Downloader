@@ -1,7 +1,8 @@
 // Application abstraction for the in-memory one-time open-token store.
-// Tokens are issued by ReportApplicationService when the UI requests a
-// report.open RPC and consumed once when the WebView resolves the token
-// to a real file path. Tokens expire after the configured TTL.
+// Tokens are issued by ReportApplicationService when the native UI asks to
+// open a report file and consumed once by the native export/open flow when
+// it resolves the token to a real file path. Tokens expire after the
+// configured TTL.
 
 namespace InvoiceFlowAI.Application.Reports;
 

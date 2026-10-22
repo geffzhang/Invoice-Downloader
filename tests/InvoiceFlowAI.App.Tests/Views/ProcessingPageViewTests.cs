@@ -1,6 +1,4 @@
-using Avalonia.Controls;
 using Avalonia.VisualTree;
-using AtomUI.Desktop.Controls;
 using FluentAssertions;
 using InvoiceFlowAI.App.Tests.Headless;
 using InvoiceFlowAI.App.Views;

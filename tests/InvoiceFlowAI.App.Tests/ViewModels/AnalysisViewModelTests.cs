@@ -145,6 +145,64 @@ public sealed class AnalysisViewModelTests
     }
 
     [Fact]
+    public async Task Start_new_batch_clears_the_previous_export_name()
+    {
+        var harness = new AnalysisHarness();
+        harness.Session.SetRunId("run-9");
+        harness.Results.Snapshot = Snapshot(summary: new Dictionary<string, int> { ["success_count"] = 1 });
+        var viewModel = harness.CreateViewModel();
+        await viewModel.RefreshAsync(TestContext.Current.CancellationToken);
+        await viewModel.ExportCommand.ExecuteAsync(null);
+        viewModel.LastExportFileName.Should().Be("report.xlsx");
+
+        await viewModel.StartNewBatchCommand.ExecuteAsync(null);
+
+        viewModel.LastExportFileName.Should().BeEmpty();
+        viewModel.HasLastExport.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Context_lookup_failure_maps_to_the_load_failed_page_error()
+    {
+        var harness = new AnalysisHarness { ContextException = new InvalidOperationException("context unavailable") };
+        var viewModel = harness.CreateViewModel();
+
+        await FluentActions
+            .Awaiting(() => viewModel.RefreshAsync(TestContext.Current.CancellationToken))
+            .Should().NotThrowAsync();
+
+        viewModel.PageError.Should().Be(AnalysisCopy.LoadFailed);
+    }
+
+    [Fact]
+    public async Task Export_failure_is_not_cleared_by_a_refresh_that_lands_while_exporting()
+    {
+        var harness = new AnalysisHarness();
+        harness.Session.SetRunId("run-9");
+        harness.Results.Snapshot = Snapshot(summary: new Dictionary<string, int> { ["success_count"] = 1 });
+        var viewModel = harness.CreateViewModel();
+        await viewModel.RefreshAsync(TestContext.Current.CancellationToken);
+
+        harness.Reports.ExportException = new InvalidOperationException("disk full");
+        await viewModel.ExportCommand.ExecuteAsync(null);
+        viewModel.PageError.Should().Be(AnalysisCopy.ExportFailed);
+
+        // 用户重试导出期间轮询刷新成功返回:导出流程仍持有 PageError,提示不得被清掉。
+        harness.Reports.ExportException = null;
+        harness.Reports.ExportGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var retry = viewModel.ExportCommand.ExecuteAsync(null);
+        viewModel.IsExporting.Should().BeTrue();
+
+        await viewModel.RefreshAsync(TestContext.Current.CancellationToken);
+
+        viewModel.PageError.Should().Be(AnalysisCopy.ExportFailed);
+
+        harness.Reports.ExportGate.SetResult();
+        await retry;
+        viewModel.PageError.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Unknown_group_keys_fall_back_to_a_neutral_label()
     {
         var harness = new AnalysisHarness();
@@ -190,6 +248,7 @@ public sealed class AnalysisViewModelTests
         public FakeRunSession Session { get; } = new();
         public RecordingNavigator Navigator { get; } = new();
         public NullNotificationService Notifications { get; } = new();
+        public Exception? ContextException { get; init; }
 
         public AnalysisViewModel CreateViewModel()
         {
@@ -198,8 +257,10 @@ public sealed class AnalysisViewModelTests
                 services.AddSingleton<IRunResultsQueryService>(Results);
                 services.AddSingleton<IReportApplicationService>(Reports);
                 services.AddSingleton<IDesktopActionService>(Actions);
-                services.AddSingleton<IDesktopRunService>(new FakeDesktopRunService(
-                    new RunContextSnapshot(false, false, false, 0, "run-1", null, null, null, null, null)));
+                services.AddSingleton<IDesktopRunService>(ContextException is null
+                    ? new FakeDesktopRunService(
+                        new RunContextSnapshot(false, false, false, 0, "run-1", null, null, null, null, null))
+                    : new ThrowingContextRunService(ContextException));
             });
 
             return new AnalysisViewModel(
@@ -239,23 +300,44 @@ public sealed class AnalysisViewModelTests
     {
         public List<ReportExportRequest> Exported { get; } = [];
         public Exception? ExportException { get; set; }
+        public TaskCompletionSource? ExportGate { get; set; }
 
-        public Task<ReportExportRpcResult> ExportAsync(ReportExportRequest request, CancellationToken cancellationToken)
+        public async Task<ReportExportRpcResult> ExportAsync(ReportExportRequest request, CancellationToken cancellationToken)
         {
             Exported.Add(request);
-            if (ExportException is not null)
+            if (ExportGate is not null)
             {
-                return Task.FromException<ReportExportRpcResult>(ExportException);
+                await ExportGate.Task;
             }
 
-            return Task.FromResult(new ReportExportRpcResult(
-                request.RunId, @"D:\out\report.xlsx", "hash-1", 3, 1, "v1", false));
+            if (ExportException is not null)
+            {
+                throw ExportException;
+            }
+
+            return new ReportExportRpcResult(
+                request.RunId, @"D:\out\report.xlsx", "hash-1", 3, 1, "v1", false);
         }
 
         public Task<ReportOpenToken> OpenAsync(ReportOpenRequest request, CancellationToken cancellationToken)
             => throw new NotSupportedException();
 
         public Task<ReportOpenResolution> ResolveTokenAsync(string tokenId, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+    }
+
+    private sealed class ThrowingContextRunService(Exception contextException) : IDesktopRunService
+    {
+        public Task<RunContextSnapshot> GetContextAsync(CancellationToken cancellationToken)
+            => Task.FromException<RunContextSnapshot>(contextException);
+
+        public Task<RunStartResult> StartAsync(RunStartRequest request, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<RunProgressSnapshot> GetProgressAsync(string? runId, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<RunStopResult> StopAsync(RunStopRequest request, CancellationToken cancellationToken)
             => throw new NotSupportedException();
     }
 

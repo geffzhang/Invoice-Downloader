@@ -17,7 +17,7 @@ using InvoiceFlowAI.Infrastructure.Reports;
 using InvoiceFlowAI.Application.Mail;
 using InvoiceFlowAI.Infrastructure.Persistence.Entities;
 
-namespace InvoiceFlowAI.App.Tests.Rpc;
+namespace InvoiceFlowAI.App.Tests;
 
 public sealed class AppServiceProviderFactoryTests
 {

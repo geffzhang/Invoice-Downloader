@@ -113,7 +113,11 @@ public static class AppServiceProviderFactory
 
         configureServices?.Invoke(services);
 
-        var serviceProvider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
+        var serviceProvider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+            ValidateOnBuild = true,
+        });
         try
         {
             InitializeAsync(serviceProvider, legacySnapshotPath).GetAwaiter().GetResult();

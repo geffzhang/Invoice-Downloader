@@ -9,7 +9,7 @@ namespace InvoiceFlowAI.App.Tests.Views;
 public sealed class MainWindowSmokeTests
 {
     [Fact]
-    public void Main_window_builds_with_three_native_pages_and_no_webview()
+    public void Main_window_builds_with_three_native_pages()
     {
         var appDataDirectory = Path.Combine(Path.GetTempPath(), $"invoiceflow-window-{Guid.NewGuid():N}");
         try

@@ -25,8 +25,6 @@ public static class RpcErrorCodes
 
     public const string CredentialsNotConfigured = "CREDENTIALS_NOT_CONFIGURED";
     public const string PersistenceUnavailable = "PERSISTENCE_UNAVAILABLE";
-    public const string WebviewBridgeNotReady = "WEBVIEW_BRIDGE_NOT_READY";
-    public const string WebviewRuntimeUnavailable = "WEBVIEW_RUNTIME_UNAVAILABLE";
     public const string WebAssetInvalid = "WEB_ASSET_INVALID";
     public const string RecipeSchemaUnsupported = "RECIPE_SCHEMA_UNSUPPORTED";
     public const string RecipeGraphInvalid = "RECIPE_GRAPH_INVALID";

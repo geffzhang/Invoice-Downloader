@@ -1,4 +1,5 @@
 using FluentAssertions;
+using InvoiceFlowAI.App.Desktop;
 using InvoiceFlowAI.App.Events;
 using InvoiceFlowAI.App.Navigation;
 using InvoiceFlowAI.App.Services;
@@ -178,6 +179,29 @@ public sealed class ProcessingViewModelTests
 
         navigator.Attempts.Should().Be(2);
         navigator.Requested.Should().Equal("analysis");
+        viewModel.Logs.Should().ContainSingle(entry => entry.Message == ProcessingCopy.CompletedLog);
+    }
+
+    [Fact]
+    public async Task Run_events_delivered_after_deactivation_do_not_refresh_or_navigate()
+    {
+        var harness = new ProcessingHarness(pollInterval: TimeSpan.FromHours(1));
+        var dispatcher = new QueueingUiDispatcher();
+        harness.Runs.Progress = Snapshot(RunState.Running, stage: "scan-mailbox", progress: 10, stats: new(0, 0, 0));
+        var viewModel = harness.CreateViewModel(dispatcher: dispatcher);
+        await viewModel.OnActivatedAsync(TestContext.Current.CancellationToken);
+
+        // 事件在页面仍活跃时投递,但排队到停用之后才执行。
+        harness.Bus.Publish(new AppRunEvent("run.progress", "run-1", 1, DateTimeOffset.UtcNow, new object()));
+        dispatcher.Pending.Should().ContainSingle();
+
+        harness.Runs.Progress = Snapshot(RunState.Completed, stage: "completed", progress: 100, stats: new(5, 5, 0));
+        await viewModel.OnDeactivatedAsync(TestContext.Current.CancellationToken);
+
+        dispatcher.RunPending();
+
+        viewModel.EmailCount.Should().Be(0);
+        harness.Navigator.Requested.Should().BeEmpty();
     }
 
     [Fact]
@@ -292,7 +316,9 @@ public sealed class ProcessingViewModelTests
         public AppEventBus Bus { get; } = new(NullLogger<AppEventBus>.Instance);
         public SynchronousUiDispatcher Dispatcher { get; } = new();
 
-        public ProcessingViewModel CreateViewModel(IAppNavigator? navigator = null)
+        public ProcessingViewModel CreateViewModel(
+            IAppNavigator? navigator = null,
+            IAvaloniaUiDispatcher? dispatcher = null)
         {
             var operations = TestScopedOperationRunner.Create(services =>
                 services.AddSingleton<IDesktopRunService>(Runs));
@@ -303,9 +329,37 @@ public sealed class ProcessingViewModelTests
                 navigator ?? Navigator,
                 Notifications,
                 Bus,
-                Dispatcher,
+                dispatcher ?? Dispatcher,
                 new ProcessingOptions(_pollInterval, TimeSpan.Zero),
                 NullLogger<ProcessingViewModel>.Instance);
+        }
+    }
+
+    private sealed class QueueingUiDispatcher : IAvaloniaUiDispatcher
+    {
+        private readonly List<Action> _pending = [];
+
+        public IReadOnlyList<Action> Pending => _pending;
+
+        public Task<TResult> InvokeAsync<TResult>(Func<TResult> action, CancellationToken cancellationToken)
+            => Task.FromResult(action());
+
+        public Task InvokeAsync(Action action, CancellationToken cancellationToken)
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        public void Post(Action action) => _pending.Add(action);
+
+        public void RunPending()
+        {
+            var pending = _pending.ToArray();
+            _pending.Clear();
+            foreach (var action in pending)
+            {
+                action();
+            }
         }
     }
 

@@ -181,6 +181,13 @@ public sealed partial class ProcessingViewModel : ObservableObject, IPageViewMod
 
     private async void RefreshFromEvent()
     {
+        // 订阅在页面停用后释放,但停用前已投递到 UI 线程的事件回调仍可能执行;
+        // 页面不再活跃时直接忽略,避免在用户已离开处理页后刷新状态或触发跳转。
+        if (!_started)
+        {
+            return;
+        }
+
         try
         {
             await RefreshAsync(_pollCancellation?.Token ?? CancellationToken.None).ConfigureAwait(true);
@@ -339,6 +346,8 @@ public sealed partial class ProcessingViewModel : ObservableObject, IPageViewMod
         {
             if (_lastState != snapshot.RunState)
             {
+                // 先记录终态再写日志:导航失败后的下一次刷新重试不得重复追加终态日志。
+                _lastState = snapshot.RunState;
                 AppendLog(snapshot.RunState switch
                 {
                     RunState.Completed => ProcessingCopy.CompletedLog,

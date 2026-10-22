@@ -167,27 +167,33 @@ public sealed partial class AnalysisViewModel : ObservableObject, IPageViewModel
     {
         _started = false;
         _pollCancellation?.Cancel();
+        _pollCancellation?.Dispose();
+        _pollCancellation = null;
         return Task.CompletedTask;
     }
 
     public async Task RefreshAsync(CancellationToken cancellationToken)
     {
-        var runId = await ResolveRunIdAsync(cancellationToken).ConfigureAwait(true);
-        if (string.IsNullOrWhiteSpace(runId))
-        {
-            PageError = AnalysisCopy.RunUnavailable;
-            return;
-        }
-
         try
         {
+            var runId = await ResolveRunIdAsync(cancellationToken).ConfigureAwait(true);
+            if (string.IsNullOrWhiteSpace(runId))
+            {
+                PageError = AnalysisCopy.RunUnavailable;
+                return;
+            }
+
             var snapshot = await _operations.RunAsync(
                 (provider, token) => provider.GetRequiredService<IRunResultsQueryService>()
                     .GetAsync(runId, token),
                 cancellationToken).ConfigureAwait(true);
 
             Apply(snapshot);
-            PageError = string.Empty;
+            // 导出进行中由导出流程独占 PageError,轮询刷新不得清掉刚写入的导出失败提示。
+            if (!IsExporting)
+            {
+                PageError = string.Empty;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -295,6 +301,8 @@ public sealed partial class AnalysisViewModel : ObservableObject, IPageViewModel
     {
         _runSession.SetRunId(null);
         _runId = null;
+        // 上一轮的导出文件名不会出现在新批次快照里,必须显式清掉,避免跨批次残留。
+        LastExportFileName = string.Empty;
         return _navigator.NavigateAsync("settings", cancellationToken);
     }
 

@@ -198,7 +198,7 @@ public sealed class DesktopRunService : IDesktopRunService
             isRunning,
             isRunning && !stopRequested,
             stopRequested,
-            isRunning ? Math.Clamp(projection.Progress, 0, 99) : 100,
+            runState == RunState.Completed ? 100 : Math.Clamp(projection.Progress, 0, 99),
             isRunning ? SafeCode(projection.Stage) ?? SafeCode(state.Stage) ?? "processing" : runState.ToString().ToLowerInvariant(),
             stats,
             projection.Logs,
