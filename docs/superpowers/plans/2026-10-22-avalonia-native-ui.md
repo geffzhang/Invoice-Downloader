@@ -5200,7 +5200,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 - Produces: `AnalysisOptions(TimeSpan PollInterval)`,静态 `Production`(3s)与 `Fast`(10ms)。
 - Produces: `AnalysisGroupItem(string Key, string Label, int Count)`。
 - Produces: `AnalysisViewModel : ObservableObject, IPageViewModel`,成员:
-  - 汇总:`SuccessCount`、`RetentionCount`、`ManualCheckCount`、`ProcessingErrorCount`、`TotalCount`、`SummaryText`、`RelativeStatusText`。
+  - 汇总:`SuccessCount`、`RetentionCount`、`ManualCheckCount`、`ProcessingErrorCount`、`TotalCount`、`SummaryText`。
   - 横幅:`HasQuotaWarning` / `QuotaMessage`、`HasProcessingErrorWarning` / `ProcessingErrorWarning`、`HasManualReview` / `ManualReviewTitle`。
   - 目录与导出:`OutputPath`、`HasOutputPath`、`ManualCheckPath`、`LastExportFileName`、`HasLastExport`、`IsExporting` / `ExportButtonText`、`PageError` / `HasPageError`。
   - 列表:`GroupedErrors`(`ObservableCollection<AnalysisGroupItem>`)、`HasGroupedErrors`。
