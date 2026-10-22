@@ -1,8 +1,9 @@
 namespace InvoiceFlowAI.App.Navigation;
 
 /// <summary>
-/// 页面契约。生命周期回调执行期间持有导航锁,因此实现不得从
-/// <see cref="OnActivatedAsync"/> / <see cref="OnDeactivatedAsync"/> 中发起导航。
+/// 页面契约。实现不得从 <see cref="OnActivatedAsync"/> / <see cref="OnDeactivatedAsync"/>
+/// 中发起导航:由导航触发的回调持有导航锁,该场景会立即抛出
+/// <see cref="InvalidOperationException"/>。
 /// </summary>
 public interface IPageViewModel
 {

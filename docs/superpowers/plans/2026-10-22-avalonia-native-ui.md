@@ -1619,6 +1619,11 @@ Expected: 编译失败,`AppNavigator`、`ShellViewModel`、`IDisclaimerService` 
 ```csharp
 namespace InvoiceFlowAI.App.Navigation;
 
+/// <summary>
+/// 页面契约。实现不得从 <see cref="OnActivatedAsync"/> / <see cref="OnDeactivatedAsync"/>
+/// 中发起导航:由导航触发的回调持有导航锁,该场景会立即抛出
+/// <see cref="InvalidOperationException"/>。
+/// </summary>
 public interface IPageViewModel
 {
     string Key { get; }
@@ -1634,6 +1639,10 @@ public interface IPageViewModel
 ```csharp
 namespace InvoiceFlowAI.App.Navigation;
 
+/// <summary>
+/// 页面导航入口。不要在 <see cref="IPageViewModel"/> 的生命周期回调中调用:
+/// 回调期间导航锁已被持有,该场景会立即抛出 <see cref="InvalidOperationException"/>。
+/// </summary>
 public interface IAppNavigator
 {
     Task NavigateAsync(string key, CancellationToken cancellationToken = default);
@@ -1702,11 +1711,14 @@ public sealed partial class ShellViewModel : ObservableObject
 {
     private static readonly string[] PageOrder = ["settings", "processing", "analysis"];
 
-    private readonly IAppNavigator _navigator;
+    private readonly AppNavigator _navigator;
     private readonly IDisclaimerService _disclaimer;
     private readonly IDesktopPathLauncher _pathLauncher;
     private readonly IReadOnlyDictionary<string, IPageViewModel> _pages;
     private readonly SemaphoreSlim _navigationGate = new(1, 1);
+
+    // 生命周期回调持有导航锁;标记用于识别回调内发起的导航并快速失败,避免自死锁。
+    private static readonly AsyncLocal<bool> LifecycleCallbackActive = new();
 
     [ObservableProperty]
     private IPageViewModel? _currentPage;
@@ -1719,7 +1731,10 @@ public sealed partial class ShellViewModel : ObservableObject
         IDisclaimerService disclaimer,
         IDesktopPathLauncher pathLauncher)
     {
-        _navigator = navigator ?? throw new ArgumentNullException(nameof(navigator));
+        // 壳是导航图的唯一装配点,因此必须持有可 Attach 的具体实现。
+        _navigator = navigator as AppNavigator ?? throw new ArgumentException(
+            "Shell navigation requires an AppNavigator instance.",
+            nameof(navigator));
         _disclaimer = disclaimer ?? throw new ArgumentNullException(nameof(disclaimer));
         _pathLauncher = pathLauncher ?? throw new ArgumentNullException(nameof(pathLauncher));
         ArgumentNullException.ThrowIfNull(pages);
@@ -1754,12 +1769,18 @@ public sealed partial class ShellViewModel : ObservableObject
 
     public async Task NavigateAsync(string key, CancellationToken cancellationToken)
     {
+        if (LifecycleCallbackActive.Value)
+        {
+            throw new InvalidOperationException("导航不能在页面生命周期回调期间发起。");
+        }
+
         if (!_pages.TryGetValue(key, out var target) || ReferenceEquals(CurrentPage, target))
         {
             return;
         }
 
         await _navigationGate.WaitAsync(cancellationToken).ConfigureAwait(true);
+        LifecycleCallbackActive.Value = true;
         try
         {
             var previous = CurrentPage;
@@ -1773,6 +1794,7 @@ public sealed partial class ShellViewModel : ObservableObject
         }
         finally
         {
+            LifecycleCallbackActive.Value = false;
             _navigationGate.Release();
         }
     }
@@ -2197,7 +2219,14 @@ public sealed class EmbedWebViewHost : UserControl, IDisposable
         {
             try
             {
-                var ready = await _webView.InvokeScript("window.__invoiceFlowHostNavigate ? '1' : '0'");
+                // WebView2 的 InvokeScript 返回 JSON 编码后的原始结果,数字不带引号,
+                // 因此脚本返回数字而不是字符串,这里与 "1" 比较。
+                var ready = await _webView.InvokeScript("window.__invoiceFlowHostNavigate ? 1 : 0");
+                if (_disposed)
+                {
+                    return;
+                }
+
                 if (ready == "1")
                 {
                     await _webView.InvokeScript(
@@ -2211,6 +2240,10 @@ public sealed class EmbedWebViewHost : UserControl, IDisposable
             }
 
             await Task.Delay(100);
+            if (_disposed)
+            {
+                return;
+            }
         }
 
         _webView.Source = BuildIndexUri(page.Key);
