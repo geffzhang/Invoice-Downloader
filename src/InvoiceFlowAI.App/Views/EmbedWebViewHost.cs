@@ -49,7 +49,14 @@ public sealed class EmbedWebViewHost : UserControl, IDisposable
         {
             try
             {
-                var ready = await _webView.InvokeScript("window.__invoiceFlowHostNavigate ? '1' : '0'");
+                // WebView2 的 InvokeScript 返回 JSON 编码后的原始结果,数字不带引号,
+                // 因此脚本返回数字而不是字符串,这里与 "1" 比较。
+                var ready = await _webView.InvokeScript("window.__invoiceFlowHostNavigate ? 1 : 0");
+                if (_disposed)
+                {
+                    return;
+                }
+
                 if (ready == "1")
                 {
                     await _webView.InvokeScript(
@@ -63,6 +70,10 @@ public sealed class EmbedWebViewHost : UserControl, IDisposable
             }
 
             await Task.Delay(100);
+            if (_disposed)
+            {
+                return;
+            }
         }
 
         _webView.Source = BuildIndexUri(page.Key);

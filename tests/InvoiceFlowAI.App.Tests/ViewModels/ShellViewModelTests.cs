@@ -69,6 +69,29 @@ public sealed class ShellViewModelTests
         shell.CurrentPage.Should().BeSameAs(processing);
     }
 
+    [Fact]
+    public async Task Navigation_from_a_lifecycle_hook_fails_fast_instead_of_deadlocking()
+    {
+        var navigator = new AppNavigator();
+        var settings = new NavigatingPage("settings", navigator, "processing");
+        var processing = new FakePage("processing");
+        var shell = new ShellViewModel(
+            navigator,
+            new IPageViewModel[] { settings, processing },
+            new FakeDisclaimerService(),
+            new FakePathLauncher());
+
+        var initialization = shell.InitializeAsync(TestContext.Current.CancellationToken);
+
+        var exception = await FluentActions
+            .Awaiting(() => initialization.WaitAsync(
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken))
+            .Should().ThrowAsync<InvalidOperationException>();
+
+        exception.WithMessage("导航不能在页面生命周期回调期间发起。");
+    }
+
     private static ShellViewModel CreateShell(params FakePage[] pages)
         => new(
             new AppNavigator(),
@@ -95,6 +118,18 @@ public sealed class ShellViewModelTests
             Deactivations++;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class NavigatingPage(string key, AppNavigator navigator, string target) : IPageViewModel
+    {
+        public string Key { get; } = key;
+        public string Title => Key;
+        public string Eyebrow => "Step";
+
+        public Task OnActivatedAsync(CancellationToken cancellationToken)
+            => navigator.NavigateAsync(target, CancellationToken.None);
+
+        public Task OnDeactivatedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     private sealed class FakeDisclaimerService : IDisclaimerService

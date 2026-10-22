@@ -16,6 +16,9 @@ public sealed partial class ShellViewModel : ObservableObject
     private readonly IReadOnlyDictionary<string, IPageViewModel> _pages;
     private readonly SemaphoreSlim _navigationGate = new(1, 1);
 
+    // 生命周期回调持有导航锁;标记用于识别回调内发起的导航并快速失败,避免自死锁。
+    private static readonly AsyncLocal<bool> LifecycleCallbackActive = new();
+
     [ObservableProperty]
     private IPageViewModel? _currentPage;
 
@@ -65,12 +68,18 @@ public sealed partial class ShellViewModel : ObservableObject
 
     public async Task NavigateAsync(string key, CancellationToken cancellationToken)
     {
+        if (LifecycleCallbackActive.Value)
+        {
+            throw new InvalidOperationException("导航不能在页面生命周期回调期间发起。");
+        }
+
         if (!_pages.TryGetValue(key, out var target) || ReferenceEquals(CurrentPage, target))
         {
             return;
         }
 
         await _navigationGate.WaitAsync(cancellationToken).ConfigureAwait(true);
+        LifecycleCallbackActive.Value = true;
         try
         {
             var previous = CurrentPage;
@@ -84,6 +93,7 @@ public sealed partial class ShellViewModel : ObservableObject
         }
         finally
         {
+            LifecycleCallbackActive.Value = false;
             _navigationGate.Release();
         }
     }
