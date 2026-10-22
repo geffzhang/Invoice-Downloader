@@ -37,7 +37,7 @@ public sealed class AppServiceProviderFactoryTests
                 context.Runs.AddRange(
                     NewRun("prior-run-a", @"C:\Invoices\A"),
                     NewRun("prior-run-b", @"D:\Invoices\B"));
-                await context.SaveChangesAsync();
+                await context.SaveChangesAsync(TestContext.Current.CancellationToken);
             }
 
             await using var provider = AppServiceProviderFactory.Create(
@@ -113,13 +113,13 @@ public sealed class AppServiceProviderFactoryTests
                     .Should().NotBeSameAs(scope.ServiceProvider.GetRequiredService<IDesktopRunService>());
 
                 var settings = await scope.ServiceProvider.GetRequiredService<IUserSettingsStore>()
-                    .LoadAsync(CancellationToken.None);
+                    .LoadAsync(TestContext.Current.CancellationToken);
 
                 settings.RuleSetId.Should().Be("default");
                 settings.RuleSetVersion.Should().Be(1);
                 settings.Revision.Should().BeGreaterThan(0);
                 (await scope.ServiceProvider.GetRequiredService<InvoiceFlowAI.Infrastructure.Persistence.InvoiceFlowDbContext>()
-                    .Database.GetPendingMigrationsAsync()).Should().BeEmpty();
+                    .Database.GetPendingMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken)).Should().BeEmpty();
             }
         }
         finally
@@ -202,20 +202,20 @@ public sealed class AppServiceProviderFactoryTests
 
                 var invalidStart = await dispatcher.DispatchAsync(
                     new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, "invalid-run", "run.start", null),
-                    CancellationToken.None);
+                    TestContext.Current.CancellationToken);
                 invalidStart.Ok.Should().BeFalse();
                 invalidStart.Error!.Code.Should().Be(RpcDispatcher.InvalidParamsCode);
 
                 var missingReport = await dispatcher.DispatchAsync(
                     new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, "missing-report", "run.report.export",
                         JsonSerializer.SerializeToElement(new ReportExportRequest("missing-run"), JsonOptions.Default)),
-                    CancellationToken.None);
+                    TestContext.Current.CancellationToken);
                 missingReport.Ok.Should().BeFalse();
                 missingReport.Error!.Code.Should().Be(RpcErrorCodes.ReportExportFailed);
 
                 var missingResults = await dispatcher.DispatchAsync(
                     new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, "missing-results", "run.results.get", null),
-                    CancellationToken.None);
+                    TestContext.Current.CancellationToken);
                 missingResults.Ok.Should().BeFalse();
                 missingResults.Error!.Code.Should().Be(RpcErrorCodes.RunNotFound);
             }
@@ -236,7 +236,7 @@ public sealed class AppServiceProviderFactoryTests
             : JsonSerializer.SerializeToElement(parameters, JsonOptions.Default);
         var response = await dispatcher.DispatchAsync(
             new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, Guid.NewGuid().ToString("N"), method, element),
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
         response.Ok.Should().BeTrue(response.Error?.UserMessage);
         return response.Result!.Value;
     }

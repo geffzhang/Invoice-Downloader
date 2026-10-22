@@ -51,7 +51,7 @@ public sealed class EfRunLifecycleStoreTests : IClassFixture<SqliteTestFixture>
         persisted!.State.Should().Be(RunLifecycleState.Created);
         persisted.Stage.Should().Be("admitted");
         persisted.CancellationRequestedAtUtc.Should().BeNull();
-        var row = await context.Runs.FindAsync("run-1");
+        var row = await context.Runs.FindAsync(new object?[] { "run-1" }, TestContext.Current.CancellationToken);
         row!.AccountId.Should().Be("account-1");
         row.OutputRoot.Should().Be("C:\\Invoices");
         row.DateToExclusive.Should().Be(new DateOnly(2026, 10, 1));

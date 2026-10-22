@@ -13,7 +13,7 @@ public sealed class PdfiumPageRendererTests
     public async Task Render_caps_page_dimensions_and_image_bytes_and_preserves_page_order()
     {
         var path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.pdf");
-        await File.WriteAllBytesAsync(path, CreatePdf(pageCount: 3));
+        await File.WriteAllBytesAsync(path, CreatePdf(pageCount: 3), TestContext.Current.CancellationToken);
         try
         {
             var renderer = new PdfiumPageRenderer();
@@ -53,7 +53,7 @@ public sealed class PdfiumPageRendererTests
     {
         const string secretPath = "private-corrupt-pdf-sentinel";
         var path = Path.Combine(Path.GetTempPath(), secretPath);
-        await File.WriteAllTextAsync(path, "not a pdf");
+        await File.WriteAllTextAsync(path, "not a pdf", TestContext.Current.CancellationToken);
         try
         {
             var exception = await Assert.ThrowsAsync<InvalidDataException>(() => new PdfiumPageRenderer().RenderAsync(
@@ -72,7 +72,7 @@ public sealed class PdfiumPageRendererTests
     public async Task Render_enforces_raw_image_byte_cap_before_allocating_bitmap()
     {
         var path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.pdf");
-        await File.WriteAllBytesAsync(path, CreatePdf(pageCount: 1));
+        await File.WriteAllBytesAsync(path, CreatePdf(pageCount: 1), TestContext.Current.CancellationToken);
         try
         {
             var act = () => new PdfiumPageRenderer().RenderAsync(

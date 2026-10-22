@@ -24,7 +24,7 @@ public sealed class ArchiveRecoveryServiceTests
     {
         var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "DesktopParity", "archive-recovery.json");
         var fixtures = JsonSerializer.Deserialize<ArchiveRecoveryFixtureSet>(
-            await File.ReadAllTextAsync(fixturePath),
+            await File.ReadAllTextAsync(fixturePath, TestContext.Current.CancellationToken),
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
             ?? throw new InvalidDataException("Archive recovery fixtures are empty.");
 

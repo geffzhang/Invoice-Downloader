@@ -20,7 +20,7 @@ public sealed class UserSettingsStoreTests : IClassFixture<SqliteTestFixture>
         await _fixture.ResetAsync();
         await using var context = _fixture.CreateContext();
         context.UserSettings.Add(NewRow(companyName: "Example Buyer", lastOutputDirectory: "C:/Invoices"));
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         var store = new EfUserSettingsStore(context, new EfUnitOfWorkFactory(context));
 
         var snapshot = await store.LoadAsync(CancellationToken.None);
@@ -36,7 +36,7 @@ public sealed class UserSettingsStoreTests : IClassFixture<SqliteTestFixture>
         await _fixture.ResetAsync();
         await using var context = _fixture.CreateContext();
         context.UserSettings.Add(NewRow());
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         var store = new EfUserSettingsStore(context, new EfUnitOfWorkFactory(context));
 
         var snapshot = await store.UpdateAsync(
@@ -54,7 +54,7 @@ public sealed class UserSettingsStoreTests : IClassFixture<SqliteTestFixture>
         await _fixture.ResetAsync();
         await using var context = _fixture.CreateContext();
         context.UserSettings.Add(NewRow());
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         var store = new EfUserSettingsStore(context, new EfUnitOfWorkFactory(context));
 
         var act = () => store.UpdateAsync(
@@ -71,7 +71,7 @@ public sealed class UserSettingsStoreTests : IClassFixture<SqliteTestFixture>
         await _fixture.ResetAsync();
         await using var context = _fixture.CreateContext();
         context.UserSettings.Add(NewRow());
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         var store = new EfUserSettingsStore(context, new EfUnitOfWorkFactory(context));
 
         var original = await store.LoadAsync(CancellationToken.None);
@@ -88,7 +88,7 @@ public sealed class UserSettingsStoreTests : IClassFixture<SqliteTestFixture>
         await _fixture.ResetAsync();
         await using var context = _fixture.CreateContext();
         context.UserSettings.Add(NewRow(revision: 1));
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         var store = new EfUserSettingsStore(context, new EfUnitOfWorkFactory(context));
         var imported = NewSnapshot("Imported Buyer", "C:/LegacyInvoices");
 
@@ -98,7 +98,7 @@ public sealed class UserSettingsStoreTests : IClassFixture<SqliteTestFixture>
         var actual = await store.LoadAsync(CancellationToken.None);
         actual.CompanyName.Should().Be("Imported Buyer");
         actual.LastOutputDirectory.Should().Be("C:/LegacyInvoices");
-        (await context.LegacyImportState.FindAsync("settings-snapshot-v1")).Should().NotBeNull();
+        (await context.LegacyImportState.FindAsync(new object?[] { "settings-snapshot-v1" }, TestContext.Current.CancellationToken)).Should().NotBeNull();
     }
 
     private static UserSettingsRow NewRow(

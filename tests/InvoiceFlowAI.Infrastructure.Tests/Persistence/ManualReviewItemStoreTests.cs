@@ -26,7 +26,7 @@ public sealed class ManualReviewItemStoreTests : IClassFixture<SqliteTestFixture
             Stage = "pairing",
             CreatedAtUtc = DateTimeOffset.UnixEpoch,
         });
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         foreach (var documentId in new[] { "invoice-anchor", "companion-a", "companion-b" })
         {
             context.Documents.Add(new DocumentSourceRow
@@ -37,7 +37,7 @@ public sealed class ManualReviewItemStoreTests : IClassFixture<SqliteTestFixture
                 CreatedAtUtc = DateTimeOffset.UnixEpoch,
             });
         }
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         var sequence = 0L;
         foreach (var documentId in new[] { "invoice-anchor", "companion-a", "companion-b" })
         {
@@ -52,7 +52,7 @@ public sealed class ManualReviewItemStoreTests : IClassFixture<SqliteTestFixture
                 UpdatedAtUtc = DateTimeOffset.UnixEpoch,
             });
         }
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var store = new EfManualReviewItemStore(context);
         await using (var transaction = await BeginAsync(context))
@@ -67,7 +67,7 @@ public sealed class ManualReviewItemStoreTests : IClassFixture<SqliteTestFixture
             await transaction.CommitAsync(CancellationToken.None);
         }
 
-        var rows = await context.ManualReviewItems.AsNoTracking().OrderBy(row => row.DocumentId).ToListAsync();
+        var rows = await context.ManualReviewItems.AsNoTracking().OrderBy(row => row.DocumentId).ToListAsync(cancellationToken: TestContext.Current.CancellationToken);
         rows.Should().HaveCount(2);
         rows.Select(row => row.DocumentId).Should().Equal("companion-a", "companion-b");
         rows.Select(row => row.ReasonCode).Should().Equal("AMBIGUOUS_OPTIMUM", "NO_COMPATIBLE_EDGE");

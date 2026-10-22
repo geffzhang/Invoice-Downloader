@@ -139,12 +139,12 @@ public sealed class SimdPaddleOcrFallbackTests
             const string relativePath = "ocr/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.dll";
             var stagedAssembly = Path.Combine(modelRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
             File.Copy(packageAssembly.Location, stagedAssembly);
-            var bytes = await File.ReadAllBytesAsync(stagedAssembly);
+            var bytes = await File.ReadAllBytesAsync(stagedAssembly, TestContext.Current.CancellationToken);
             var asset = new ModelManifestAsset(relativePath, bytes.LongLength,
                 Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), "model-bundle", "1.0.0", null);
             var manifest = new ModelManifest(1, "Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny", [asset], "fixture");
             var manifestPath = Path.Combine(manifestDirectory, "model.json");
-            await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, InvoiceJsonOptions.Strict));
+            await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, InvoiceJsonOptions.Strict), TestContext.Current.CancellationToken);
             await using var fallback = new SimdPaddleOcrFallback(new SimdPaddleOcrOptions(
                 "det", "cls", "rec", "dict", UseEmbeddedModels: true, ModelManifestPath: manifestPath));
 

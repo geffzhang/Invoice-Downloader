@@ -124,7 +124,7 @@ public sealed class ImagePageRendererTests
     {
         const string secretPath = "private-corrupt-image-sentinel";
         var path = Path.Combine(Path.GetTempPath(), secretPath);
-        await File.WriteAllTextAsync(path, "not an image");
+        await File.WriteAllTextAsync(path, "not an image", TestContext.Current.CancellationToken);
         try
         {
             var exception = await Assert.ThrowsAsync<InvalidDataException>(() => new ImagePageRenderer().RenderAsync(

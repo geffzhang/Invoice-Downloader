@@ -41,7 +41,7 @@ public sealed class RunExecutionServiceTests
 
         await service.ExecuteAsync(new RunStartRequest(
             "run-recovery", "account-1", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30),
-            outputRoot, "Example Co", "standard"), CancellationToken.None);
+            outputRoot, "Example Co", "standard"), TestContext.Current.CancellationToken);
 
         recovery.OutputRoots.Should().ContainSingle().Which.Should().Be(outputRoot);
         order.IndexOf("archive-recovery").Should().BeLessThan(order.IndexOf("commit:1"));
@@ -73,7 +73,7 @@ public sealed class RunExecutionServiceTests
 
         await service.ExecuteAsync(new RunStartRequest(
             "run-empty", "account-1", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30),
-            Path.GetTempPath(), "Example Co", "standard"), CancellationToken.None);
+            Path.GetTempPath(), "Example Co", "standard"), TestContext.Current.CancellationToken);
 
         coordinator.FinalizationRequests.Should().ContainSingle();
         coordinator.FinalizationRequests[0].RunId.Should().Be("run-empty");
@@ -119,7 +119,7 @@ public sealed class RunExecutionServiceTests
 
         await service.ExecuteAsync(new RunStartRequest(
             "run-fetch-diagnostic", "account-1", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30),
-            Path.GetTempPath(), "Example Co", "standard"), CancellationToken.None);
+            Path.GetTempPath(), "Example Co", "standard"), TestContext.Current.CancellationToken);
 
         var diagnosticProgress = publisher.Events
             .Where(item => item.EventName == "run.progress")
@@ -161,14 +161,14 @@ public sealed class RunExecutionServiceTests
 
         var execution = service.ExecuteAsync(new RunStartRequest(
             "run-progress-barrier", "account-1", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30),
-            Path.GetTempPath(), "Example Co", "standard"), CancellationToken.None);
-        await coordinator.BlockedPacketCommit.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Path.GetTempPath(), "Example Co", "standard"), TestContext.Current.CancellationToken);
+        await coordinator.BlockedPacketCommit.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         execution.IsCompleted.Should().BeFalse();
         publisher.Events.Should().NotContain(item => item.EventName == "run.terminal");
         coordinator.ReleasePacketCommit.TrySetResult();
 
-        await execution.WaitAsync(TimeSpan.FromSeconds(5));
+        await execution.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         publisher.Events.Last().EventName.Should().Be("run.terminal");
         order.IndexOf("finalize").Should().BeLessThan(order.IndexOf("publish:" + publisher.Events.Last().Sequence));
@@ -216,7 +216,7 @@ public sealed class RunExecutionServiceTests
 
         await service.ExecuteAsync(new RunStartRequest(
             "run-one", "account-1", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30),
-            Path.GetTempPath(), "Example Co", "standard"), CancellationToken.None);
+            Path.GetTempPath(), "Example Co", "standard"), TestContext.Current.CancellationToken);
 
         coordinator.FinalizationRequests.Should().ContainSingle();
         coordinator.FinalizationRequests[0].CandidateResults.Select(result => result.Candidate.DocumentId.Value)
@@ -268,7 +268,7 @@ public sealed class RunExecutionServiceTests
 
         await service.ExecuteAsync(new RunStartRequest(
             "run-commit-failed", "account-1", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30),
-            Path.GetTempPath(), "Example Co", "standard"), CancellationToken.None);
+            Path.GetTempPath(), "Example Co", "standard"), TestContext.Current.CancellationToken);
 
         coordinator.FinalizationRequests.Should().ContainSingle();
         coordinator.FinalizationRequests[0].RunFailure.Should().NotBeNull();
@@ -299,7 +299,7 @@ public sealed class RunExecutionServiceTests
 
         await service.ExecuteAsync(new RunStartRequest(
             "run-failed-stage", "account-1", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30),
-            Path.GetTempPath(), "Example Co", "standard"), CancellationToken.None);
+            Path.GetTempPath(), "Example Co", "standard"), TestContext.Current.CancellationToken);
 
         coordinator.FinalizationRequests.Should().ContainSingle();
         var runFailure = coordinator.FinalizationRequests[0].RunFailure;

@@ -34,7 +34,7 @@ public sealed class UrlRecoveryWorkerManifestStoreTests : IDisposable
     {
         Directory.CreateDirectory(_root);
         var path = Path.Combine(_root, "result.json");
-        await File.WriteAllTextAsync(path, "{\"schemaVersion\":99,\"artifacts\":[]}");
+        await File.WriteAllTextAsync(path, "{\"schemaVersion\":99,\"artifacts\":[]}", TestContext.Current.CancellationToken);
         var store = new UrlRecoveryWorkerManifestStore();
 
         var act = () => store.ReadResponseAsync(path, CancellationToken.None);
@@ -49,8 +49,7 @@ public sealed class UrlRecoveryWorkerManifestStoreTests : IDisposable
         Directory.CreateDirectory(_root);
         var path = Path.Combine(_root, "result.json");
         var rooted = OperatingSystem.IsWindows() ? "C:\\outside.pdf" : "/outside.pdf";
-        await File.WriteAllTextAsync(path,
-            $$"""{"schemaVersion":1,"failureReasonCode":null,"selectedArtifactIndex":0,"artifacts":[{"relativePath":"{{rooted}}","kind":0,"contentType":"application/pdf","byteLength":8,"sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","sourceUrlOrdinal":0,"sanitizedResolvedOrigin":"https://files.example","invoiceFields":{},"expectedMatch":true,"matchReasonCode":"matched_pdf"}]}""");
+        await File.WriteAllTextAsync(path, $$"""{"schemaVersion":1,"failureReasonCode":null,"selectedArtifactIndex":0,"artifacts":[{"relativePath":"{{rooted}}","kind":0,"contentType":"application/pdf","byteLength":8,"sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","sourceUrlOrdinal":0,"sanitizedResolvedOrigin":"https://files.example","invoiceFields":{},"expectedMatch":true,"matchReasonCode":"matched_pdf"}]}""", TestContext.Current.CancellationToken);
         var store = new UrlRecoveryWorkerManifestStore();
 
         var act = () => store.ReadResponseAsync(path, CancellationToken.None);

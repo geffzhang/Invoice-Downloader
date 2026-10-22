@@ -57,7 +57,7 @@ public sealed class PinnedHttpUrlRecoveryTransportTests
             requestLine = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(3)) ?? string.Empty;
             while (!string.IsNullOrEmpty(await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(3)))) { }
             await stream.WriteAsync("HTTP/1.1 502 Synthetic Stop\r\nContent-Length: 0\r\n\r\n"u8.ToArray());
-        });
+        }, TestContext.Current.CancellationToken);
         var validated = ProxyValidatedUrl("https://invoice.example/invoice", proxyPort);
         var transport = new PinnedHttpUrlRecoveryTransport(new PublicUrlPolicy());
         using var handler = transport.CreatePinnedHandler(validated);
@@ -107,15 +107,15 @@ public sealed class PinnedHttpUrlRecoveryTransportTests
             catch (IOException)
             {
             }
-        });
+        }, TestContext.Current.CancellationToken);
         var validated = HttpsProxyValidatedUrl("https://invoice.example/invoice", proxyPort);
         var transport = new PinnedHttpUrlRecoveryTransport(new PublicUrlPolicy());
 
         var act = () => transport.SendAsync(new UrlTransportRequest(validated, HttpMethod.Get), 1024, CancellationToken.None);
 
         await act.Should().ThrowAsync<HttpRequestException>();
-        (await serverName.Task.WaitAsync(TimeSpan.FromSeconds(3))).Should().Be("proxy.example");
-        await proxyTask.WaitAsync(TimeSpan.FromSeconds(3));
+        (await serverName.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken)).Should().Be("proxy.example");
+        await proxyTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -157,7 +157,7 @@ public sealed class PinnedHttpUrlRecoveryTransportTests
                 if (line.StartsWith("Host:", StringComparison.OrdinalIgnoreCase)) hostHeader = line[5..].Trim();
             }
             await stream.WriteAsync("HTTP/1.1 200 OK\r\nContent-Length: 3\r\nContent-Type: application/pdf\r\nConnection: close\r\n\r\nPDF"u8.ToArray());
-        });
+        }, TestContext.Current.CancellationToken);
         var validated = ProxyValidatedUrl("http://invoice.example/invoice", proxyPort);
         var transport = new PinnedHttpUrlRecoveryTransport(new PublicUrlPolicy());
 

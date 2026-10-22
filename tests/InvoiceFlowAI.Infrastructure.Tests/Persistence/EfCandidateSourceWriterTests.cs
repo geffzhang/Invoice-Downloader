@@ -26,7 +26,7 @@ public sealed class EfCandidateSourceWriterTests : IClassFixture<SqliteTestFixtu
         }
 
         await using var queryContext = _fixture.CreateContext();
-        var source = await queryContext.Documents.FindAsync("artifact-identity");
+        var source = await queryContext.Documents.FindAsync(new object?[] { "artifact-identity" }, TestContext.Current.CancellationToken);
         source.Should().NotBeNull();
         source!.ProviderGroupKey.Should().Be("opaque-group-key");
         source.ContentHash.Should().Be(new string('a', 64));

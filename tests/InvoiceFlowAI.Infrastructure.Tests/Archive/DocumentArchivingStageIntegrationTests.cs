@@ -64,15 +64,15 @@ public sealed class DocumentArchivingStageIntegrationTests : IClassFixture<Sqlit
             File.Exists(Path.Combine(outputRoot, result.Artifacts[1].RelativePath!.Replace('/', Path.DirectorySeparatorChar))).Should().BeTrue();
 
             await using var queryContext = _fixture.CreateContext();
-            var pair = await queryContext.Pairings.AsNoTracking().SingleAsync();
+            var pair = await queryContext.Pairings.AsNoTracking().SingleAsync(cancellationToken: TestContext.Current.CancellationToken);
             pair.State.Should().Be("Committed");
-            var artifacts = await queryContext.ArchivedArtifacts.AsNoTracking().OrderBy(row => row.DocumentId).ToListAsync();
+            var artifacts = await queryContext.ArchivedArtifacts.AsNoTracking().OrderBy(row => row.DocumentId).ToListAsync(cancellationToken: TestContext.Current.CancellationToken);
             artifacts.Should().HaveCount(2).And.OnlyContain(artifact => artifact.State == "Committed");
             var auditSequences = await queryContext.AuditEvents.AsNoTracking()
                 .Where(row => row.RunId == runId)
                 .OrderBy(row => row.EventSequence)
                 .Select(row => row.EventSequence)
-                .ToListAsync();
+                .ToListAsync(cancellationToken: TestContext.Current.CancellationToken);
             auditSequences.Should().Equal(1, 2, 3, 4);
         }
         finally
@@ -130,11 +130,11 @@ public sealed class DocumentArchivingStageIntegrationTests : IClassFixture<Sqlit
             result.Results.Single(item => item.Candidate.DocumentId.Value == "cwt-hotel").Failure!.ReasonCode.Should().Be("CWT_CANCELLATION_MATCH");
             result.Artifacts.Single(item => item.DocumentId == "cwt-hotel").RelativePath.Should().Contain("/review/");
             await using var queryContext = _fixture.CreateContext();
-            var hotelArtifact = await queryContext.ArchivedArtifacts.AsNoTracking().SingleAsync(row => row.DocumentId == "cwt-hotel");
+            var hotelArtifact = await queryContext.ArchivedArtifacts.AsNoTracking().SingleAsync(row => row.DocumentId == "cwt-hotel", cancellationToken: TestContext.Current.CancellationToken);
             var sourceFileName = await queryContext.ArchivedArtifacts.AsNoTracking()
                 .Where(row => row.DocumentId == "cwt-hotel")
                 .Select(row => EF.Property<string?>(row, "SourceFileName"))
-                .SingleAsync();
+                .SingleAsync(cancellationToken: TestContext.Current.CancellationToken);
             sourceFileName.Should().Be(Path.GetFileName(hotelSource));
             hotelArtifact.State.Should().Be("Committed");
             hotelArtifact.RelativePath.Should().Contain("/review/");
@@ -142,15 +142,15 @@ public sealed class DocumentArchivingStageIntegrationTests : IClassFixture<Sqlit
             var reviewReasons = await queryContext.ManualReviewItems.AsNoTracking()
                 .Where(row => row.RunId == runId && row.DocumentId == "cwt-hotel")
                 .Select(row => row.ReasonCode)
-                .ToListAsync();
+                .ToListAsync(cancellationToken: TestContext.Current.CancellationToken);
             reviewReasons.Should().ContainSingle().Which.Should().Be("CWT_CANCELLATION_MATCH");
             var cwtAudit = await queryContext.AuditEvents.AsNoTracking()
                 .Where(row => row.RunId == runId && row.ReasonCode == "CWT_CANCELLATION_MATCH")
-                .ToListAsync();
+                .ToListAsync(cancellationToken: TestContext.Current.CancellationToken);
             cwtAudit.Should().ContainSingle();
             var movedPath = Path.Combine(outputRoot, hotelArtifact.RelativePath.Replace('/', Path.DirectorySeparatorChar));
             File.Exists(movedPath).Should().BeTrue();
-            var sidecar = await File.ReadAllTextAsync($"{movedPath}.json");
+            var sidecar = await File.ReadAllTextAsync($"{movedPath}.json", TestContext.Current.CancellationToken);
             sidecar.Should().Contain("cwt-cancel").And.Contain("cwt-hotel").And.NotContain("张三");
         }
         finally

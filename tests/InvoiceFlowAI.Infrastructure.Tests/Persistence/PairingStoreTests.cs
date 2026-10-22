@@ -34,7 +34,7 @@ public sealed class PairingStoreTests : IClassFixture<SqliteTestFixture>
             await transaction.CommitAsync(CancellationToken.None);
         }
 
-        var rows = await context.Pairings.AsNoTracking().ToListAsync();
+        var rows = await context.Pairings.AsNoTracking().ToListAsync(cancellationToken: TestContext.Current.CancellationToken);
         rows.Should().ContainSingle();
         rows[0].CompanionDocumentIdsJson.Should().Be("[\"companion-a\",\"companion-b\"]");
         rows[0].CompanionProcessingRevisionsJson.Should().Be("[1,2]");
@@ -54,10 +54,10 @@ public sealed class PairingStoreTests : IClassFixture<SqliteTestFixture>
             await using var transaction = await BeginAsync(context);
             await store.UpsertAsync(NewPairing("run-2", "invoice-2", state, [new("companion-2", 0)]), transaction, CancellationToken.None);
             await transaction.CommitAsync(CancellationToken.None);
-            (await context.Pairings.AsNoTracking().SingleAsync()).State.Should().Be(state);
+            (await context.Pairings.AsNoTracking().SingleAsync(cancellationToken: TestContext.Current.CancellationToken)).State.Should().Be(state);
         }
 
-        (await context.Pairings.CountAsync()).Should().Be(1);
+        (await context.Pairings.CountAsync(cancellationToken: TestContext.Current.CancellationToken)).Should().Be(1);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public sealed class PairingStoreTests : IClassFixture<SqliteTestFixture>
             await store.ReconcileArchiveStateAsync("run-reconcile", [invoiceArtifact, companionPrepared], transaction, CancellationToken.None);
             await transaction.CommitAsync(CancellationToken.None);
         }
-        var partial = await context.Pairings.AsNoTracking().SingleAsync();
+        var partial = await context.Pairings.AsNoTracking().SingleAsync(cancellationToken: TestContext.Current.CancellationToken);
         partial.State.Should().Be("RecoveryRequired");
         partial.ReasonCode.Should().Be("PAIR_ARCHIVE_MEMBER_PREPARED");
 
@@ -90,7 +90,7 @@ public sealed class PairingStoreTests : IClassFixture<SqliteTestFixture>
             await store.ReconcileArchiveStateAsync("run-reconcile", [invoiceArtifact, companionPrepared with { State = ArchiveArtifactState.Committed }], transaction, CancellationToken.None);
             await transaction.CommitAsync(CancellationToken.None);
         }
-        var completed = await context.Pairings.AsNoTracking().SingleAsync();
+        var completed = await context.Pairings.AsNoTracking().SingleAsync(cancellationToken: TestContext.Current.CancellationToken);
         completed.State.Should().Be("Committed");
         completed.ReasonCode.Should().BeEmpty();
     }
@@ -118,7 +118,7 @@ public sealed class PairingStoreTests : IClassFixture<SqliteTestFixture>
             await transaction.CommitAsync(CancellationToken.None);
         }
 
-        var pair = await context.Pairings.AsNoTracking().SingleAsync();
+        var pair = await context.Pairings.AsNoTracking().SingleAsync(cancellationToken: TestContext.Current.CancellationToken);
         pair.State.Should().Be("RecoveryRequired");
         pair.ReasonCode.Should().Be("PAIR_ARCHIVE_MEMBER_RECOVERY_REQUIRED");
     }

@@ -32,8 +32,8 @@ public sealed class CwtArchiveInventoryTests : IClassFixture<SqliteTestFixture>
             var hotelPath = Path.Combine(outputRoot, "archive", "prior-run", "generated-hotel.pdf");
             var otherPath = Path.Combine(outputRoot, "archive", "prior-run", "other.pdf");
             Directory.CreateDirectory(Path.GetDirectoryName(hotelPath)!);
-            await File.WriteAllTextAsync(hotelPath, "prior hotel bytes");
-            await File.WriteAllTextAsync(otherPath, "other document bytes");
+            await File.WriteAllTextAsync(hotelPath, "prior hotel bytes", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(otherPath, "other document bytes", TestContext.Current.CancellationToken);
             await SeedArtifactAsync(outputRoot, "prior-hotel-run", "hotel-doc", "invoice-hotel",
                 "20260610_住宿确认单_张三酒店.pdf", hotelPath, "generated-hotel.pdf", null,
                 InvoiceDocumentType.AccommodationConfirmation);
@@ -71,7 +71,7 @@ public sealed class CwtArchiveInventoryTests : IClassFixture<SqliteTestFixture>
         var outputRoot = CreateRoot();
         var reviewedPath = Path.Combine(outputRoot, "archive", "prior-run", "review", "hotel.pdf");
         Directory.CreateDirectory(Path.GetDirectoryName(reviewedPath)!);
-        await File.WriteAllTextAsync(reviewedPath, "already reviewed hotel bytes");
+        await File.WriteAllTextAsync(reviewedPath, "already reviewed hotel bytes", TestContext.Current.CancellationToken);
         try
         {
             await SeedArtifactAsync(outputRoot, "prior-run", "reviewed-hotel", "reviewed-invoice",
@@ -101,13 +101,13 @@ public sealed class CwtArchiveInventoryTests : IClassFixture<SqliteTestFixture>
             var nestedDirectory = Path.Combine(accommodationDirectory, "nested");
             Directory.CreateDirectory(nestedDirectory);
             var legacyPath = Path.Combine(accommodationDirectory, "20260610_住宿确认单_张三酒店.pdf");
-            await File.WriteAllTextAsync(legacyPath, "unregistered hotel bytes");
-            await File.WriteAllTextAsync(Path.Combine(nestedDirectory, "nested_张三酒店.pdf"), "nested bytes");
+            await File.WriteAllTextAsync(legacyPath, "unregistered hotel bytes", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(nestedDirectory, "nested_张三酒店.pdf"), "nested bytes", TestContext.Current.CancellationToken);
 
             await using var context = _fixture.CreateContext();
             var inventory = CreateInventory(context);
             var items = await inventory.ListAsync(outputRoot, CancellationToken.None);
-            var persisted = await context.LegacyArchiveInventory.AsNoTracking().ToListAsync();
+            var persisted = await context.LegacyArchiveInventory.AsNoTracking().ToListAsync(cancellationToken: TestContext.Current.CancellationToken);
 
             items.Should().ContainSingle(item => item.SourceFileName.Contains("张三酒店", StringComparison.Ordinal))
                 .Which.Should().BeEquivalentTo(new
@@ -123,8 +123,8 @@ public sealed class CwtArchiveInventoryTests : IClassFixture<SqliteTestFixture>
                 });
             items.Should().NotContain(item => item.SourceFileName.StartsWith("nested_", StringComparison.Ordinal));
             persisted.Should().ContainSingle().Which.SourceFileName.Should().Be("20260610_住宿确认单_张三酒店.pdf");
-            (await context.Documents.CountAsync()).Should().Be(0);
-            (await context.ArchivedArtifacts.CountAsync()).Should().Be(0);
+            (await context.Documents.CountAsync(cancellationToken: TestContext.Current.CancellationToken)).Should().Be(0);
+            (await context.ArchivedArtifacts.CountAsync(cancellationToken: TestContext.Current.CancellationToken)).Should().Be(0);
         }
         finally
         {
@@ -139,16 +139,16 @@ public sealed class CwtArchiveInventoryTests : IClassFixture<SqliteTestFixture>
         var outputRoot = CreateRoot();
         var filePath = Path.Combine(outputRoot, "住宿发票", "20260610_住宿确认单_张三酒店.pdf");
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
-        await File.WriteAllTextAsync(filePath, "first version");
+        await File.WriteAllTextAsync(filePath, "first version", TestContext.Current.CancellationToken);
         try
         {
             await using var context = _fixture.CreateContext();
             var inventory = CreateInventory(context);
             var first = await inventory.ListAsync(outputRoot, CancellationToken.None);
-            await File.WriteAllTextAsync(filePath, "replacement version");
+            await File.WriteAllTextAsync(filePath, "replacement version", TestContext.Current.CancellationToken);
 
             var current = await inventory.ListAsync(outputRoot, CancellationToken.None);
-            var persisted = await context.LegacyArchiveInventory.AsNoTracking().ToListAsync();
+            var persisted = await context.LegacyArchiveInventory.AsNoTracking().ToListAsync(cancellationToken: TestContext.Current.CancellationToken);
 
             first.Should().ContainSingle();
             current.Should().ContainSingle().Which.ContentHash.Should().Be(Hash("replacement version"));
@@ -171,8 +171,8 @@ public sealed class CwtArchiveInventoryTests : IClassFixture<SqliteTestFixture>
         var priorArtifactPath = Path.Combine(outputRoot, "archive", "prior-run", "generated-hotel.pdf");
         Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
         Directory.CreateDirectory(Path.GetDirectoryName(priorArtifactPath)!);
-        await File.WriteAllTextAsync(sourcePath, "unregistered hotel bytes");
-        await File.WriteAllTextAsync(priorArtifactPath, "prior run hotel bytes");
+        await File.WriteAllTextAsync(sourcePath, "unregistered hotel bytes", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(priorArtifactPath, "prior run hotel bytes", TestContext.Current.CancellationToken);
         try
         {
             await SeedArtifactAsync(outputRoot, "prior-cwt-run", "prior-hotel-doc", "prior-hotel-invoice",
@@ -190,7 +190,7 @@ public sealed class CwtArchiveInventoryTests : IClassFixture<SqliteTestFixture>
                 StartedAtUtc = DateTimeOffset.UtcNow,
                 CreatedAtUtc = DateTimeOffset.UtcNow,
             });
-            await context.SaveChangesAsync();
+            await context.SaveChangesAsync(TestContext.Current.CancellationToken);
             var fileSystem = new PhysicalArchiveFileSystem();
             var artifactStore = new EfArchiveArtifactStore(context);
             var legacyStore = new EfLegacyArchiveInventoryStore(context);
@@ -226,21 +226,21 @@ public sealed class CwtArchiveInventoryTests : IClassFixture<SqliteTestFixture>
                 result.UpdatedRelativePaths["prior-hotel-doc"].Replace('/', Path.DirectorySeparatorChar));
             File.Exists(legacyTarget).Should().BeTrue();
             File.Exists(artifactTarget).Should().BeTrue();
-            (await File.ReadAllTextAsync(legacyTarget)).Should().Be("unregistered hotel bytes");
-            (await File.ReadAllTextAsync(artifactTarget)).Should().Be("prior run hotel bytes");
-            var inventoryRow = await context.LegacyArchiveInventory.AsNoTracking().SingleAsync();
+            (await File.ReadAllTextAsync(legacyTarget, TestContext.Current.CancellationToken)).Should().Be("unregistered hotel bytes");
+            (await File.ReadAllTextAsync(artifactTarget, TestContext.Current.CancellationToken)).Should().Be("prior run hotel bytes");
+            var inventoryRow = await context.LegacyArchiveInventory.AsNoTracking().SingleAsync(cancellationToken: TestContext.Current.CancellationToken);
             inventoryRow.InventoryId.Should().Be(result.Matches.Single(match => match != "prior-hotel-doc"));
             inventoryRow.State.Should().Be(nameof(LegacyArchiveInventoryState.Review));
             inventoryRow.CurrentRelativePath.Should().Be(result.UpdatedRelativePaths[inventoryRow.InventoryId]);
-            var sidecar = await File.ReadAllTextAsync($"{legacyTarget}.json");
+            var sidecar = await File.ReadAllTextAsync($"{legacyTarget}.json", TestContext.Current.CancellationToken);
             sidecar.Should().Contain(inventoryRow.InventoryId).And.NotContain("张三").And.NotContain(outputRoot);
-            var artifactRow = await context.ArchivedArtifacts.AsNoTracking().SingleAsync(row => row.ArtifactId == "artifact-prior-hotel-doc");
+            var artifactRow = await context.ArchivedArtifacts.AsNoTracking().SingleAsync(row => row.ArtifactId == "artifact-prior-hotel-doc", cancellationToken: TestContext.Current.CancellationToken);
             artifactRow.RelativePath.Should().Be(result.UpdatedRelativePaths["prior-hotel-doc"]);
-            var reviewRow = await context.ManualReviewItems.AsNoTracking().SingleAsync();
+            var reviewRow = await context.ManualReviewItems.AsNoTracking().SingleAsync(cancellationToken: TestContext.Current.CancellationToken);
             reviewRow.RunId.Should().Be("prior-cwt-run");
             reviewRow.DocumentId.Should().Be("prior-hotel-doc");
-            (await context.Documents.CountAsync()).Should().Be(1);
-            (await context.ArchivedArtifacts.CountAsync()).Should().Be(1);
+            (await context.Documents.CountAsync(cancellationToken: TestContext.Current.CancellationToken)).Should().Be(1);
+            (await context.ArchivedArtifacts.CountAsync(cancellationToken: TestContext.Current.CancellationToken)).Should().Be(1);
         }
         finally
         {

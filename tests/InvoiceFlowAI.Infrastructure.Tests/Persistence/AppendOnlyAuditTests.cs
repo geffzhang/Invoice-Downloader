@@ -53,7 +53,7 @@ public sealed class AppendOnlyAuditTests : IClassFixture<SqliteTestFixture>
         // Now attempt to mutate the row directly via SQL — the append-only
         // trigger must reject the change.
         await using var connection = new SqliteConnection(_fixture.ConnectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = "UPDATE AuditEvents SET ReasonCode='hacked' WHERE AuditEventId='evt-1';";
         var act = async () => await command.ExecuteNonQueryAsync();
@@ -86,7 +86,7 @@ public sealed class AppendOnlyAuditTests : IClassFixture<SqliteTestFixture>
         await uow.CommitAsync(CancellationToken.None);
 
         await using var connection = new SqliteConnection(_fixture.ConnectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM AuditEvents WHERE AuditEventId='evt-2';";
         var act = async () => await command.ExecuteNonQueryAsync();
@@ -159,7 +159,7 @@ public sealed class AppendOnlyAuditTests : IClassFixture<SqliteTestFixture>
             .Where(row => row.RunId == "run-zero-sequence")
             .OrderBy(row => row.EventSequence)
             .Select(row => row.EventSequence)
-            .ToListAsync();
+            .ToListAsync(cancellationToken: TestContext.Current.CancellationToken);
         sequences.Should().Equal(1, 2);
     }
 

@@ -16,8 +16,8 @@ public sealed class PhysicalArchiveFileSystemTests
             var directPath = Path.Combine(root, "hotel.pdf");
             var nestedDirectory = Path.Combine(root, "nested");
             Directory.CreateDirectory(nestedDirectory);
-            await File.WriteAllTextAsync(directPath, "direct");
-            await File.WriteAllTextAsync(Path.Combine(nestedDirectory, "nested.pdf"), "nested");
+            await File.WriteAllTextAsync(directPath, "direct", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(nestedDirectory, "nested.pdf"), "nested", TestContext.Current.CancellationToken);
 
             var linkedPath = Path.Combine(root, "linked-directory");
             try
@@ -53,18 +53,18 @@ public sealed class PhysicalArchiveFileSystemTests
             var sourcePath = Path.Combine(root, "source.pdf");
             var finalPath = Path.Combine(root, "archive", "final.pdf");
             var sourceBytes = new byte[] { 0x25, 0x50, 0x44, 0x46, 0x01, 0x02 };
-            await File.WriteAllBytesAsync(sourcePath, sourceBytes);
+            await File.WriteAllBytesAsync(sourcePath, sourceBytes, TestContext.Current.CancellationToken);
             var fileSystem = new PhysicalArchiveFileSystem();
 
             var tempPath = await fileSystem.CopyToSiblingTempAsync(sourcePath, finalPath, CancellationToken.None);
 
             Path.GetDirectoryName(tempPath).Should().Be(Path.GetDirectoryName(finalPath));
-            (await File.ReadAllBytesAsync(sourcePath)).Should().Equal(sourceBytes);
-            (await File.ReadAllBytesAsync(tempPath)).Should().Equal(sourceBytes);
+            (await File.ReadAllBytesAsync(sourcePath, TestContext.Current.CancellationToken)).Should().Equal(sourceBytes);
+            (await File.ReadAllBytesAsync(tempPath, TestContext.Current.CancellationToken)).Should().Equal(sourceBytes);
             await fileSystem.AtomicMoveAsync(tempPath, finalPath, CancellationToken.None);
 
-            (await File.ReadAllBytesAsync(sourcePath)).Should().Equal(sourceBytes);
-            (await File.ReadAllBytesAsync(finalPath)).Should().Equal(sourceBytes);
+            (await File.ReadAllBytesAsync(sourcePath, TestContext.Current.CancellationToken)).Should().Equal(sourceBytes);
+            (await File.ReadAllBytesAsync(finalPath, TestContext.Current.CancellationToken)).Should().Equal(sourceBytes);
         }
         finally
         {
@@ -84,17 +84,17 @@ public sealed class PhysicalArchiveFileSystemTests
             var sourceBytes = new byte[] { 1, 2, 3 };
             var existingBytes = new byte[] { 9, 8, 7 };
             Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
-            await File.WriteAllBytesAsync(sourcePath, sourceBytes);
-            await File.WriteAllBytesAsync(finalPath, existingBytes);
+            await File.WriteAllBytesAsync(sourcePath, sourceBytes, TestContext.Current.CancellationToken);
+            await File.WriteAllBytesAsync(finalPath, existingBytes, TestContext.Current.CancellationToken);
             var fileSystem = new PhysicalArchiveFileSystem();
             var tempPath = await fileSystem.CopyToSiblingTempAsync(sourcePath, finalPath, CancellationToken.None);
 
             var act = () => fileSystem.AtomicMoveAsync(tempPath, finalPath, CancellationToken.None);
 
             await act.Should().ThrowAsync<IOException>();
-            (await File.ReadAllBytesAsync(finalPath)).Should().Equal(existingBytes);
-            (await File.ReadAllBytesAsync(sourcePath)).Should().Equal(sourceBytes);
-            (await File.ReadAllBytesAsync(tempPath)).Should().Equal(sourceBytes);
+            (await File.ReadAllBytesAsync(finalPath, TestContext.Current.CancellationToken)).Should().Equal(existingBytes);
+            (await File.ReadAllBytesAsync(sourcePath, TestContext.Current.CancellationToken)).Should().Equal(sourceBytes);
+            (await File.ReadAllBytesAsync(tempPath, TestContext.Current.CancellationToken)).Should().Equal(sourceBytes);
         }
         finally
         {

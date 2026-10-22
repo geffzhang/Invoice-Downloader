@@ -67,12 +67,12 @@ public sealed class DpapiSecretStoreTests
         // Flip four characters in the middle of the base64 ciphertext — JSON
         // structure stays intact, but DPAPI's MAC check on Unprotect must fail
         // without leaking the plaintext anywhere.
-        var json = await File.ReadAllTextAsync(path);
+        var json = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
         var keyStart = json.IndexOf("\"name\":\"", StringComparison.Ordinal) + 8;
         var valueEnd = json.LastIndexOf("\"}", StringComparison.Ordinal);
         var tamperIndex = (keyStart + valueEnd) / 2;
         var tampered = json.Substring(0, tamperIndex) + "AAAA" + json.Substring(tamperIndex + 4);
-        await File.WriteAllTextAsync(path, tampered);
+        await File.WriteAllTextAsync(path, tampered, TestContext.Current.CancellationToken);
 
         var reader = new DpapiSecretStore(path, entropy);
         var act = () => reader.GetAsync("name", CancellationToken.None);

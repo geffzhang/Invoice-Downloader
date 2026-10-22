@@ -22,7 +22,7 @@ public sealed class UrlRecoveryStageTests
         var fetcher = new FakeUrlRecoveryClient(_ => Task.FromResult(new UrlRecoveryResult(new byte[] { 1, 2, 3 }, "application/pdf")));
         var stage = new UrlRecoveryStage(fetcher);
 
-        var output = await stage.ExecuteAsync(new CandidateBatch([urlItem, attachmentItem], [priorTerminal]), CancellationToken.None);
+        var output = await stage.ExecuteAsync(new CandidateBatch([urlItem, attachmentItem], [priorTerminal]), TestContext.Current.CancellationToken);
 
         output.Items.Should().HaveCount(2);
         output.Items[0].Content.ToArray().Should().Equal(1, 2, 3);
@@ -47,7 +47,7 @@ public sealed class UrlRecoveryStageTests
         var stage = new UrlRecoveryStage(new FakeUrlRecoveryClient(
             _ => Task.FromResult(new UrlRecoveryResult(pdf, "application/pdf"))));
 
-        var output = await stage.ExecuteAsync(new CandidateBatch([item]), CancellationToken.None);
+        var output = await stage.ExecuteAsync(new CandidateBatch([item]), TestContext.Current.CancellationToken);
 
         output.Items.Should().ContainSingle();
         output.Items[0].Candidate.OriginalFileName.Should().Be("invoice-url.pdf");
@@ -65,7 +65,7 @@ public sealed class UrlRecoveryStageTests
         var client = new GroupResultUrlRecoveryClient(result);
         var stage = new UrlRecoveryStage(client, new RecoveredArtifactIdentityFactory());
 
-        var output = await stage.ExecuteAsync(new CandidateBatch([item]), CancellationToken.None);
+        var output = await stage.ExecuteAsync(new CandidateBatch([item]), TestContext.Current.CancellationToken);
 
         output.Items.Should().ContainSingle();
         output.Items[0].Content.ToArray().Should().Equal(selectedPdf.Content.ToArray());
@@ -86,7 +86,7 @@ public sealed class UrlRecoveryStageTests
             new GroupResultUrlRecoveryClient(new UrlRecoveryResult([selectedXml], 0)),
             new RecoveredArtifactIdentityFactory());
 
-        var output = await stage.ExecuteAsync(new CandidateBatch([item]), CancellationToken.None);
+        var output = await stage.ExecuteAsync(new CandidateBatch([item]), TestContext.Current.CancellationToken);
 
         output.Items.Should().ContainSingle();
         output.Items[0].Content.ToArray().Should().Equal(selectedXml.Content.ToArray());
@@ -101,7 +101,7 @@ public sealed class UrlRecoveryStageTests
         var failure = new UrlRecoveryException("URL_RECOVERY_DEADLINE_EXCEEDED", "URL recovery deadline exceeded.", true, true);
         var stage = new UrlRecoveryStage(new FakeUrlRecoveryClient(_ => Task.FromException<UrlRecoveryResult>(failure)));
 
-        var output = await stage.ExecuteAsync(new CandidateBatch([item]), CancellationToken.None);
+        var output = await stage.ExecuteAsync(new CandidateBatch([item]), TestContext.Current.CancellationToken);
 
         output.Items.Should().BeEmpty();
         var terminal = output.EffectiveTerminalResults.Should().ContainSingle().Subject;
@@ -119,7 +119,7 @@ public sealed class UrlRecoveryStageTests
         var stage = new UrlRecoveryStage(new FakeUrlRecoveryClient(
             _ => Task.FromException<UrlRecoveryResult>(new InvalidOperationException(rawException))));
 
-        var output = await stage.ExecuteAsync(new CandidateBatch([item]), CancellationToken.None);
+        var output = await stage.ExecuteAsync(new CandidateBatch([item]), TestContext.Current.CancellationToken);
 
         var failure = output.EffectiveTerminalResults.Should().ContainSingle().Which.Failure!;
         var persistedDiagnostic = string.Join('|', failure.ReasonCode, failure.SafeMessage, failure.ExceptionType, failure.Fingerprint);
@@ -135,7 +135,7 @@ public sealed class UrlRecoveryStageTests
         var item = WorkItem(UrlSource("https://invoice.example/file"), "canceled-candidate");
         var stage = new UrlRecoveryStage(new FakeUrlRecoveryClient(_ => Task.FromException<UrlRecoveryResult>(new OperationCanceledException())));
 
-        var act = () => stage.ExecuteAsync(new CandidateBatch([item]), CancellationToken.None);
+        var act = () => stage.ExecuteAsync(new CandidateBatch([item]), TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
@@ -151,11 +151,11 @@ public sealed class UrlRecoveryStageTests
         using var cancellation = new CancellationTokenSource();
 
         var execution = stage.ExecuteAsync(new CandidateBatch([item]), cancellation.Token);
-        await requestStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await requestStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await cancellation.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
-        await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -166,13 +166,13 @@ public sealed class UrlRecoveryStageTests
         var items = Enumerable.Range(0, 12)
             .Select(index => GroupWorkItem(index, string.Empty))
             .ToArray();
-        var execution = stage.ExecuteAsync(new CandidateBatch(items), CancellationToken.None);
+        var execution = stage.ExecuteAsync(new CandidateBatch(items), TestContext.Current.CancellationToken);
 
-        await client.ThresholdReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await client.ThresholdReached.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         client.MaximumActive.Should().Be(10);
         client.Release.TrySetResult();
 
-        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         result.Items.Select(item => item.Candidate.Sequence).Should().Equal(Enumerable.Range(0, 12).Select(index => (long)index));
         client.MaximumActive.Should().Be(10);
@@ -184,16 +184,16 @@ public sealed class UrlRecoveryStageTests
         var client = new OrderedCompletionRecoveryClient(3);
         var stage = new UrlRecoveryStage(client, new RecoveredArtifactIdentityFactory());
         var items = Enumerable.Range(0, 3).Select(index => GroupWorkItem(index, string.Empty)).ToArray();
-        var execution = stage.ExecuteAsync(new CandidateBatch(items), CancellationToken.None);
+        var execution = stage.ExecuteAsync(new CandidateBatch(items), TestContext.Current.CancellationToken);
 
-        await client.AllStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await client.AllStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         foreach (var index in new[] { 2, 1, 0 })
         {
             client.Release(index);
-            await client.Completed[index].Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await client.Completed[index].Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         }
 
-        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         client.CompletionOrder.Should().Equal(2, 1, 0);
         result.Items.Select(item => item.Candidate.Sequence).Should().Equal(0, 1, 2);
@@ -207,13 +207,13 @@ public sealed class UrlRecoveryStageTests
         var items = Enumerable.Range(0, 9)
             .Select(index => GroupWorkItem(index, "chinatax_direct_invoice"))
             .ToArray();
-        var execution = stage.ExecuteAsync(new CandidateBatch(items), CancellationToken.None);
+        var execution = stage.ExecuteAsync(new CandidateBatch(items), TestContext.Current.CancellationToken);
 
-        await client.ThresholdReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await client.ThresholdReached.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         client.MaximumActive.Should().Be(4);
         client.Release.TrySetResult();
 
-        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         result.Items.Should().HaveCount(9);
         client.MaximumActive.Should().Be(4);
@@ -236,7 +236,7 @@ public sealed class UrlRecoveryStageTests
         };
         var stage = new UrlRecoveryStage(client, new RecoveredArtifactIdentityFactory());
 
-        var result = await stage.ExecuteAsync(new CandidateBatch([item]), CancellationToken.None);
+        var result = await stage.ExecuteAsync(new CandidateBatch([item]), TestContext.Current.CancellationToken);
 
         result.Items.Should().ContainSingle();
         client.RequestedUris.Should().Equal(candidates.Select(candidate => candidate.SourceUrl));

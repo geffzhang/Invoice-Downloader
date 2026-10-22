@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -88,7 +89,10 @@ public sealed class NativeWebViewSettingsIntegrationTests
 
 internal sealed class NativeWebViewFactAttribute : FactAttribute
 {
-    public NativeWebViewFactAttribute()
+    public NativeWebViewFactAttribute(
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+        : base(sourceFilePath, sourceLineNumber)
     {
         if (!OperatingSystem.IsWindows() || !Environment.UserInteractive)
         {

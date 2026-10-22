@@ -29,7 +29,7 @@ public sealed class SqliteTestFixture : IAsyncLifetime
         return new InvoiceFlowDbContext(options);
     }
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _connection = new SqliteConnection("DataSource=:memory:");
         await _connection.OpenAsync().ConfigureAwait(false);
@@ -107,7 +107,7 @@ public sealed class SqliteTestFixture : IAsyncLifetime
         await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
     }
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         if (_connection is not null)
         {

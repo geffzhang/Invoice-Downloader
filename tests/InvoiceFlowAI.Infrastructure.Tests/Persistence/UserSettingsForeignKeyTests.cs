@@ -78,7 +78,7 @@ public sealed class UserSettingsForeignKeyTests : IClassFixture<SqliteTestFixtur
             CreatedBy = "test",
             CreatedAtUtc = DateTimeOffset.UtcNow,
         });
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var uow = await BeginAsync(context);
         var act = () => bootstrapper.EnsureDefaultInTransactionAsync(uow, CancellationToken.None);
@@ -105,7 +105,7 @@ public sealed class UserSettingsForeignKeyTests : IClassFixture<SqliteTestFixtur
             CreatedBy = "test",
             CreatedAtUtc = DateTimeOffset.UtcNow,
         });
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var store = new EfRuleSetBootstrapStore(context);
         var act = () => store.FindCurrentAsync("default", CancellationToken.None);
@@ -133,7 +133,7 @@ public sealed class UserSettingsForeignKeyTests : IClassFixture<SqliteTestFixtur
             CreatedBy = "test",
             CreatedAtUtc = DateTimeOffset.UtcNow,
         });
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var store = new EfRuleSetBootstrapStore(context);
         var act = () => store.FindCurrentAsync("default", CancellationToken.None);
@@ -159,7 +159,7 @@ public sealed class UserSettingsForeignKeyTests : IClassFixture<SqliteTestFixtur
             CreatedBy = "test",
             CreatedAtUtc = DateTimeOffset.UtcNow,
         });
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var store = new EfRuleSetBootstrapStore(context);
         var document = await store.FindCurrentAsync("default", CancellationToken.None);

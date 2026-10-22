@@ -22,7 +22,7 @@ public sealed class PipelineRecipeGraphFactoryTests
         await using var provider = services.BuildServiceProvider();
 
         var registry = provider.GetRequiredService<InvoiceFlowAI.Application.Configuration.RecipeRegistry>();
-        var recipe = await registry.LoadDefaultAsync(CancellationToken.None);
+        var recipe = await registry.LoadDefaultAsync(TestContext.Current.CancellationToken);
 
         recipe.RecipeId.Should().Be("invoiceflow.default");
         recipe.Nodes.Should().HaveCount(8);
@@ -36,7 +36,7 @@ public sealed class PipelineRecipeGraphFactoryTests
         var services = CreateServices(calls);
         await using var provider = services.BuildServiceProvider();
         var factory = provider.GetRequiredService<PipelineRunFactory>();
-        await using var run = await factory.CreateAsync(CreateRecipe(), CancellationToken.None);
+        await using var run = await factory.CreateAsync(CreateRecipe(), TestContext.Current.CancellationToken);
         run.Executor.Graph.NodeCount.Should().Be(19);
         run.Executor.Graph.ConnectionCount.Should().Be(18);
 
@@ -50,7 +50,7 @@ public sealed class PipelineRecipeGraphFactoryTests
 
         for (var cycle = 0; cycle < 3; cycle++)
         {
-            await run.ExecuteStepAsync();
+            await run.ExecuteStepAsync(TestContext.Current.CancellationToken);
         }
 
         calls.Should().Equal("scan", "collect", "recover", "extract", "pair", "archive", "report");
@@ -79,7 +79,7 @@ public sealed class PipelineRecipeGraphFactoryTests
         await using var provider = services.BuildServiceProvider();
         var factory = provider.GetRequiredService<PipelineRunFactory>();
 
-        var act = () => factory.CreateAsync(CreateRecipe(), CancellationToken.None);
+        var act = () => factory.CreateAsync(CreateRecipe(), TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*ICandidateCollectionStage*");
@@ -98,8 +98,8 @@ public sealed class PipelineRecipeGraphFactoryTests
         graph.AddNode(input).AddNode(node);
         graph.Connect(input.Output, node.InputPorts.OfType<InputPort<PipelineItem<MailboxScanResult>>>().Single());
         var executor = new ZeroPipeline.Core.Execution.PipelineExecutor(graph);
-        var context = new ZeroPipeline.Core.Execution.PipelineContext(CancellationToken.None);
-        await executor.InitializeAsync(context, CancellationToken.None);
+        var context = new ZeroPipeline.Core.Execution.PipelineContext(TestContext.Current.CancellationToken);
+        await executor.InitializeAsync(context, TestContext.Current.CancellationToken);
 
         var act = () => executor.ExecuteStepAsync(context, cancellation.Token);
 
@@ -120,10 +120,10 @@ public sealed class PipelineRecipeGraphFactoryTests
         graph.Connect(input.Output, node.InputPorts.OfType<InputPort<PipelineItem<MailboxScanResult>>>().Single());
         graph.Connect(node.OutputPorts.OfType<OutputPort<RunFailure>>().Single(), sink.Input);
         var executor = new ZeroPipeline.Core.Execution.PipelineExecutor(graph);
-        var context = new ZeroPipeline.Core.Execution.PipelineContext(CancellationToken.None);
-        await executor.InitializeAsync(context, CancellationToken.None);
+        var context = new ZeroPipeline.Core.Execution.PipelineContext(TestContext.Current.CancellationToken);
+        await executor.InitializeAsync(context, TestContext.Current.CancellationToken);
 
-        await executor.ExecuteStepAsync(context, CancellationToken.None);
+        await executor.ExecuteStepAsync(context, TestContext.Current.CancellationToken);
 
         sink.Failure.Should().NotBeNull();
         sink.Failure!.RunId.Should().Be("run-fail");

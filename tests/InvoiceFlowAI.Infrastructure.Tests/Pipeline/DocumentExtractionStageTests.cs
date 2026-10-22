@@ -195,11 +195,11 @@ public sealed class DocumentExtractionStageTests
         };
 
         var execution = stage.ExecuteAsync(new CandidateBatch([first, second]), CancellationToken.None);
-        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         secondStarted.Task.IsCompleted.Should().BeFalse();
         releaseFirst.TrySetResult();
-        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         result.Results.Should().HaveCount(2);
         extractor.MaximumActive.Should().Be(1);
@@ -215,11 +215,11 @@ public sealed class DocumentExtractionStageTests
             .Select(index => WorkItem($"safe-{index}", sequence: index))
             .ToArray();
 
-        var execution = stage.ExecuteAsync(new CandidateBatch(items), CancellationToken.None);
-        var firstPairStarted = await Task.WhenAny(extractor.TwoStarted.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+        var execution = stage.ExecuteAsync(new CandidateBatch(items), TestContext.Current.CancellationToken);
+        var firstPairStarted = await Task.WhenAny(extractor.TwoStarted.Task, Task.Delay(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken));
         var preflightCountAtOverlap = parser.CallCount;
         extractor.ReleaseFirstPair.TrySetResult();
-        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         firstPairStarted.Should().Be(extractor.TwoStarted.Task);
         preflightCountAtOverlap.Should().Be(4);
@@ -259,11 +259,11 @@ public sealed class DocumentExtractionStageTests
             .ToArray();
         var execution = stage.ExecuteAsync(new CandidateBatch(items), cancellation.Token);
 
-        await extractor.TwoStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await extractor.TwoStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await cancellation.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
-        await extractor.BothCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await extractor.BothCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
     }
 
     [Fact]

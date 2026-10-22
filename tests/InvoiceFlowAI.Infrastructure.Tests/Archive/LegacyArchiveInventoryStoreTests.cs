@@ -68,8 +68,8 @@ public sealed class LegacyArchiveInventoryStoreTests : IClassFixture<InvoiceFlow
         inventory.Should().HaveCount(2);
         inventory.Single(item => item.InventoryId == first.InventoryId).CurrentRelativePath.Should().Be("人工复核/hotel.pdf");
         inventory.Single(item => item.InventoryId == first.InventoryId).State.Should().Be(LegacyArchiveInventoryState.Review);
-        (await context.Documents.CountAsync()).Should().Be(0);
-        (await context.ArchivedArtifacts.CountAsync()).Should().Be(0);
+        (await context.Documents.CountAsync(cancellationToken: TestContext.Current.CancellationToken)).Should().Be(0);
+        (await context.ArchivedArtifacts.CountAsync(cancellationToken: TestContext.Current.CancellationToken)).Should().Be(0);
     }
 
     private static async Task<LegacyArchiveInventorySnapshot> DiscoverAsync(

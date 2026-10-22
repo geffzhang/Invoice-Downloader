@@ -65,7 +65,7 @@ public sealed class LegacySettingsImporterTests
               "api_key": "!!!!not-base64-or-encrypted-at-all!!!!",
               "auth_code": "????"
             }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var importer = new LegacySettingsImporter();
         var report = await importer.ImportAsync(legacyDir, CancellationToken.None);

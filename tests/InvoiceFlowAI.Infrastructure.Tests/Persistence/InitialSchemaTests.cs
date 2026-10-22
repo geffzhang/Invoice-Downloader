@@ -54,13 +54,13 @@ public sealed class InitialSchemaTests : IClassFixture<SqliteTestFixture>
     {
         await using var context = _fixture.CreateContext();
         var columns = new List<string>();
-        await context.Database.OpenConnectionAsync();
+        await context.Database.OpenConnectionAsync(cancellationToken: TestContext.Current.CancellationToken);
         try
         {
             await using var command = context.Database.GetDbConnection().CreateCommand();
             command.CommandText = "PRAGMA table_info('ArchivedArtifacts');";
-            await using var reader = await command.ExecuteReaderAsync();
-            while (await reader.ReadAsync()) columns.Add(reader.GetString(1));
+            await using var reader = await command.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+            while (await reader.ReadAsync(TestContext.Current.CancellationToken)) columns.Add(reader.GetString(1));
         }
         finally
         {
@@ -85,10 +85,10 @@ public sealed class InitialSchemaTests : IClassFixture<SqliteTestFixture>
         await using var context = _fixture.CreateContext();
         await using var command = context.Database.GetDbConnection().CreateCommand();
         command.CommandText = "PRAGMA journal_mode;";
-        await context.Database.OpenConnectionAsync();
+        await context.Database.OpenConnectionAsync(cancellationToken: TestContext.Current.CancellationToken);
         try
         {
-            var mode = (string)(await command.ExecuteScalarAsync())!;
+            var mode = (string)(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken))!;
             // WAL is persisted on the database file. For an in-memory database
             // SQLite falls back to MEMORY; either way, WAL is what we asked for.
             mode.Should().BeOneOf("wal", "memory");
@@ -105,16 +105,16 @@ public sealed class InitialSchemaTests : IClassFixture<SqliteTestFixture>
         // Migrations history table is the single source of truth — running the
         // committed migrations a second time must not add rows and must not throw.
         await using var context = _fixture.CreateContext();
-        await context.Database.MigrateAsync();
+        await context.Database.MigrateAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         var migrationIds = new List<string>();
-        await context.Database.OpenConnectionAsync();
+        await context.Database.OpenConnectionAsync(cancellationToken: TestContext.Current.CancellationToken);
         try
         {
             await using var command = context.Database.GetDbConnection().CreateCommand();
             command.CommandText = "SELECT MigrationId FROM __EFMigrationsHistory ORDER BY MigrationId;";
-            await using var reader = await command.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
+            await using var reader = await command.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+            while (await reader.ReadAsync(TestContext.Current.CancellationToken))
             {
                 migrationIds.Add(reader.GetString(0));
             }

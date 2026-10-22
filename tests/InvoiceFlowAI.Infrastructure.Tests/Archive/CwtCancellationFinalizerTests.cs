@@ -27,10 +27,10 @@ public sealed class CwtCancellationFinalizerTests
         var cancellationPath = Path.Combine(root, cancellationRelativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(hotelPath)!);
         Directory.CreateDirectory(Path.GetDirectoryName(cancellationPath)!);
-        await File.WriteAllTextAsync(hotelPath, "synthetic hotel confirmation");
-        await File.WriteAllTextAsync(secondHotelPath, "synthetic second hotel confirmation");
-        await File.WriteAllTextAsync(otherHotelPath, "synthetic other hotel confirmation");
-        await File.WriteAllTextAsync(cancellationPath, "synthetic cancellation notice");
+        await File.WriteAllTextAsync(hotelPath, "synthetic hotel confirmation", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(secondHotelPath, "synthetic second hotel confirmation", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(otherHotelPath, "synthetic other hotel confirmation", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(cancellationPath, "synthetic cancellation notice", TestContext.Current.CancellationToken);
 
         try
         {
@@ -74,9 +74,9 @@ public sealed class CwtCancellationFinalizerTests
             var movedSecond = Path.Combine(root, first.UpdatedRelativePaths["doc-hotel-2"].Replace('/', Path.DirectorySeparatorChar));
             File.Exists(moved).Should().BeTrue();
             File.Exists(movedSecond).Should().BeTrue();
-            Hash(await File.ReadAllTextAsync(moved)).Should().Be(hotelHash);
-            Hash(await File.ReadAllTextAsync(movedSecond)).Should().Be(secondHotelHash);
-            var sidecar = await File.ReadAllTextAsync($"{moved}.json");
+            Hash(await File.ReadAllTextAsync(moved, TestContext.Current.CancellationToken)).Should().Be(hotelHash);
+            Hash(await File.ReadAllTextAsync(movedSecond, TestContext.Current.CancellationToken)).Should().Be(secondHotelHash);
+            var sidecar = await File.ReadAllTextAsync($"{moved}.json", TestContext.Current.CancellationToken);
             sidecar.Should().Contain("CWT_CANCELLATION_MATCH");
             sidecar.Should().Contain("doc-cancel").And.Contain("doc-hotel");
             sidecar.Should().NotContain("张三").And.NotContain(root).And.NotContain("mycwt.com");
@@ -104,7 +104,7 @@ public sealed class CwtCancellationFinalizerTests
         const string content = "synthetic archived hotel inventory artifact";
         var fullPath = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-        await File.WriteAllTextAsync(fullPath, content);
+        await File.WriteAllTextAsync(fullPath, content, TestContext.Current.CancellationToken);
         try
         {
             var snapshot = Snapshot("artifact-inventory-hotel", "doc-inventory-hotel", relativePath, fullPath,
@@ -142,7 +142,7 @@ public sealed class CwtCancellationFinalizerTests
         const string content = "rollback recovery artifact";
         var sourcePath = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
-        await File.WriteAllTextAsync(sourcePath, content);
+        await File.WriteAllTextAsync(sourcePath, content, TestContext.Current.CancellationToken);
         try
         {
             var snapshot = Snapshot("artifact-rollback", "doc-rollback", relativePath, sourcePath,
@@ -189,8 +189,8 @@ public sealed class CwtCancellationFinalizerTests
         var targetPath = Path.Combine(root, destination.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
         Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-        await File.WriteAllTextAsync(sourcePath, "source bytes");
-        await File.WriteAllTextAsync(targetPath, "pre-existing review bytes");
+        await File.WriteAllTextAsync(sourcePath, "source bytes", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(targetPath, "pre-existing review bytes", TestContext.Current.CancellationToken);
         try
         {
             var item = LegacyItem(inventoryId, "住宿发票/" + fileName, sourcePath, fileName, Hash("source bytes"));
@@ -203,8 +203,8 @@ public sealed class CwtCancellationFinalizerTests
 
             result.Matches.Should().BeEmpty();
             result.Failures.Should().ContainSingle().Which.ReasonCode.Should().Be("CWT_MATCH_DESTINATION_EXISTS");
-            (await File.ReadAllTextAsync(sourcePath)).Should().Be("source bytes");
-            (await File.ReadAllTextAsync(targetPath)).Should().Be("pre-existing review bytes");
+            (await File.ReadAllTextAsync(sourcePath, TestContext.Current.CancellationToken)).Should().Be("source bytes");
+            (await File.ReadAllTextAsync(targetPath, TestContext.Current.CancellationToken)).Should().Be("pre-existing review bytes");
             File.Exists($"{targetPath}.json").Should().BeFalse();
         }
         finally
@@ -224,8 +224,8 @@ public sealed class CwtCancellationFinalizerTests
         var secondPath = Path.Combine(root, "source-b", fileName);
         Directory.CreateDirectory(Path.GetDirectoryName(firstPath)!);
         Directory.CreateDirectory(Path.GetDirectoryName(secondPath)!);
-        await File.WriteAllTextAsync(firstPath, "first source bytes");
-        await File.WriteAllTextAsync(secondPath, "second source bytes");
+        await File.WriteAllTextAsync(firstPath, "first source bytes", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(secondPath, "second source bytes", TestContext.Current.CancellationToken);
         try
         {
             var items = new[]

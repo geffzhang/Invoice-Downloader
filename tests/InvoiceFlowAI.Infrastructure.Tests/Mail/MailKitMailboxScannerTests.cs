@@ -1011,7 +1011,7 @@ public sealed class MailKitMailboxSessionPureTests
         projected.Attachments[1].Payload.Should().NotBeEmpty();
 
         using var nestedStream = new MemoryStream(projected.Attachments[1].Payload);
-        var parsedNested = MimeMessage.Load(nestedStream);
+        var parsedNested = MimeMessage.Load(nestedStream, TestContext.Current.CancellationToken);
         parsedNested.Subject.Should().Be("Nested invoice");
         parsedNested.TextBody.Should().Contain("nested body");
     }

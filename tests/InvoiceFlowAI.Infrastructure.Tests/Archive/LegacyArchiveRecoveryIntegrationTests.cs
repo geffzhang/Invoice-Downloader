@@ -32,8 +32,8 @@ public sealed class LegacyArchiveRecoveryIntegrationTests : IClassFixture<Sqlite
         var secondOriginalPath = Path.Combine(secondRoot, secondOriginalRelative.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(firstReviewPath)!);
         Directory.CreateDirectory(Path.GetDirectoryName(secondOriginalPath)!);
-        await File.WriteAllTextAsync(firstReviewPath, firstContent);
-        await File.WriteAllTextAsync(secondOriginalPath, secondContent);
+        await File.WriteAllTextAsync(firstReviewPath, firstContent, TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(secondOriginalPath, secondContent, TestContext.Current.CancellationToken);
         try
         {
             await using var context = _fixture.CreateContext();
@@ -87,7 +87,7 @@ public sealed class LegacyArchiveRecoveryIntegrationTests : IClassFixture<Sqlite
         const string content = "verified review bytes";
         var target = Path.Combine(root, relativeTarget.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        await File.WriteAllTextAsync(target, content);
+        await File.WriteAllTextAsync(target, content, TestContext.Current.CancellationToken);
         try
         {
             await using var context = _fixture.CreateContext();
@@ -104,7 +104,7 @@ public sealed class LegacyArchiveRecoveryIntegrationTests : IClassFixture<Sqlite
                 ReasonCode = (string?)null,
             });
             File.Exists(target).Should().BeTrue();
-            var row = await context.LegacyArchiveInventory.FindAsync(inventory);
+            var row = await context.LegacyArchiveInventory.FindAsync(new object?[] { inventory }, TestContext.Current.CancellationToken);
             row!.CurrentRelativePath.Should().Be(relativeTarget);
             row.State.Should().Be(nameof(LegacyArchiveInventoryState.Review));
         }
@@ -124,7 +124,7 @@ public sealed class LegacyArchiveRecoveryIntegrationTests : IClassFixture<Sqlite
         const string content = "restored source bytes";
         var original = Path.Combine(root, originalRelativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(original)!);
-        await File.WriteAllTextAsync(original, content);
+        await File.WriteAllTextAsync(original, content, TestContext.Current.CancellationToken);
         try
         {
             await using var context = _fixture.CreateContext();
@@ -134,7 +134,7 @@ public sealed class LegacyArchiveRecoveryIntegrationTests : IClassFixture<Sqlite
             var decisions = await CreateRecovery(context, legacyStore).ReconcileLegacyAsync(root, CancellationToken.None);
 
             decisions.Should().ContainSingle().Which.ResolvedState.Should().Be(LegacyArchiveInventoryState.Discovered);
-            var row = await context.LegacyArchiveInventory.FindAsync(inventory);
+            var row = await context.LegacyArchiveInventory.FindAsync(new object?[] { inventory }, TestContext.Current.CancellationToken);
             row!.CurrentRelativePath.Should().Be(originalRelativePath);
             row.State.Should().Be(nameof(LegacyArchiveInventoryState.Discovered));
             File.Exists(original).Should().BeTrue();
@@ -153,7 +153,7 @@ public sealed class LegacyArchiveRecoveryIntegrationTests : IClassFixture<Sqlite
         const string relativeTarget = "archive/run-1/review/hotel.pdf";
         var target = Path.Combine(root, relativeTarget.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        await File.WriteAllTextAsync(target, "tampered bytes");
+        await File.WriteAllTextAsync(target, "tampered bytes", TestContext.Current.CancellationToken);
         try
         {
             await using var context = _fixture.CreateContext();
@@ -169,8 +169,8 @@ public sealed class LegacyArchiveRecoveryIntegrationTests : IClassFixture<Sqlite
                 ReasonCode = "LEGACY_ARCHIVE_HASH_MISMATCH",
             });
             File.Exists(target).Should().BeTrue();
-            (await File.ReadAllTextAsync(target)).Should().Be("tampered bytes");
-            var row = await context.LegacyArchiveInventory.FindAsync(inventory);
+            (await File.ReadAllTextAsync(target, TestContext.Current.CancellationToken)).Should().Be("tampered bytes");
+            var row = await context.LegacyArchiveInventory.FindAsync(new object?[] { inventory }, TestContext.Current.CancellationToken);
             row!.State.Should().Be(nameof(LegacyArchiveInventoryState.RecoveryRequired));
         }
         finally

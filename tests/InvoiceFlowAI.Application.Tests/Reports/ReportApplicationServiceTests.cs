@@ -22,7 +22,7 @@ public sealed class ReportApplicationServiceTests
     {
         var harness = new Harness(ttl: TimeSpan.FromMinutes(5));
 
-        var token = await harness.Service.OpenAsync(NewRequest(), CancellationToken.None);
+        var token = await harness.Service.OpenAsync(NewRequest(), TestContext.Current.CancellationToken);
 
         token.ExpiresAtUtc.Should().BeCloseTo(token.IssuedAtUtc.AddMinutes(5), TimeSpan.FromSeconds(1));
         token.AlreadyConsumed.Should().BeFalse();
@@ -36,9 +36,9 @@ public sealed class ReportApplicationServiceTests
     public async Task ResolveTokenAsync_returns_valid_for_first_resolve_within_ttl()
     {
         var harness = new Harness(ttl: TimeSpan.FromMinutes(5));
-        var token = await harness.Service.OpenAsync(NewRequest(), CancellationToken.None);
+        var token = await harness.Service.OpenAsync(NewRequest(), TestContext.Current.CancellationToken);
 
-        var resolution = await harness.Service.ResolveTokenAsync(token.TokenId, CancellationToken.None);
+        var resolution = await harness.Service.ResolveTokenAsync(token.TokenId, TestContext.Current.CancellationToken);
 
         resolution.Valid.Should().BeTrue();
         resolution.ReasonCode.Should().BeNull();
@@ -50,10 +50,10 @@ public sealed class ReportApplicationServiceTests
     public async Task ResolveTokenAsync_rejects_replay()
     {
         var harness = new Harness(ttl: TimeSpan.FromMinutes(5));
-        var token = await harness.Service.OpenAsync(NewRequest(), CancellationToken.None);
+        var token = await harness.Service.OpenAsync(NewRequest(), TestContext.Current.CancellationToken);
 
-        var first = await harness.Service.ResolveTokenAsync(token.TokenId, CancellationToken.None);
-        var second = await harness.Service.ResolveTokenAsync(token.TokenId, CancellationToken.None);
+        var first = await harness.Service.ResolveTokenAsync(token.TokenId, TestContext.Current.CancellationToken);
+        var second = await harness.Service.ResolveTokenAsync(token.TokenId, TestContext.Current.CancellationToken);
 
         first.Valid.Should().BeTrue();
         second.Valid.Should().BeFalse();
@@ -64,10 +64,10 @@ public sealed class ReportApplicationServiceTests
     public async Task ResolveTokenAsync_rejects_expired_token()
     {
         var harness = new Harness(ttl: TimeSpan.FromMilliseconds(1));
-        var token = await harness.Service.OpenAsync(NewRequest(), CancellationToken.None);
-        await Task.Delay(50);
+        var token = await harness.Service.OpenAsync(NewRequest(), TestContext.Current.CancellationToken);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
 
-        var resolution = await harness.Service.ResolveTokenAsync(token.TokenId, CancellationToken.None);
+        var resolution = await harness.Service.ResolveTokenAsync(token.TokenId, TestContext.Current.CancellationToken);
 
         resolution.Valid.Should().BeFalse();
         resolution.ReasonCode.Should().Be(RpcErrorCodes.WebAssetInvalid);
@@ -78,7 +78,7 @@ public sealed class ReportApplicationServiceTests
     {
         var harness = new Harness(ttl: TimeSpan.FromMinutes(5));
 
-        var resolution = await harness.Service.ResolveTokenAsync("does-not-exist", CancellationToken.None);
+        var resolution = await harness.Service.ResolveTokenAsync("does-not-exist", TestContext.Current.CancellationToken);
 
         resolution.Valid.Should().BeFalse();
         resolution.ReasonCode.Should().Be(RpcErrorCodes.WebAssetInvalid);
@@ -90,7 +90,7 @@ public sealed class ReportApplicationServiceTests
         var harness = new Harness(ttl: TimeSpan.FromMinutes(5));
         var request = new ReportOpenRequest("run-1", "C:/absolute/report.xlsx", "hash-1");
 
-        var act = () => harness.Service.OpenAsync(request, CancellationToken.None);
+        var act = () => harness.Service.OpenAsync(request, TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*output root*");
@@ -103,8 +103,8 @@ public sealed class ReportApplicationServiceTests
         var wrongPath = NewRequest() with { ReportPath = "reports/other/report.xlsx" };
         var wrongHash = NewRequest() with { ContentHash = "other-hash" };
 
-        var pathAct = () => harness.Service.OpenAsync(wrongPath, CancellationToken.None);
-        var hashAct = () => harness.Service.OpenAsync(wrongHash, CancellationToken.None);
+        var pathAct = () => harness.Service.OpenAsync(wrongPath, TestContext.Current.CancellationToken);
+        var hashAct = () => harness.Service.OpenAsync(wrongHash, TestContext.Current.CancellationToken);
 
         await pathAct.Should().ThrowAsync<InvalidOperationException>();
         await hashAct.Should().ThrowAsync<InvalidOperationException>();
@@ -116,7 +116,7 @@ public sealed class ReportApplicationServiceTests
         var harness = new Harness(ttl: TimeSpan.FromMinutes(5));
         var request = NewRequest() with { ReportPath = "reports/run-1/../../secrets.json" };
 
-        var act = () => harness.Service.OpenAsync(request, CancellationToken.None);
+        var act = () => harness.Service.OpenAsync(request, TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*output root*");
@@ -129,7 +129,7 @@ public sealed class ReportApplicationServiceTests
         var data = NewRunData();
         harness.DataSource.Setup(data);
 
-        var result = await harness.Service.ExportAsync(new ReportExportRequest("run-1"), CancellationToken.None);
+        var result = await harness.Service.ExportAsync(new ReportExportRequest("run-1"), TestContext.Current.CancellationToken);
 
         result.RunId.Should().Be("run-1");
         result.ReportPath.Should().Be("reports/run-1/report.xlsx");
@@ -144,7 +144,7 @@ public sealed class ReportApplicationServiceTests
         var harness = new Harness(ttl: TimeSpan.FromMinutes(5));
         harness.DataSource.Setup(NewRunData());
 
-        await harness.Service.ExportAsync(new ReportExportRequest("run-1"), CancellationToken.None);
+        await harness.Service.ExportAsync(new ReportExportRequest("run-1"), TestContext.Current.CancellationToken);
 
         harness.Exporter.LastWorkItem!.Summary.Should().Be(new ReportSummaryRow(
             "run-1", "Completed", "RUN_COMPLETED",
@@ -158,7 +158,7 @@ public sealed class ReportApplicationServiceTests
         var harness = new Harness(ttl: TimeSpan.FromMinutes(5));
         harness.DataSource.Setup(null);
 
-        var act = () => harness.Service.ExportAsync(new ReportExportRequest("missing"), CancellationToken.None);
+        var act = () => harness.Service.ExportAsync(new ReportExportRequest("missing"), TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<InvalidOperationException>();
     }

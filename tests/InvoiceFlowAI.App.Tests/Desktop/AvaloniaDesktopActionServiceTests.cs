@@ -21,7 +21,7 @@ public sealed class AvaloniaDesktopActionServiceTests
         var launcher = new FakePathLauncher();
         var service = CreateService(temp.Path, launcher: launcher);
 
-        var result = await service.OpenRunFolderAsync(null, CancellationToken.None);
+        var result = await service.OpenRunFolderAsync(null, TestContext.Current.CancellationToken);
 
         result.Succeeded.Should().BeTrue();
         launcher.OpenedPath.Should().Be(temp.Path);
@@ -36,13 +36,13 @@ public sealed class AvaloniaDesktopActionServiceTests
         var reviewPath = Path.Combine(temp.Path, "archive", "run-1", "review");
         Directory.CreateDirectory(reviewPath);
 
-        var opened = await service.OpenManualReviewFolderAsync("run-1", CancellationToken.None);
+        var opened = await service.OpenManualReviewFolderAsync("run-1", TestContext.Current.CancellationToken);
 
         opened.Succeeded.Should().BeTrue();
         launcher.OpenedPath.Should().Be(reviewPath);
         Directory.Delete(reviewPath, recursive: true);
 
-        var missing = await service.OpenManualReviewFolderAsync("run-1", CancellationToken.None);
+        var missing = await service.OpenManualReviewFolderAsync("run-1", TestContext.Current.CancellationToken);
         missing.Succeeded.Should().BeFalse();
         missing.Message.Should().NotContain(temp.Path);
     }
@@ -54,7 +54,7 @@ public sealed class AvaloniaDesktopActionServiceTests
         var relativePath = "archive/run-1/invoice.pdf";
         var filePath = Path.Combine(temp.Path, relativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
-        await File.WriteAllTextAsync(filePath, "invoice");
+        await File.WriteAllTextAsync(filePath, "invoice", TestContext.Current.CancellationToken);
         var artifacts = new FakeArchiveArtifactStore
         {
             Artifacts = [NewArtifact("run-1", "doc-1", relativePath, ArchiveArtifactState.Committed)],
@@ -62,14 +62,14 @@ public sealed class AvaloniaDesktopActionServiceTests
         var launcher = new FakePathLauncher();
         var service = CreateService(temp.Path, launcher: launcher, artifacts: artifacts);
 
-        var opened = await service.OpenFileAsync(new RunFileOpenRequest("run-1", DocumentId: "doc-1"), CancellationToken.None);
+        var opened = await service.OpenFileAsync(new RunFileOpenRequest("run-1", DocumentId: "doc-1"), TestContext.Current.CancellationToken);
 
         opened.Succeeded.Should().BeTrue();
         launcher.OpenedPath.Should().Be(filePath);
 
         var rejected = await service.OpenFileAsync(
             new RunFileOpenRequest("run-1", DocumentId: "doc-other"),
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
         rejected.Succeeded.Should().BeFalse();
         rejected.Message.Should().NotContain(temp.Path);
     }
@@ -90,10 +90,10 @@ public sealed class AvaloniaDesktopActionServiceTests
 
         var traversal = await service.OpenFileAsync(
             new RunFileOpenRequest("run-1", DocumentId: "doc-traversal"),
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
         var pending = await service.OpenFileAsync(
             new RunFileOpenRequest("run-1", DocumentId: "doc-pending"),
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         traversal.Succeeded.Should().BeFalse();
         pending.Succeeded.Should().BeFalse();
@@ -106,14 +106,14 @@ public sealed class AvaloniaDesktopActionServiceTests
         var relativePath = "reports/run-1/report.xlsx";
         var filePath = Path.Combine(temp.Path, relativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
-        await File.WriteAllTextAsync(filePath, "workbook");
+        await File.WriteAllTextAsync(filePath, "workbook", TestContext.Current.CancellationToken);
         var reports = new FakeReportApplicationService(relativePath, "hash-1");
         var launcher = new FakePathLauncher();
         var service = CreateService(temp.Path, launcher: launcher, reports: reports);
 
         var result = await service.OpenFileAsync(
             new RunFileOpenRequest("run-1", ReportPath: relativePath, ContentHash: "hash-1"),
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         result.Succeeded.Should().BeTrue();
         reports.IssuedRequest.Should().BeEquivalentTo(new ReportOpenRequest("run-1", relativePath, "hash-1"));
@@ -128,14 +128,14 @@ public sealed class AvaloniaDesktopActionServiceTests
         var relativePath = "archive/run-1/invoice.pdf";
         var filePath = Path.Combine(temp.Path, relativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
-        await File.WriteAllTextAsync(filePath, "invoice");
+        await File.WriteAllTextAsync(filePath, "invoice", TestContext.Current.CancellationToken);
         var launcher = new FakePathLauncher { Exception = new IOException("private C:\\user\\data path") };
         var service = CreateService(temp.Path, launcher: launcher, artifacts: new FakeArchiveArtifactStore
         {
             Artifacts = [NewArtifact("run-1", "doc-1", relativePath, ArchiveArtifactState.Committed)],
         });
 
-        var result = await service.OpenFileAsync(new RunFileOpenRequest("run-1", DocumentId: "doc-1"), CancellationToken.None);
+        var result = await service.OpenFileAsync(new RunFileOpenRequest("run-1", DocumentId: "doc-1"), TestContext.Current.CancellationToken);
 
         result.Succeeded.Should().BeFalse();
         result.Message.Should().NotContain("private");
@@ -149,7 +149,7 @@ public sealed class AvaloniaDesktopActionServiceTests
         var window = new FakeWindowCommandDispatcher();
         var service = CreateService(temp.Path, window: window);
 
-        var result = await service.ExecuteWindowCommandAsync("minimize", CancellationToken.None);
+        var result = await service.ExecuteWindowCommandAsync("minimize", TestContext.Current.CancellationToken);
 
         result.Succeeded.Should().BeTrue();
         window.Commands.Should().ContainSingle().Which.Should().Be("minimize");
@@ -161,7 +161,7 @@ public sealed class AvaloniaDesktopActionServiceTests
         var uiDispatcher = new FakeAvaloniaUiDispatcher();
         var windowDispatcher = new AvaloniaWindowCommandDispatcher(new AvaloniaMainWindowAccessor(), uiDispatcher);
 
-        var executed = await windowDispatcher.ExecuteAsync("maximize", CancellationToken.None);
+        var executed = await windowDispatcher.ExecuteAsync("maximize", TestContext.Current.CancellationToken);
 
         executed.Should().BeFalse();
         uiDispatcher.InvocationCount.Should().Be(1);

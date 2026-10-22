@@ -26,12 +26,12 @@ public sealed class EfCandidateHistoryReaderTests : IClassFixture<SqliteTestFixt
                 NewRun("run-completed"),
                 NewRun("run-retryable"),
                 NewRun("run-incomplete"));
-            await context.SaveChangesAsync();
+            await context.SaveChangesAsync(TestContext.Current.CancellationToken);
             context.DocumentProcessing.AddRange(
                 NewRecord("completed", completedAtUtc: DateTimeOffset.UnixEpoch, retryable: false),
                 NewRecord("retryable", completedAtUtc: DateTimeOffset.UnixEpoch, retryable: true),
                 NewRecord("incomplete", completedAtUtc: null, retryable: false));
-            await context.SaveChangesAsync();
+            await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         await using var queryContext = _fixture.CreateContext();
@@ -53,9 +53,9 @@ public sealed class EfCandidateHistoryReaderTests : IClassFixture<SqliteTestFixt
             source.ProviderGroupKey = "opaque-provider-group";
             context.Documents.Add(source);
             context.Runs.Add(NewRun("run-artifact-id"));
-            await context.SaveChangesAsync();
+            await context.SaveChangesAsync(TestContext.Current.CancellationToken);
             context.DocumentProcessing.Add(NewRecord("artifact-id", DateTimeOffset.UnixEpoch, retryable: false));
-            await context.SaveChangesAsync();
+            await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         await using var queryContext = _fixture.CreateContext();
