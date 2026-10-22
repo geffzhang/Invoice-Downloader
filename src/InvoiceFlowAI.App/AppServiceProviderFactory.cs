@@ -18,6 +18,7 @@ using InvoiceFlowAI.Infrastructure.Persistence.Stores;
 using InvoiceFlowAI.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Serilog;
 
 namespace InvoiceFlowAI.App;
 
@@ -38,7 +39,7 @@ public static class AppServiceProviderFactory
         var entropy = SHA256.HashData(Encoding.UTF8.GetBytes("InvoiceFlowAI|secret-store|v1"));
 
         var services = new ServiceCollection();
-        services.AddLogging();
+        services.AddLogging(builder => builder.AddSerilog(Log.Logger, dispose: false));
         services.AddDbContext<InvoiceFlowDbContext>(options => options.UseSqlite(
             $"Data Source={databasePath};Cache=Shared;Pooling=False"));
         services.AddSingleton<IPersistentSecretStore>(new DpapiSecretStore(secretPath, entropy));

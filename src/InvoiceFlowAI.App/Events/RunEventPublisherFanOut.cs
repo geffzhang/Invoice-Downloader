@@ -18,9 +18,22 @@ public sealed class RunEventPublisherFanOut : IRunEventPublisher
 
     public void Publish(string eventName, object payload, string runId, long eventSequence, DateTimeOffset emittedAtUtc)
     {
+        List<Exception>? failures = null;
         foreach (var publisher in _publishers)
         {
-            publisher.Publish(eventName, payload, runId, eventSequence, emittedAtUtc);
+            try
+            {
+                publisher.Publish(eventName, payload, runId, eventSequence, emittedAtUtc);
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+        }
+
+        if (failures is not null)
+        {
+            throw new AggregateException("一个或多个运行事件发布器发布失败。", failures);
         }
     }
 }
