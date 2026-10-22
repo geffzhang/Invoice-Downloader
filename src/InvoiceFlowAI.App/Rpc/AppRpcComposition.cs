@@ -8,10 +8,6 @@ public static class AppRpcComposition
     private static readonly string[] V1Methods =
     [
         RpcDispatcher.HelloMethod,
-        "run.context.get",
-        "run.start",
-        "run.progress.get",
-        "run.stop",
         "run.results.get",
         "run.report.export",
         "run.folder.open",
@@ -30,10 +26,6 @@ public static class AppRpcComposition
             "Avalonia.NativeWebView",
             RpcDispatcher.Protocol,
             [.. V1Methods]));
-        dispatcher.RegisterHandler("run.context.get", new ScopedRpcHandler<RunContextRpcHandler>(scopeFactory, "run.context.get"));
-        dispatcher.RegisterHandler("run.start", new ScopedRpcHandler<RunStartRpcHandler>(scopeFactory, "run.start"));
-        dispatcher.RegisterHandler("run.progress.get", new ScopedRpcHandler<RunStatusRpcHandler>(scopeFactory, "run.progress.get"));
-        dispatcher.RegisterHandler("run.stop", new ScopedRpcHandler<RunStopRpcHandler>(scopeFactory, "run.stop"));
         dispatcher.RegisterHandler("run.results.get", new ScopedRpcHandler<RunResultsGetRpcHandler>(scopeFactory, "run.results.get"));
         dispatcher.RegisterHandler("run.report.export", new ScopedRpcHandler<ReportExportRpcHandler>(scopeFactory, "run.report.export"));
         dispatcher.RegisterHandler("run.folder.open", new ScopedRpcHandler<RunFolderOpenRpcHandler>(scopeFactory, "run.folder.open"));

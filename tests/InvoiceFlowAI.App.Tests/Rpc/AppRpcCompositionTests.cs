@@ -17,10 +17,6 @@ public sealed class AppRpcCompositionTests
         var dispatcher = AppRpcComposition.CreateDispatcher(provider.GetRequiredService<IServiceScopeFactory>(), "3.0.0");
 
         dispatcher.RegisteredMethods.Should().Contain([
-            "run.context.get",
-            "run.start",
-            "run.progress.get",
-            "run.stop",
             "run.results.get",
             "run.report.export",
             "run.folder.open",
@@ -29,12 +25,16 @@ public sealed class AppRpcCompositionTests
         ]);
         dispatcher.RegisteredMethods.Should().NotContain("report.open");
         dispatcher.RegisteredMethods.Should().NotContain("start_processing");
+        dispatcher.RegisteredMethods.Should().NotContain("run.context.get");
+        dispatcher.RegisteredMethods.Should().NotContain("run.start");
+        dispatcher.RegisteredMethods.Should().NotContain("run.progress.get");
+        dispatcher.RegisteredMethods.Should().NotContain("run.stop");
 
         var hello = await dispatcher.DispatchAsync(
             new RpcRequest<JsonElement?>(RpcDispatcher.Protocol, "hello", RpcDispatcher.HelloMethod, null),
             CancellationToken.None);
         hello.Result!.Value.GetProperty("registeredMethods").EnumerateArray()
-            .Select(x => x.GetString()).Should().Contain(["run.start", "run.report.export", "run.file.open", "run.stop"]);
+            .Select(x => x.GetString()).Should().Contain(["run.report.export", "run.file.open"]);
     }
 
     [Fact]

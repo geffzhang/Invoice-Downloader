@@ -83,7 +83,17 @@ public static class AppServiceProviderFactory
             provider.GetRequiredService<IPersistentSecretStore>(),
             provider.GetRequiredService<ILogger<SettingsViewModel>>()));
         services.AddSingleton<IPageViewModel>(provider => provider.GetRequiredService<SettingsViewModel>());
-        services.AddSingleton<IPageViewModel>(new WebPageViewModel("processing", "处理中心", "Step 2", "/processing"));
+        services.AddSingleton(ProcessingOptions.Production);
+        services.AddSingleton<ProcessingViewModel>(provider => new ProcessingViewModel(
+            provider.GetRequiredService<IScopedOperationRunner>(),
+            provider.GetRequiredService<IRunSession>(),
+            provider.GetRequiredService<IAppNavigator>(),
+            provider.GetRequiredService<INotificationService>(),
+            provider.GetRequiredService<IAppEventBus>(),
+            provider.GetRequiredService<IAvaloniaUiDispatcher>(),
+            provider.GetRequiredService<ProcessingOptions>(),
+            provider.GetRequiredService<ILogger<ProcessingViewModel>>()));
+        services.AddSingleton<IPageViewModel>(provider => provider.GetRequiredService<ProcessingViewModel>());
         services.AddSingleton<IPageViewModel>(new WebPageViewModel("analysis", "结果分析", "Step 3", "/analysis"));
         services.AddInvoiceFlowInfrastructure();
         services.AddInvoiceFlowApplication();
@@ -105,10 +115,6 @@ public static class AppServiceProviderFactory
         services.AddScoped<RunFolderOpenRpcHandler>();
         services.AddScoped<ManualReviewFolderOpenRpcHandler>();
         services.AddScoped<RunFileOpenRpcHandler>();
-        services.AddScoped<RunContextRpcHandler>();
-        services.AddScoped<RunStartRpcHandler>();
-        services.AddScoped<RunStatusRpcHandler>();
-        services.AddScoped<RunStopRpcHandler>();
         services.AddScoped<RunResultsGetRpcHandler>();
         services.AddScoped<ReportExportRpcHandler>();
 

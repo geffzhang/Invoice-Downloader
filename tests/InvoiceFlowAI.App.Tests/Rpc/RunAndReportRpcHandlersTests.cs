@@ -13,42 +13,6 @@ namespace InvoiceFlowAI.App.Tests.Rpc;
 public sealed class RunAndReportRpcHandlersTests
 {
     [Fact]
-    public async Task Run_start_forwards_typed_request_and_serializes_accepted_result()
-    {
-        var runs = new FakeDesktopRunService
-        {
-            StartResult = new RunStartResult(true, "run-1", null),
-        };
-        var handler = new RunStartRpcHandler(runs);
-        var request = new RunStartRequest(
-            "run-1", "account-1", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30),
-            "C:\\Invoices", "ACME", "full");
-
-        var result = await DispatchAsync(handler, request);
-
-        result.Error.Should().BeNull();
-        result.Result!.Value.GetProperty("accepted").GetBoolean().Should().BeTrue();
-        result.Result.Value.GetProperty("runId").GetString().Should().Be("run-1");
-        runs.StartRequest.Should().BeEquivalentTo(request);
-    }
-
-    [Fact]
-    public async Task Run_stop_maps_desktop_run_exception_to_stable_rpc_error()
-    {
-        var runs = new FakeDesktopRunService
-        {
-            StopException = new DesktopRunException(RpcErrorCodes.RunNotCancellable, "Run cannot be stopped."),
-        };
-        var handler = new RunStopRpcHandler(runs);
-
-        var result = await DispatchAsync(handler, new RunStopRequest("run-1"));
-
-        result.Result.Should().BeNull();
-        result.Error!.Code.Should().Be(RpcErrorCodes.RunNotCancellable);
-        result.Error.UserMessage.Should().Be("Run cannot be stopped.");
-    }
-
-    [Fact]
     public async Task Run_results_get_projects_persisted_invoice_rows()
     {
         var data = new ReportRunData(
@@ -111,25 +75,17 @@ public sealed class RunAndReportRpcHandlersTests
 
     private sealed class FakeDesktopRunService : IDesktopRunService
     {
-        public RunStartResult StartResult { get; init; } = new(true, "run-1", null);
-        public RunStopResult StopResult { get; init; } = new(true, false, null);
-        public Exception? StopException { get; init; }
-        public RunStartRequest? StartRequest { get; private set; }
-
         public Task<RunContextSnapshot> GetContextAsync(CancellationToken cancellationToken)
             => Task.FromResult(new RunContextSnapshot(false, false, false, 0, null, null, null, null, null, null));
 
         public Task<RunStartResult> StartAsync(RunStartRequest request, CancellationToken cancellationToken)
-        {
-            StartRequest = request;
-            return Task.FromResult(StartResult);
-        }
+            => throw new NotImplementedException();
 
         public Task<RunProgressSnapshot> GetProgressAsync(string? runId, CancellationToken cancellationToken)
             => throw new NotImplementedException();
 
         public Task<RunStopResult> StopAsync(RunStopRequest request, CancellationToken cancellationToken)
-            => StopException is null ? Task.FromResult(StopResult) : Task.FromException<RunStopResult>(StopException);
+            => throw new NotImplementedException();
     }
 
     private sealed class FakeReportRunDataSource(ReportRunData data) : IReportRunDataSource

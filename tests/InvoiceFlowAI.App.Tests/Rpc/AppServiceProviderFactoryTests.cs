@@ -87,8 +87,11 @@ public sealed class AppServiceProviderFactoryTests
                 provider.GetRequiredService<ShellViewModel>().Pages.Should().HaveCount(3);
                 var pages = provider.GetServices<IPageViewModel>().ToArray();
                 pages.Should().Contain(page => page.GetType() == typeof(SettingsViewModel));
+                pages.Should().Contain(page => page.GetType() == typeof(ProcessingViewModel));
                 pages.Should().NotContain(page =>
                     page.GetType() == typeof(WebPageViewModel) && page.Key == "settings");
+                pages.Should().NotContain(page =>
+                    page.GetType() == typeof(WebPageViewModel) && page.Key == "processing");
                 scope.ServiceProvider.GetRequiredService<IDesktopRunService>().Should().NotBeNull();
                 scope.ServiceProvider.GetRequiredService<IDesktopRunExecutor>().Should().NotBeNull();
                 scope.ServiceProvider.GetRequiredService<IMailboxScanner>().Should().BeOfType<MailKitMailboxScanner>();
@@ -105,10 +108,6 @@ public sealed class AppServiceProviderFactoryTests
                 scope.ServiceProvider.GetRequiredService<IReportApplicationService>().Should().BeOfType<ReportApplicationService>();
                 scope.ServiceProvider.GetRequiredService<IReportExportStage>().Should().BeOfType<ReportExportStage>();
                 scope.ServiceProvider.GetRequiredService<RunResultsQueryService>().Should().NotBeNull();
-                scope.ServiceProvider.GetRequiredService<RunContextRpcHandler>().Should().NotBeNull();
-                scope.ServiceProvider.GetRequiredService<RunStartRpcHandler>().Should().NotBeNull();
-                scope.ServiceProvider.GetRequiredService<RunStatusRpcHandler>().Should().NotBeNull();
-                scope.ServiceProvider.GetRequiredService<RunStopRpcHandler>().Should().NotBeNull();
                 scope.ServiceProvider.GetRequiredService<ReportExportRpcHandler>().Should().NotBeNull();
                 scope.ServiceProvider.GetRequiredService<RunResultsGetRpcHandler>().Should().NotBeNull();
                 await using var secondScope = provider.CreateAsyncScope();

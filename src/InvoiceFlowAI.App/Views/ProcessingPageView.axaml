@@ -1,0 +1,89 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:atom="https://atomui.net"
+             xmlns:vm="using:InvoiceFlowAI.App.ViewModels"
+             x:Class="InvoiceFlowAI.App.Views.ProcessingPageView"
+             x:DataType="vm:ProcessingViewModel">
+  <Grid RowDefinitions="Auto,*,Auto" Margin="28,20,28,24">
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,16">
+      <StackPanel Grid.Column="0" Spacing="6">
+        <TextBlock Text="{Binding Eyebrow}" FontSize="12" Opacity="0.55" />
+        <TextBlock Text="{Binding Title}" FontSize="26" FontWeight="SemiBold" />
+      </StackPanel>
+      <atom:Button Grid.Column="1"
+                   ButtonType="Primary"
+                   IsDanger="True"
+                   Content="停止任务"
+                   VerticalAlignment="Center"
+                   Command="{Binding StopCommand}" />
+    </Grid>
+
+    <ScrollViewer Grid.Row="1">
+      <StackPanel Spacing="16">
+        <atom:Alert Type="Error"
+                    IsShowIcon="True"
+                    IsClosable="False"
+                    Message="{Binding PageError}"
+                    IsVisible="{Binding HasPageError}" />
+        <atom:Alert Type="Error"
+                    IsShowIcon="True"
+                    IsClosable="False"
+                    Message="{Binding LastErrorMessage}"
+                    IsVisible="{Binding HasLastError}" />
+        <atom:Alert Type="Warning"
+                    IsShowIcon="True"
+                    IsClosable="False"
+                    Message="{Binding QuotaMessage}"
+                    IsVisible="{Binding HasQuotaWarning}" />
+        <atom:Alert Type="Warning"
+                    IsShowIcon="True"
+                    IsClosable="False"
+                    Message="{Binding MailboxFailureMessage}"
+                    IsVisible="{Binding HasMailboxWarning}" />
+
+        <atom:Card StyleVariant="Outlined">
+          <StackPanel Spacing="12">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Grid.Column="0" Text="{Binding StatusText}" FontWeight="SemiBold" />
+              <TextBlock Grid.Column="1" Text="{Binding RunIdLabel}" FontSize="11" Opacity="0.45" />
+            </Grid>
+            <atom:ProgressBar Minimum="0"
+                              Maximum="100"
+                              Value="{Binding ProgressValue}"
+                              IsProgressInfoVisible="True"
+                              Status="Active" />
+            <Grid ColumnDefinitions="*,*,*" ColumnSpacing="12">
+              <atom:Statistic Grid.Column="0" Header="邮件" Value="{Binding EmailCount}" />
+              <atom:Statistic Grid.Column="1" Header="票据" Value="{Binding InvoiceCount}" />
+              <atom:Statistic Grid.Column="2" Header="待处理" Value="{Binding ErrorCount}" />
+            </Grid>
+          </StackPanel>
+        </atom:Card>
+
+        <atom:Card Header="处理日志" StyleVariant="Outlined">
+          <Grid>
+            <TextBlock Text="任务开始后,这里会显示处理进度。"
+                       Opacity="0.55"
+                       IsVisible="{Binding !HasLogs}" />
+            <ListBox ItemsSource="{Binding Logs}"
+                     Background="Transparent"
+                     BorderThickness="0"
+                     MaxHeight="360">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:ActivityLogEntry">
+                  <Grid ColumnDefinitions="76,*" Margin="0,2">
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}"
+                               FontSize="11"
+                               Opacity="0.45" />
+                    <TextBlock Grid.Column="1" Text="{Binding Message}" TextWrapping="Wrap" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+        </atom:Card>
+      </StackPanel>
+    </ScrollViewer>
+  </Grid>
+</UserControl>

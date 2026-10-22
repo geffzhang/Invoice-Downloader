@@ -7,6 +7,9 @@
     <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
       <views:SettingsPageView />
     </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:ProcessingViewModel}">
+      <views:ProcessingPageView />
+    </DataTemplate>
   </Application.DataTemplates>
   <Application.Styles>
     <FluentTheme />
