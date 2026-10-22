@@ -502,12 +502,14 @@
         .page-wrap--processing {
             height: auto;
             min-height: 100%;
+            flex: 0 0 auto;
         }
 
         .page-wrap--analysis {
             height: auto;
             min-height: 100%;
             display: block;
+            flex: 0 0 auto;
         }
 
         .page-wrap--analysis > * + * { margin-top: 10px; }
@@ -516,6 +518,7 @@
             width: min(1520px, calc(100% - 18px));
             min-height: 100%;
             height: auto;
+            flex: 0 0 auto;
             justify-content: flex-start;
         }
 
@@ -1014,7 +1017,7 @@
         .progress-fill { position: relative; height: 100%; border-radius: inherit; background: linear-gradient(90deg, rgba(97,154,255,0.94), rgba(93,217,255,0.88)); transition: width 360ms ease; }
         .progress-fill::after { content: ""; position: absolute; inset: 0; background: linear-gradient(120deg, transparent 10%, rgba(255,255,255,0.18) 38%, transparent 64%); animation: progress-sheen 2.8s linear infinite; }
         .progress-caption { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-soft); }
-        .metrics-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+        .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
         .metric-card__value { margin: 6px 0 0; font-size: 28px; line-height: 1; letter-spacing: -0.05em; font-weight: 700; }
         .metric-card--blue .metric-card__icon { background: rgba(76,143,255,0.16); color: #e9f2ff; }
         .metric-card--green .metric-card__icon { background: rgba(78,214,143,0.16); color: #e2f8ed; }
@@ -1242,7 +1245,7 @@
         }
 
         @media (max-width: 1180px) {
-            .settings-grid, .cards-grid, .metrics-grid { grid-template-columns: 1fr; }
+            .settings-grid { grid-template-columns: 1fr; }
             .manual-banner { flex-direction: column; align-items: flex-start; }
             .app-shell--initial-setup .app-main { top: 2vh; bottom: auto; width: calc(100vw - 24px); height: 96vh; }
         }
