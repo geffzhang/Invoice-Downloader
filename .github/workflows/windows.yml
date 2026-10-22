@@ -58,6 +58,10 @@ jobs:
         shell: pwsh
         run: pwsh -File build/windows/publish_dotnet_app.ps1 -Configuration Release -PublishRoot publish/win-x64
 
+      - name: Verify LGPL packaging invariants
+        shell: pwsh
+        run: pwsh -File build/verify-lgpl-packaging.ps1 -PublishRoot publish/win-x64
+
       - name: Upload publish + manifests artifact
         uses: actions/upload-artifact@v4
         with:

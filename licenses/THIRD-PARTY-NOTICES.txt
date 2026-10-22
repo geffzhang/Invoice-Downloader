@@ -1,4 +1,4 @@
-InvoiceFlowAI — Third-Party Notices (Task 11)
+InvoiceFlowAI — Third-Party Notices
 ================================================
 
 This product includes software developed by the parties listed below.
@@ -21,7 +21,8 @@ AtomUI 6.2.8 (Desktop Controls, Icons.AntDesign)
   Copyright (c) AtomUI contributors.
   Licensed under the GNU Lesser General Public License, version 3.0.
   Shipped as separate, unmodified DLLs alongside InvoiceFlowAI.exe;
-  the full license text is installed at licenses\LGPL-3.0.txt.
+  the full license texts are installed at licenses\LGPL-3.0.txt
+  (LGPL-3.0) and licenses\GPL-3.0.txt (GPL-3.0).
   https://github.com/AtomUI/AtomUI
 
 ------------------------------------------------------------------------
@@ -37,13 +38,6 @@ Avalonia 12.1.4 (UI framework)
   Copyright (c) AvaloniaUI OÜ.
   Licensed under the MIT License.
   https://github.com/AvaloniaUI/Avalonia
-
-------------------------------------------------------------------------
-Avalonia.Controls.WebView 12.1.1
-------------------------------------------------------------------------
-  Copyright (c) AvaloniaUI OÜ.
-  Licensed under the MIT License.
-  WebView2Loader.dll (Microsoft) shipped unmodified.
 
 ------------------------------------------------------------------------
 Microsoft.Extensions.AI + Microsoft.Extensions.AI.OpenAI 10.11.0
