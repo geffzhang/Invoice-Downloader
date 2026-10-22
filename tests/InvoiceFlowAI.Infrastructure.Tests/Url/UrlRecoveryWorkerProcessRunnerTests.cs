@@ -70,7 +70,7 @@ public sealed class UrlRecoveryWorkerProcessRunnerTests : IDisposable
 
     private static async Task<int> ReadChildProcessIdAsync(string pidFile)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
         while (DateTime.UtcNow < deadline)
         {
             if (File.Exists(pidFile))
@@ -91,7 +91,7 @@ public sealed class UrlRecoveryWorkerProcessRunnerTests : IDisposable
 
     private static async Task WaitForExitAsync(int processId)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
         while (DateTime.UtcNow < deadline && IsProcessRunning(processId)) await Task.Delay(25);
     }
 

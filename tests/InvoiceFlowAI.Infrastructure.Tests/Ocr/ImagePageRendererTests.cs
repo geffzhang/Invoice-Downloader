@@ -39,7 +39,7 @@ public sealed class ImagePageRendererTests
         }
         finally
         {
-            File.Delete(path);
+            TempFile.Delete(path);
         }
     }
 
@@ -61,7 +61,7 @@ public sealed class ImagePageRendererTests
         }
         finally
         {
-            File.Delete(path);
+            TempFile.Delete(path);
         }
     }
 
@@ -83,7 +83,7 @@ public sealed class ImagePageRendererTests
         }
         finally
         {
-            File.Delete(path);
+            TempFile.Delete(path);
         }
     }
 
@@ -104,7 +104,7 @@ public sealed class ImagePageRendererTests
         }
         finally
         {
-            File.Delete(path);
+            TempFile.Delete(path);
         }
     }
 
@@ -135,7 +135,7 @@ public sealed class ImagePageRendererTests
         }
         finally
         {
-            File.Delete(path);
+            TempFile.Delete(path);
         }
     }
 

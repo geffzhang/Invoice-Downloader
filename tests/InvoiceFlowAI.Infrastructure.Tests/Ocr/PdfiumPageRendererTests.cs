@@ -30,7 +30,7 @@ public sealed class PdfiumPageRendererTests
         }
         finally
         {
-            File.Delete(path);
+            TempFile.Delete(path);
         }
     }
 
@@ -64,7 +64,7 @@ public sealed class PdfiumPageRendererTests
         }
         finally
         {
-            File.Delete(path);
+            TempFile.Delete(path);
         }
     }
 
@@ -83,7 +83,7 @@ public sealed class PdfiumPageRendererTests
         }
         finally
         {
-            File.Delete(path);
+            TempFile.Delete(path);
         }
     }
 
