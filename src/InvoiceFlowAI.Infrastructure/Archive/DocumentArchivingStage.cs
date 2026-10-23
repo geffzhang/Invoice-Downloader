@@ -17,6 +17,8 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
     private readonly IManualReviewItemStore _reviewStore;
     private readonly IUnitOfWorkFactory _unitOfWorkFactory;
     private readonly ICwtCancellationFinalizer? _cwtCancellationFinalizer;
+    private readonly IDocumentProcessingStore? _processingStore;
+    private readonly IInvoiceStore? _invoiceStore;
 
     public DocumentArchivingStage(
         IArchiveNamingPolicy namingPolicy,
@@ -25,7 +27,9 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
         IPairingStore pairingStore,
         IManualReviewItemStore reviewStore,
         IUnitOfWorkFactory unitOfWorkFactory,
-        ICwtCancellationFinalizer? cwtCancellationFinalizer = null)
+        ICwtCancellationFinalizer? cwtCancellationFinalizer = null,
+        IDocumentProcessingStore? processingStore = null,
+        IInvoiceStore? invoiceStore = null)
     {
         _namingPolicy = namingPolicy ?? throw new ArgumentNullException(nameof(namingPolicy));
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
@@ -34,6 +38,8 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
         _reviewStore = reviewStore ?? throw new ArgumentNullException(nameof(reviewStore));
         _unitOfWorkFactory = unitOfWorkFactory ?? throw new ArgumentNullException(nameof(unitOfWorkFactory));
         _cwtCancellationFinalizer = cwtCancellationFinalizer;
+        _processingStore = processingStore;
+        _invoiceStore = invoiceStore;
     }
 
     public async Task<ArchiveBatch> ExecuteAsync(ArchiveStageRequest request, CancellationToken cancellationToken)
@@ -63,14 +69,24 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
         }
 
         var results = request.Batch.CandidateResults.ToArray();
-        var candidateIndexes = results
-            .Select((result, index) => (Id: result.Candidate.DocumentId.Value, Index: index))
-            .GroupBy(item => item.Id, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.First().Index, StringComparer.Ordinal);
         var cwtCancellationIds = results
             .Where(IsCwtCancellation)
             .Select(static result => result.Candidate.DocumentId.Value)
             .ToHashSet(StringComparer.Ordinal);
+        for (var index = 0; index < results.Length; index++)
+        {
+            if (cwtCancellationIds.Contains(results[index].Candidate.DocumentId.Value))
+            {
+                results[index] = ToCwtReviewResult(results[index]);
+            }
+        }
+
+        await PersistTerminalStatesAsync(request, results, cancellationToken).ConfigureAwait(false);
+
+        var candidateIndexes = results
+            .Select((result, index) => (Id: result.Candidate.DocumentId.Value, Index: index))
+            .GroupBy(item => item.Id, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().Index, StringComparer.Ordinal);
         var pairByDocument = BuildPairMap(request.Batch, cwtCancellationIds);
         var processedPairs = new HashSet<PairWork>();
         var outcomes = new List<ArchiveArtifactOutcome>();
@@ -84,18 +100,7 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
 
             if (cwtCancellationIds.Contains(documentId))
             {
-                var reviewResult = result with
-                {
-                    Status = CandidateStatus.ManualReview,
-                    Failure = new CandidateFailure(
-                        "CWT_HOTEL_CANCELLATION",
-                        FailureScope.Candidate,
-                        FailureCategory.Validation,
-                        Retryable: false,
-                        SafeMessage: "A CWT hotel cancellation notice requires manual review."),
-                };
-                results[index] = reviewResult;
-                await ProcessReviewAsync(index, reviewResult, request, outputRoot, results, outcomes, cancellationToken).ConfigureAwait(false);
+                await ProcessReviewAsync(index, results[index], request, outputRoot, results, outcomes, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
@@ -156,6 +161,8 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
                 Retryable: false,
                 SafeMessage: failure.SafeMessage)));
         }
+
+        await RefreshTerminalStatesAsync(request, results, cancellationToken).ConfigureAwait(false);
 
         return new ArchiveBatch(results, failures) { Artifacts = outcomes };
     }
@@ -314,6 +321,106 @@ public sealed class DocumentArchivingStage : IDocumentArchivingStage
         catch (Exception)
         {
             SetFailure(results, index, "ARCHIVE_COMMIT_FAILED", "The document could not be archived.");
+        }
+    }
+
+    private static CandidateProcessResult ToCwtReviewResult(CandidateProcessResult result) =>
+        result with
+        {
+            Status = CandidateStatus.ManualReview,
+            Failure = new CandidateFailure(
+                "CWT_HOTEL_CANCELLATION",
+                FailureScope.Candidate,
+                FailureCategory.Validation,
+                Retryable: false,
+                SafeMessage: "A CWT hotel cancellation notice requires manual review."),
+        };
+
+    private async Task PersistTerminalStatesAsync(
+        ArchiveStageRequest request,
+        IReadOnlyList<CandidateProcessResult> results,
+        CancellationToken cancellationToken)
+    {
+        if (_processingStore is null)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        await using var transaction = await _unitOfWorkFactory
+            .BeginAsync(TransactionPurpose.CandidateCommit, cancellationToken)
+            .ConfigureAwait(false);
+
+        foreach (var result in results)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var documentId = result.Candidate.DocumentId.Value;
+            await _processingStore.UpsertAsync(
+                new DocumentProcessingWrite(
+                    DocumentId: documentId,
+                    ProcessingRevision: result.Candidate.ProcessingRevision,
+                    RunId: request.RunId,
+                    SourceKind: result.Candidate.SourceKind,
+                    SourceMessageUid: result.Candidate.SourceMessageUid,
+                    SourceFileName: result.Candidate.OriginalFileName,
+                    Stage: "archive-documents",
+                    Status: result.Status,
+                    ReasonCode: result.Failure?.ReasonCode ?? string.Empty,
+                    Retryable: result.Failure?.Retryable ?? false,
+                    Attempt: 1,
+                    MaxAttempts: 1,
+                    ArtifactPath: string.IsNullOrWhiteSpace(result.ArtifactPath) ? null : result.ArtifactPath,
+                    ResultJson: $"{{\"documentId\":\"{documentId}\",\"status\":\"{result.Status}\"}}",
+                    TraceJson: null,
+                    StartedAtUtc: now,
+                    CompletedAtUtc: now),
+                transaction,
+                cancellationToken).ConfigureAwait(false);
+
+            if (_invoiceStore is null || result.Invoice is null)
+            {
+                continue;
+            }
+
+            var invoice = result.Invoice;
+            if (!string.Equals(invoice.DocumentId, documentId, StringComparison.Ordinal))
+            {
+                invoice = invoice with { DocumentId = documentId, Identity = new DocumentIdentity(documentId) };
+            }
+
+            await _invoiceStore.UpsertAsync(
+                invoice,
+                result.Candidate.ProcessingRevision,
+                transaction,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task RefreshTerminalStatesAsync(
+        ArchiveStageRequest request,
+        IReadOnlyList<CandidateProcessResult> results,
+        CancellationToken cancellationToken)
+    {
+        if (_processingStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await PersistTerminalStatesAsync(request, results, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            // The pre-dispatch write already satisfied every foreign key.
+            // A refresh failure leaves those rows intact and must not discard
+            // work that is already archived.
         }
     }
 

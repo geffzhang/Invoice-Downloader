@@ -58,6 +58,8 @@ public static class InvoiceFlowAIInfrastructureServiceCollectionExtensions
         services.AddScoped<ICandidateSourceWriter, EfCandidateSourceWriter>();
         services.AddScoped<IPairingStore, EfPairingStore>();
         services.AddScoped<IManualReviewItemStore, EfManualReviewItemStore>();
+        services.AddScoped<IDocumentProcessingStore, EfDocumentProcessingStore>();
+        services.AddScoped<IInvoiceStore, EfInvoiceStore>();
         services.AddScoped<IAuditEventStore, EfAuditStore>();
         services.AddScoped<IRunLifecycleStore, EfRunLifecycleStore>();
         services.AddScoped<IRunCheckpointStore, EfRunCheckpointStore>();
