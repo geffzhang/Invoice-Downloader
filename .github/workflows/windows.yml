@@ -52,7 +52,10 @@ jobs:
 
       - name: Run full test suite
         shell: pwsh
-        run: dotnet test -c Release --no-build --nologo
+        # Microsoft.Testing.Platform is selected via global.json; --nologo is
+        # forwarded to the test apps and makes them exit with invalid arguments.
+        # Let dotnet test build the MTP apphost, so no --no-build either.
+        run: dotnet test -c Release --no-restore
 
       - name: Publish self-contained win-x64 app, worker, model, and manifests
         shell: pwsh
