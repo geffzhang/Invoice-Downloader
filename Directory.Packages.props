@@ -49,6 +49,8 @@
     <PackageVersion Include="System.Text.Json" Version="10.0.12" />
     <!-- DPAPI -->
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.13" />
+    <!-- Security: transitive via MailKit -> MimeKit; 10.0.13 fixes CVE-2026-84008 and CVE-2026-70162 -->
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
     <!-- Testing -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageVersion Include="xunit.v3" Version="4.0.2" />
