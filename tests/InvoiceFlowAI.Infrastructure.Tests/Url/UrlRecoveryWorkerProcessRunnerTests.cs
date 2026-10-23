@@ -18,7 +18,10 @@ public sealed class UrlRecoveryWorkerProcessRunnerTests : IDisposable
         var manifest = await CreateManifestAsync(pidFile);
         var runner = new UrlRecoveryWorkerProcessRunner(FixtureExecutablePath());
 
-        var act = () => runner.RunAsync(manifest, TimeSpan.FromMilliseconds(500), CancellationToken.None);
+        // The timeout must not race worker startup: on loaded CI runners the
+        // fixture needs a moment to spawn its child, and killing the tree before
+        // the child exists leaves no pid file to verify termination against.
+        var act = () => runner.RunAsync(manifest, TimeSpan.FromSeconds(5), CancellationToken.None);
 
         await act.Should().ThrowAsync<UrlRecoveryWorkerTimeoutException>();
         var childProcessId = await ReadChildProcessIdAsync(pidFile);
