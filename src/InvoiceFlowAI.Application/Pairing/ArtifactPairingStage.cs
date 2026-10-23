@@ -23,7 +23,10 @@ public sealed class ArtifactPairingStage : IArtifactPairingStage
         ArgumentNullException.ThrowIfNull(input);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var candidateResults = input.Results.Concat(input.EffectivePreflightResults).ToArray();
+        var candidateResults = input.Results
+            .Concat(input.EffectivePreflightResults)
+            .DistinctBy(static result => (result.Candidate.DocumentId.Value, result.Candidate.ProcessingRevision))
+            .ToArray();
         var eligible = candidateResults
             .Select((result, index) => TryProject(result, index))
             .Where(static projection => projection is not null)

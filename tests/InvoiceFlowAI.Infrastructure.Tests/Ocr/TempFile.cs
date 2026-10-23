@@ -20,4 +20,23 @@ internal static class TempFile
             }
         }
     }
+
+    // Directories that held a just-terminated child process can stay locked for
+    // a moment longer (scanner or kernel teardown). Retry the recursive delete;
+    // a genuine leak still fails the test.
+    public static void DeleteDirectory(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (IOException) when (attempt < 20)
+            {
+                Thread.Sleep(100);
+            }
+        }
+    }
 }

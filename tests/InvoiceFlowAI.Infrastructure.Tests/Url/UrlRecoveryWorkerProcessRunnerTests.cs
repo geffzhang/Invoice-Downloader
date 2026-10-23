@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using FluentAssertions;
+using InvoiceFlowAI.Infrastructure.Tests.Ocr;
 using InvoiceFlowAI.Infrastructure.Url.Worker;
 using Xunit;
 
@@ -17,7 +18,10 @@ public sealed class UrlRecoveryWorkerProcessRunnerTests : IDisposable
         var manifest = await CreateManifestAsync(pidFile);
         var runner = new UrlRecoveryWorkerProcessRunner(FixtureExecutablePath());
 
-        var act = () => runner.RunAsync(manifest, TimeSpan.FromMilliseconds(500), CancellationToken.None);
+        // The timeout must not race worker startup: on loaded CI runners the
+        // fixture needs a moment to spawn its child, and killing the tree before
+        // the child exists leaves no pid file to verify termination against.
+        var act = () => runner.RunAsync(manifest, TimeSpan.FromSeconds(5), CancellationToken.None);
 
         await act.Should().ThrowAsync<UrlRecoveryWorkerTimeoutException>();
         var childProcessId = await ReadChildProcessIdAsync(pidFile);
@@ -108,8 +112,5 @@ public sealed class UrlRecoveryWorkerProcessRunnerTests : IDisposable
         }
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
-    }
+    public void Dispose() => TempFile.DeleteDirectory(_root);
 }
