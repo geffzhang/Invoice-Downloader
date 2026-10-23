@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using FluentAssertions;
+using InvoiceFlowAI.Infrastructure.Tests.Ocr;
 using InvoiceFlowAI.Infrastructure.Url.Worker;
 using Xunit;
 
@@ -108,8 +109,5 @@ public sealed class UrlRecoveryWorkerProcessRunnerTests : IDisposable
         }
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
-    }
+    public void Dispose() => TempFile.DeleteDirectory(_root);
 }
