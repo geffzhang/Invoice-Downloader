@@ -174,6 +174,23 @@ public sealed class ArtifactPairingStageTests
             .Status.Should().Be(CandidateStatus.Retained);
     }
 
+    [Fact]
+    public async Task Pairing_deduplicates_preflight_results_already_present_in_extraction_results()
+    {
+        var stage = new ArtifactPairingStage(new PairingEngine());
+        var terminal = CreateResult(
+            "terminal", InvoiceDocumentType.Unrecognized, 0m, "INBOX", "uid-1", CandidateStatus.ManualReview);
+        var input = new ExtractionBatch(new[] { terminal })
+        {
+            PreflightResults = new[] { terminal },
+        };
+
+        var batch = await stage.ExecuteAsync(input, CancellationToken.None);
+
+        batch.CandidateResults.Should().ContainSingle()
+            .Which.Candidate.DocumentId.Value.Should().Be("terminal");
+    }
+
     private static CandidateProcessResult CreateResult(
         string id,
         InvoiceDocumentType type,
